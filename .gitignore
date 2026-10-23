@@ -1,0 +1,24 @@
+# ---- 虚拟环境 ----
+.venv/
+.venv310/
+
+# ---- Python 缓存 ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 打包产物 ----
+build/
+dist/
+build_version.txt
+
+# ---- 真实数据（绝不外传）----
+data/
+backups/
+*.db
+*.db-shm
+*.db-wal
+
+# ---- 调试 / 截图 ----
+.tmpdbg/
+*.log
