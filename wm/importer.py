@@ -131,9 +131,9 @@ class ImportDialog(tk.Toplevel):
         hs = ttk.Scrollbar(right, orient="horizontal", style="Horizontal.TScrollbar",
                            command=self.preview.xview)
         self.preview.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
-        self.preview.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
-        hs.pack(fill="x", padx=8, pady=(0, 8))
+        self.preview.pack(side="left", fill="both", expand=True)
+        hs.pack(side="bottom", fill="x", padx=8, pady=(0, 8), before=wrap)
         self.preview.tag_configure("odd", background="#F7FAFD")
         self.preview.tag_configure("dup", background="#FFF6E5")
         self.preview.tag_configure("warn", background="#FDECEC")

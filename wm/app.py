@@ -524,8 +524,8 @@ class App(object):
                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         win = canvas.create_window((0, 0), window=lst, anchor="nw", width=W - 48)
         canvas.configure(yscrollcommand=vs.set)
-        canvas.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
         canvas.bind("<Configure>",
                     lambda e: canvas.itemconfigure(win, width=e.width - 0))
         # 滚轮
@@ -936,9 +936,11 @@ class App(object):
         hs = ttk.Scrollbar(table_card, orient="horizontal", style="Horizontal.TScrollbar",
                            command=self._tree_xview)
         self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
-        self.tree.pack(side="left", fill="both", expand=True)
+        # 先给滚动条占位，再让表格伸展：反过来的话窗口一缩小，
+        # 表格会把滚动条挤没（pack 按顺序分配空间）
         vs.pack(side="right", fill="y")
-        hs.pack(fill="x", padx=10, pady=(0, 6))
+        self.tree.pack(side="left", fill="both", expand=True)
+        hs.pack(side="bottom", fill="x", padx=10, pady=(0, 6), before=tw)
 
         # Treeview 的 tag 优先级由「创建先后」决定（先创建的先胜，与 tags 列表顺序无关），
         # 所以要按下面的优先级从高到低依次创建：
@@ -2469,8 +2471,8 @@ class App(object):
             tree.heading(c, text=h)
             tree.column(c, width=w, anchor="center" if c != "model" else "w",
                         stretch=(c in ("model", "codes")))
-        tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
 
         lines = []
         for model, n, rows in dups:

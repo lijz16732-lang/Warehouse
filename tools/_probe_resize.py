@@ -38,7 +38,7 @@ def step(size, name):
     for _ in range(6):
         root.update()
         root.after(60, lambda: None)
-    screenshot.capture_window("v1.12.1", os.path.join(OUT, name))
+    screenshot.capture_window("v1.12.2", os.path.join(OUT, name))
     print("shot", name, root.geometry(), "tree rows:", len(app.tree.get_children()))
 
 
@@ -49,7 +49,7 @@ root.state("zoomed")
 for _ in range(6):
     root.update()
     root.after(60, lambda: None)
-screenshot.capture_window("v1.12.1", os.path.join(OUT, "resize_4_max.png"))
+screenshot.capture_window("v1.12.2", os.path.join(OUT, "resize_4_max.png"))
 print("shot resize_4_max", root.geometry())
 root.state("normal")
 for _ in range(6):

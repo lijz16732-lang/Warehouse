@@ -1070,6 +1070,32 @@ try:
     check("窗口实际大小不超工作区",
           root.winfo_width() <= _wa["w"] and root.winfo_height() <= _wa["h"],
           "%sx%s" % (root.winfo_width(), root.winfo_height()))
+
+    # 窗口缩到最小后，表格的横/竖滚动条不能被内容挤掉（pack 顺序坑，v1.12.2）
+    def _scrollbars(w):
+        out = []
+        try:
+            for c in w.winfo_children():
+                if c.winfo_class() == "TScrollbar":
+                    out.append(c)
+                out.extend(_scrollbars(c))
+        except Exception:
+            pass
+        return out
+
+    root.geometry("1080x660")
+    for _ in range(6):
+        root.update()
+    _bars = [b for b in _scrollbars(root) if b.winfo_ismapped()]
+    _vbars = [b for b in _bars if b.winfo_width() > 8 and b.winfo_height() > 40]
+    _hbars = [b for b in _bars if b.winfo_height() > 8 and b.winfo_width() > 40]
+    check("最小窗口下竖向滚动条仍在", len(_vbars) >= 1,
+          [(b.winfo_width(), b.winfo_height()) for b in _bars])
+    check("最小窗口下横向滚动条仍在", len(_hbars) >= 1,
+          [(b.winfo_width(), b.winfo_height()) for b in _bars])
+    root.geometry("1440x900")
+    for _ in range(4):
+        root.update()
     # GUI 使用独立的 data/warehouse.db，灌入同一批数据
     app.store.clear_all()
     app.store.insert_many([dict(r) for r in norm])

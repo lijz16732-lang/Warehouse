@@ -98,8 +98,8 @@ class RecycleBinDialog(object):
             self.tree.column(key, width=w, minwidth=60,
                              anchor="center" if key != "model" else "w",
                              stretch=(key in ("model", "brand")))
-        self.tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
         self.tree.tag_configure("odd", background="#F7FAFD")
         self.tree.bind("<Double-1>", lambda e: self.restore())
 
@@ -486,8 +486,8 @@ class PurchaseListDialog(object):
             self.tree.column(key, width=w, minwidth=60,
                              anchor="center" if key != "model" else "w",
                              stretch=(key in ("model", "supplier", "remark")))
-        self.tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
         self.tree.tag_configure("odd", background="#F7FAFD")
 
         foot = tk.Frame(body, bg=CLR_BG)
@@ -609,8 +609,8 @@ class BuyerDialog(object):
             self.tree.column(key, width=w, minwidth=60,
                              anchor="w" if key == "buyer" else "center",
                              stretch=(key == "buyer"))
-        self.tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
         self.tree.tag_configure("odd", background="#F7FAFD")
         self.tree.bind("<Double-1>", lambda e: self.rename())
 

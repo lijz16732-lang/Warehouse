@@ -978,8 +978,8 @@ class SalesTab(ttk.Frame):
             self.tree.column(key, width=w,
                              anchor="w" if key in LEFT_COLS else "center",
                              stretch=(key in ("brand", "model", "remark", "address")))
-        self.tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
         # tag 优先级 = 创建先后（先创建的先胜）：鼠标划过 > 非销售黄底 > 斑马纹
         self.hover = RowHover(self.tree, self.app.root)
         self.tree.tag_configure("other", background="#FFF7E6")   # 非销售出库：淡黄底
