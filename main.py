@@ -13,6 +13,13 @@ def _bootstrap():
 
 def main():
     _bootstrap()
+    # 开启 DPI 感知：Win10/Win11 笔记本常见 125%/150% 缩放，不开启会整窗发虚。
+    # 必须在创建任何 Tk 窗口之前调用。
+    try:
+        from wm.screen import enable_dpi_awareness
+        enable_dpi_awareness()
+    except Exception:
+        pass
     # Windows 任务栏正确显示程序图标（tkinter 默认用 python 启动器图标分组）
     try:
         import ctypes

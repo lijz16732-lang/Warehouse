@@ -182,7 +182,8 @@ class ImportDialog(tk.Toplevel):
         self.update_idletasks()
         w, h = max(880, self.winfo_reqwidth()), max(620, self.winfo_reqheight())
         self.geometry("%dx%d" % (w, h))
-        center_window(self, master, size=(w, h))
+        # 这里的宽高已经是控件实际请求尺寸（已含 DPI 缩放），不能再按 DPI 放大
+        center_window(self, master, size=(w, h), design=False)
 
     # ------------------------------------------------------------ 数据
     def _load_sheets(self):

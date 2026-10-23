@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.11.4"
+APP_VERSION = "1.12.0"
 
 
 def app_icon_path():
@@ -34,21 +34,31 @@ def apply_window_icon(win):
         pass
 
 
-def center_window(win, master=None, size=None, vertical_ratio=0.34):
+def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True):
     """把窗口居中到主窗口（master），master 不可用时退回屏幕居中。
 
     - size: (宽, 高) 时按该尺寸摆放；否则用窗口自身请求尺寸（不改变大小）
     - vertical_ratio: 垂直位置比例，0.5 为正居中，略小于 0.5 视觉上更舒服
+    - design: size 是否为「设计像素」。True 时按 DPI 缩放放大（弹窗写的是 100% 下的尺寸），
+      传控件请求尺寸的调用方应传 False，避免二次放大
+
+    居中基准是「桌面工作区」而不是整块屏幕：Win10 / Win11 任务栏高度不同，
+    用工作区才不会让 730 高的弹窗压到任务栏下面或被裁掉。
     """
     try:
         win.update_idletasks()
-        if size:
+        given = size is not None
+        if given:
             w, h = int(size[0]), int(size[1])
         else:
             w, h = win.winfo_reqwidth(), win.winfo_reqheight()
             if w <= 1 or h <= 1:
                 w, h = win.winfo_width(), win.winfo_height()
-        sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+
+        from .screen import clamp_position, fit_dialog, screen_metrics
+        m = screen_metrics(win)
+        sc = m["scale"] if (given and design) else 1.0
+        fw, fh = fit_dialog((w, h), m, scale=sc)
 
         base = master if master is not None else getattr(win, "master", None)
         bx = by = None
@@ -63,16 +73,20 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34):
         except Exception:
             bx = by = None
 
-        if bx is None or bw <= 1 or bh <= 1:  # 没有可用主窗口 → 屏幕居中
-            x = (sw - w) // 2
-            y = max(10, (sh - h) // 2 - 20)
+        if bx is None or bw <= 1 or bh <= 1:  # 没有可用主窗口 → 工作区居中
+            x = m["x"] + (m["w"] - fw) // 2
+            y = m["y"] + max(0, (m["h"] - fh) // 2 - int(m["h"] * 0.03))
         else:
-            x = bx + (bw - w) // 2
-            y = by + int((bh - h) * vertical_ratio)
+            x = bx + (bw - fw) // 2
+            y = by + int((bh - fh) * vertical_ratio)
 
-        x = max(0, min(x, max(0, sw - w)))
-        y = max(0, min(y, max(0, sh - h)))
-        win.geometry("+%d+%d" % (x, y))
+        x, y = clamp_position(x, y, fw, fh, m)
+        if (fw, fh) != (w, h):
+            # 只有尺寸被 DPI 放大或被屏幕收缩时才改大小；否则只摆位置，
+            # 让内容继续自动撑高（导入向导、批量编辑等窗口依赖这一点）
+            win.geometry("%dx%d+%d+%d" % (fw, fh, x, y))
+        else:
+            win.geometry("+%d+%d" % (x, y))
     except Exception:
         pass
 

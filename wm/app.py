@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
-from . import xlsxio
+from . import screen, xlsxio
 from .analysis import AnalysisTab
 from .sales import SalesTab, ask_sale
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
@@ -90,7 +90,11 @@ class App(object):
 
         root.title("%s  v%s · %s" % (APP_NAME, APP_VERSION,
                                      self.warehouses[self.wh_index]["name"]))
-        self.fam = apply_theme(root)
+        # 屏幕自适应（笔记本 / 台式机、Win10 / Win11、高 DPI 全覆盖）
+        self.screen_metrics = screen.screen_metrics(root)
+        self.ui_scale = screen.ui_scale(self.screen_metrics)
+        screen.apply_tk_scaling(root, self.ui_scale)
+        self.fam = apply_theme(root, scale=self.ui_scale)
         self._set_icon()
 
         # 全局：所有下拉框选完即清除文字选中底色（筛选/编辑/导入映射等）。
@@ -195,6 +199,7 @@ class App(object):
                 s["lan"] = dict(self.lan_cfg)
             try:
                 s["geometry"] = self.root.geometry()
+                s["maxed"] = (self.root.state() == "zoomed")
             except Exception:
                 pass
             with open(self.settings_path, "w", encoding="utf-8") as f:
@@ -626,20 +631,23 @@ class App(object):
             pass
 
     def _apply_geometry(self):
-        g = self.settings.get("geometry")
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        w = min(1440, int(sw * 0.86))
-        h = min(900, int(sh * 0.86))
-        self.root.geometry("%dx%d+%d+%d" % (w, h, (sw - w) // 2, max(10, (sh - h) // 2 - 20)))
-        self.root.minsize(1080, 660)
-        if g and "x" in str(g):
+        """按当前屏幕自适应窗口尺寸（笔记本小屏直接最大化，大屏居中 1440×900）。
+
+        · 用「桌面工作区」而不是整块屏幕 → 不会被 Win10/Win11 任务栏遮住；
+        · 上次保存的尺寸只在当前屏幕放得下时采用，换机器不会跑出屏幕；
+        · 最小尺寸随屏幕收缩，1366×768 笔记本也能拉满使用。
+        """
+        m = getattr(self, "screen_metrics", None) or screen.screen_metrics(self.root)
+        fit = screen.fit_window(m, saved=self.settings.get("geometry"))
+        self.root.minsize(fit["min_w"], fit["min_h"])
+        if fit["maxed"] or (self.settings.get("maxed") and not fit["compact"]):
             try:
-                size = str(g).split("+")[0]
-                ww, hh = [int(x) for x in size.split("x")]
-                if ww >= 1080 and hh >= 660:
-                    self.root.geometry("%dx%d" % (ww, hh))
+                self.root.state("zoomed")
+                return
             except Exception:
                 pass
+        self.root.geometry("%dx%d+%d+%d" % (fit["w"], fit["h"],
+                                            fit["x"], fit["y"]))
 
     # ============================================================ 菜单
     def _build_menubar(self):
@@ -823,7 +831,8 @@ class App(object):
         body.pack(fill="both", expand=True, padx=0, pady=8)
 
         # ---- 侧栏 ----
-        side = tk.Frame(body, bg=CLR_CARD, width=228, highlightbackground=CLR_BORDER,
+        side = tk.Frame(body, bg=CLR_CARD, width=int(228 * self.ui_scale),
+                        highlightbackground=CLR_BORDER,
                         highlightthickness=1)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
@@ -1239,7 +1248,8 @@ class App(object):
                 arrow = " ▲"      # 默认按编号升序
             self.tree.heading(c, text=FIELD_LABEL[c] + arrow,
                               command=lambda cc=c: self.sort_column(cc))
-            self.tree.column(c, width=FIELD_WIDTH[c], minwidth=60,
+            self.tree.column(c, width=int(FIELD_WIDTH[c] * self.ui_scale),
+                             minwidth=int(60 * self.ui_scale),
                              anchor=FIELD_ANCHOR[c], stretch=(c in ("remark",)))
 
     @staticmethod
@@ -2428,8 +2438,8 @@ class App(object):
         win.title("按型号检查重复")
         win.configure(bg=CLR_BG)
         win.transient(self.root)
-        win.geometry("760x520")
         apply_window_icon(win)
+        center_window(win, self.root, size=(760, 520))
 
         head = tk.Frame(win, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)

@@ -24,16 +24,19 @@ class LanDialog(tk.Toplevel):
         apply_window_icon(self)
         self.resizable(False, False)
         self._build()
-        center_window(self, master, size=(670, 730))
+        # 窗口高度按内容自适应：1080p 上一屏显示完整；1366×768 笔记本上
+        # 被屏幕限制时内容区自动出现滚动条，不会裁掉底部「关闭」按钮
+        self.update_idletasks()
+        center_window(self, master, size=(670, max(700, self.winfo_reqheight())))
         self.bind("<Escape>", lambda e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         app.lan_dlg = self
         self.refresh()
 
     # ------------------------------------------------------------ UI
-    def _card(self, title, subtitle=""):
-        card = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                        highlightthickness=1)
+    def _card(self, title, subtitle="", parent=None):
+        card = tk.Frame(parent if parent is not None else self, bg=CLR_CARD,
+                        highlightbackground=CLR_BORDER, highlightthickness=1)
         card.pack(fill="x", padx=12, pady=(8, 0))
         head = tk.Frame(card, bg=CLR_CARD)
         head.pack(fill="x", padx=14, pady=(10, 0))
@@ -61,11 +64,26 @@ class LanDialog(tk.Toplevel):
                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8)).pack(
             side="right", padx=16)
 
+        # ---- 可滚动内容区（小屏时自动出滚动条，底部按钮永远可见）----
+        area = tk.Frame(self, bg=CLR_BG)
+        area.pack(fill="both", expand=True)
+        self.canvas = tk.Canvas(area, bg=CLR_BG, highlightthickness=0, bd=0)
+        self.vsb = ttk.Scrollbar(area, orient="vertical", command=self.canvas.yview)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.vsb.pack(side="right", fill="y")
+        self.vsb.pack_forget()
+        self.body = tk.Frame(self.canvas, bg=CLR_BG)
+        self._cw = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.body.bind("<Configure>", self._sync_scroll)
+        self.canvas.bind("<Configure>", self._sync_scroll)
+        for w in (self.canvas, self.body):
+            w.bind("<MouseWheel>", self._on_wheel)
+
         # ---- ① 主机 ----
         host = self._card(
             "① 本机作为主机（数据放在这台电脑）",
             "主机随时可以录入。其他电脑连上后默认只能查看 / 导出，\n"
-            "勾选「允许录入」后才可以新增、修改、出入库。")
+            "勾选「允许录入」后才可以新增、修改、出入库。", parent=self.body)
         self.host_badge = host.badge
         row = tk.Frame(host, bg=CLR_CARD)
         row.pack(fill="x", padx=14, pady=(0, 6))
@@ -146,7 +164,7 @@ class LanDialog(tk.Toplevel):
         cli = self._card(
             "② 连接主机（本机作为客户端）",
             "填主机上显示的地址和连接码；本机不存副本，看到的就是主机当前数据。\n"
-            "① 和 ② 选一个用即可：同一台电脑同时只能当其中一种。")
+            "① 和 ② 选一个用即可：同一台电脑同时只能当其中一种。", parent=self.body)
         self.cli_badge = cli.badge
         rowc = tk.Frame(cli, bg=CLR_CARD)
         rowc.pack(fill="x", padx=14, pady=(0, 6))
@@ -197,6 +215,34 @@ class LanDialog(tk.Toplevel):
         ttk.Button(foot, text="关闭", width=10, command=self.destroy).pack(side="right")
         tk.Label(foot, text="提示：主机首次开启共享时，Windows 可能询问是否允许防火墙访问，请选择「允许」。",
                  bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(side="left")
+
+    # ------------------------------------------------------------ 滚动
+    def _sync_scroll(self, event=None):
+        """内容比可视区高时才显示滚动条（小屏笔记本用）。"""
+        try:
+            self.body.update_idletasks()
+            w = max(1, self.canvas.winfo_width())
+            h = max(1, self.body.winfo_reqheight())
+            self.canvas.itemconfigure(self._cw, width=w)
+            self.canvas.configure(scrollregion=(0, 0, w, h))
+            need = h > self.canvas.winfo_height() + 1
+            shown = bool(self.vsb.winfo_ismapped())
+            if need and not shown:
+                self.vsb.pack(side="right", fill="y")
+            elif not need and shown:
+                self.vsb.pack_forget()
+                self.canvas.yview_moveto(0)
+        except Exception:
+            pass
+
+    def _on_wheel(self, event):
+        try:
+            if self.body.winfo_reqheight() > self.canvas.winfo_height() + 1:
+                self.canvas.yview_scroll(int(-event.delta / 120), "units")
+                return "break"
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------ 刷新
     @staticmethod

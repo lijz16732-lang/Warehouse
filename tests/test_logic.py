@@ -822,6 +822,71 @@ check("批量改销售被拒绝",
       tc.update_sale_types(ids_oth, "销售")[0] == 0, str(tc.update_sale_types(ids_oth, "销售")))
 tc.close()
 
+print("== 3.2e 屏幕自适应（笔记本 / 台式机、Win10 / Win11、高 DPI） ==")
+from wm import screen as scr  # noqa: E402
+
+_lap = {"x": 0, "y": 0, "w": 1366, "h": 728, "scale": 1.0,
+        "build": 19045, "win11": False}                 # 1366×768 笔记本（Win10）
+_desk = {"x": 0, "y": 0, "w": 1920, "h": 1032, "scale": 1.0,
+         "build": 22631, "win11": True}                 # 1920×1080 台式（Win11）
+_big = {"x": 0, "y": 0, "w": 2560, "h": 1400, "scale": 1.0,
+        "build": 19045, "win11": False}                 # 2K 大屏
+_hidpi = {"x": 0, "y": 0, "w": 1920, "h": 1032, "scale": 1.5,
+          "build": 22631, "win11": True}                # 150% 缩放笔记本
+
+_f_lap = scr.fit_window(_lap)
+check("笔记本小屏直接最大化", _f_lap["maxed"] is True, _f_lap)
+check("笔记本窗口铺满工作区（不压任务栏）",
+      (_f_lap["w"], _f_lap["h"]) == (1366, 728), _f_lap)
+check("笔记本最小尺寸不超过屏幕", _f_lap["min_w"] <= 1366
+      and _f_lap["min_h"] <= 728, _f_lap)
+_f_desk = scr.fit_window(_desk)
+check("台式 1080p 用 1440×900 基准窗口",
+      (_f_desk["w"], _f_desk["h"]) == (1440, 900), _f_desk)
+check("台式机不最大化且水平居中",
+      _f_desk["maxed"] is False and _f_desk["x"] == (1920 - 1440) // 2, _f_desk)
+check("窗口垂直位置在工作区内",
+      _f_desk["y"] >= 0 and _f_desk["y"] + _f_desk["h"] <= 1032, _f_desk)
+_f_big = scr.fit_window(_big)
+check("2K 大屏窗口不超过设计基准",
+      (_f_big["w"], _f_big["h"]) == (1440, 900), _f_big)
+_f_hd = scr.fit_window(_hidpi)
+check("150% 缩放：窗口按比例放大", _f_hd["w"] > 1800 and _f_hd["h"] > 900, _f_hd)
+check("150% 缩放：窗口仍收在屏幕内",
+      _f_hd["w"] <= 1920 and _f_hd["h"] <= 1032, _f_hd)
+check("150% 缩放：最小尺寸同步放大且不超屏",
+      _f_hd["min_w"] >= 1080 and _f_hd["min_w"] <= 1920, _f_hd)
+# 上次保存的窗口尺寸：换机器 / 换分辨率不能照搬
+_f_s1 = scr.fit_window(_lap, saved="1920x1080+0+0")
+check("换到小屏时恢复尺寸自动收进屏幕",
+      (_f_s1["w"], _f_s1["h"]) == (1366, 728), _f_s1)
+_f_s2 = scr.fit_window(_desk, saved="1200x800+120+80")
+check("大屏上正常恢复上次尺寸 1200×800",
+      (_f_s2["w"], _f_s2["h"]) == (1200, 800), _f_s2)
+_f_s3 = scr.fit_window(_desk, saved="2400x1400+0+0")
+check("超出工作区的上次尺寸被忽略", (_f_s3["w"], _f_s3["h"]) == (1440, 900), _f_s3)
+# 弹窗：笔记本上不能比屏幕还高
+_d_lap = scr.fit_dialog((670, 730), _lap)
+check("730 高弹窗在 768 屏幕上被收进工作区",
+      600 <= _d_lap[1] <= 728, _d_lap)
+check("小屏弹窗宽度不被压缩", _d_lap[0] == 670, _d_lap)
+check("1080p 上弹窗尺寸保持不变",
+      scr.fit_dialog((670, 730), _desk) == (670, 730),
+      scr.fit_dialog((670, 730), _desk))
+check("150% 缩放下弹窗按比例放大",
+      scr.fit_dialog((670, 730), _hidpi)[0] > 670, scr.fit_dialog((670, 730), _hidpi))
+# 位置限制：标题栏不能被拖到屏幕外
+check("窗口位置被限制在工作区内",
+      scr.clamp_position(5000, -200, 400, 300, _desk) == (1920 - 400 - 8, 0),
+      scr.clamp_position(5000, -200, 400, 300, _desk))
+# 系统版本与 DPI
+check("Win10 (19045) 不识别为 Win11", scr.is_win11(19045) is False)
+check("Win11 (22631) 正确识别", scr.is_win11(22631) is True)
+check("未开启 DPI 感知时缩放系数在 1.0~1.5",
+      1.0 <= scr.dpi_scale() <= 1.5, scr.dpi_scale())
+check("ui_scale 夹在 1.0~1.5", 1.0 <= scr.ui_scale(_hidpi) <= 1.5,
+      scr.ui_scale(_hidpi))
+
 print("== 3.3 回收站 / 批量修改 / 采购成本 / 买家 / 销售统计 ==")
 rb = Store(os.path.join(TMP, "extras.db"))
 rb.insert_many([
@@ -991,6 +1056,20 @@ try:
     app = wapp.App(root)
     root.deiconify()
     root.update()
+    # ---- 屏幕自适应（v1.12.0）：窗口尺寸 / 最小尺寸 / 行高跟随屏幕与 DPI ----
+    _wa = scr.screen_metrics(root)
+    _mw, _mh = root.minsize()
+    check("主窗口最小尺寸不超过屏幕工作区",
+          int(_mw) <= _wa["w"] and int(_mh) <= _wa["h"],
+          "%s vs %s" % ((_mw, _mh), (_wa["w"], _wa["h"])))
+    check("按当前 DPI 计算了界面缩放", 1.0 <= app.ui_scale <= 1.5, app.ui_scale)
+    check("表格行高跟随界面缩放",
+          int(ttk.Style(root).lookup("Treeview", "rowheight"))
+          == int(round(30 * app.ui_scale)),
+          ttk.Style(root).lookup("Treeview", "rowheight"))
+    check("窗口实际大小不超工作区",
+          root.winfo_width() <= _wa["w"] and root.winfo_height() <= _wa["h"],
+          "%sx%s" % (root.winfo_width(), root.winfo_height()))
     # GUI 使用独立的 data/warehouse.db，灌入同一批数据
     app.store.clear_all()
     app.store.insert_many([dict(r) for r in norm])
@@ -2198,6 +2277,12 @@ try:
     app.lan_status = lambda: dict(fake_host)
     dlg2 = LanDialog(app.root, app)
     root.update()
+    _wa2 = scr.screen_metrics(app.root)
+    check("局域网窗口高度不超过屏幕工作区",
+          dlg2.winfo_height() <= _wa2["h"],
+          "%s vs %s" % (dlg2.winfo_height(), _wa2["h"]))
+    check("局域网窗口内容区可滚动（小屏不裁按钮）",
+          hasattr(dlg2, "canvas") and hasattr(dlg2, "vsb") and hasattr(dlg2, "body"))
     check("主机未选中电脑时「移除连接」置灰",
           str(dlg2.btn_kick.cget("state")) == "disabled",
           dlg2.btn_kick.cget("state"))

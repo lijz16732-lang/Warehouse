@@ -114,6 +114,11 @@ def capture_window(title_sub, path):
 
     user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     user32.SetForegroundWindow(hwnd)
+    # 前台权限可能被系统拒绝（用户正在操作别的窗口），用 TOPMOST 保证目标窗口
+    # 真正压在最上层，否则截到的是前台别的程序的内容
+    HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
+    SWP_NOMOVE_NOSIZE = 0x0003
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE_NOSIZE)
     time.sleep(1.2)
 
     rect = wintypes.RECT()
@@ -174,6 +179,10 @@ def capture_window(title_sub, path):
                  bytes([8, 6, 0, 0, 0]))
     out += chunk(b"IDAT", zlib.compress(bytes(raw), 6))
     out += chunk(b"IEND", b"")
+    try:
+        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE_NOSIZE)
+    except Exception:
+        pass
     with open(path, "wb") as f:
         f.write(out)
     return path

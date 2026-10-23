@@ -129,10 +129,18 @@ def pick_font(root):
     return "TkDefaultFont"
 
 
-def apply_theme(root):
-    """应用全局主题，返回选中的字体族名。"""
+def apply_theme(root, scale=1.0):
+    """应用全局主题，返回选中的字体族名。
+
+    scale：界面缩放系数（高 DPI 笔记本 1.25 / 1.5）。
+    字号用「点」会自动跟随 DPI，而行高、内边距这些像素值必须手动按比例放大，
+    否则 150% 缩放下行高不够、文字会被裁掉。
+    """
     fam = pick_font(root)
     root.configure(bg=CLR_BG)
+
+    def s(v):
+        return int(round(float(v) * float(scale or 1.0)))
 
     for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
         try:
@@ -172,48 +180,48 @@ def apply_theme(root):
     cfg("KpiSub.TLabel", background=CLR_CARD, foreground=CLR_MUTED, font=(fam, 8))
 
     # ---- 按钮 ----
-    cfg("TButton", padding=(12, 6), font=(fam, 10), relief="flat",
+    cfg("TButton", padding=(s(12), s(6)), font=(fam, 10), relief="flat",
         background="#FFFFFF", foreground=CLR_TEXT, borderwidth=1)
     style.map("TButton",
               background=[("pressed", "#E4EAF3"), ("active", "#F2F5FA")],
               bordercolor=[("!disabled", CLR_BORDER)])
 
-    cfg("Accent.TButton", padding=(14, 6), font=(fam, 10, "bold"),
+    cfg("Accent.TButton", padding=(s(14), s(6)), font=(fam, 10, "bold"),
         background=CLR_ACCENT, foreground="#FFFFFF", borderwidth=0)
     style.map("Accent.TButton",
               background=[("pressed", CLR_ACCENT_DK), ("active", "#3B76F0"),
                           ("disabled", "#A9C1F2")],
               foreground=[("disabled", "#F3F6FF")])
 
-    cfg("Ghost.TButton", padding=(10, 6), font=(fam, 10),
+    cfg("Ghost.TButton", padding=(s(10), s(6)), font=(fam, 10),
         background=CLR_CARD, foreground=CLR_ACCENT, borderwidth=0)
     style.map("Ghost.TButton",
               background=[("pressed", "#E8F0FE"), ("active", "#EFF5FF")],
               foreground=[("disabled", "#9DB5E8")])
 
-    cfg("Danger.TButton", padding=(12, 6), font=(fam, 10),
+    cfg("Danger.TButton", padding=(s(12), s(6)), font=(fam, 10),
         background="#FFFFFF", foreground=CLR_DANGER, borderwidth=1)
     style.map("Danger.TButton",
               background=[("pressed", "#FDE8E8"), ("active", "#FEF2F2")],
               bordercolor=[("!disabled", "#F5C2C2")])
 
-    cfg("Ok.TButton", padding=(12, 6), font=(fam, 10),
+    cfg("Ok.TButton", padding=(s(12), s(6)), font=(fam, 10),
         background="#FFFFFF", foreground=CLR_OK, borderwidth=1)
     style.map("Ok.TButton",
               background=[("pressed", "#DEF7EC"), ("active", "#F0FDF7")],
               bordercolor=[("!disabled", "#B5E3CE")])
 
-    cfg("Link.TButton", padding=(4, 2), font=(fam, 9), background=CLR_CARD,
+    cfg("Link.TButton", padding=(s(4), s(2)), font=(fam, 9), background=CLR_CARD,
         foreground=CLR_ACCENT, borderwidth=0)
     style.map("Link.TButton", background=[("active", "#EFF5FF")])
 
     # ---- 输入控件 ----
-    cfg("TEntry", padding=5, fieldbackground="#FFFFFF", foreground=CLR_TEXT,
+    cfg("TEntry", padding=s(5), fieldbackground="#FFFFFF", foreground=CLR_TEXT,
         bordercolor=CLR_BORDER, lightcolor=CLR_BORDER, darkcolor=CLR_BORDER,
         insertcolor=CLR_ACCENT)
     style.map("TEntry", bordercolor=[("focus", CLR_ACCENT)])
 
-    cfg("TCombobox", padding=4, fieldbackground="#FFFFFF", background="#FFFFFF",
+    cfg("TCombobox", padding=s(4), fieldbackground="#FFFFFF", background="#FFFFFF",
         foreground=CLR_TEXT, arrowcolor=CLR_MUTED, bordercolor=CLR_BORDER,
         lightcolor=CLR_BORDER, darkcolor=CLR_BORDER)
     style.map("TCombobox",
@@ -236,7 +244,7 @@ def apply_theme(root):
               indicatorcolor=[("selected", CLR_ACCENT), ("!selected", "#FFFFFF")])
 
     cfg("TNotebook", background=CLR_BG, borderwidth=0, tabmargins=(0, 4, 0, 0))
-    cfg("TNotebook.Tab", padding=(22, 9), font=(fam, 10), background="#E3E9F2",
+    cfg("TNotebook.Tab", padding=(s(22), s(9)), font=(fam, 10), background="#E3E9F2",
         foreground=CLR_MUTED, borderwidth=0)
     style.map("TNotebook.Tab",
               background=[("selected", CLR_CARD), ("active", "#EDF1F8")],
@@ -245,9 +253,9 @@ def apply_theme(root):
 
     # ---- 表格 ----
     cfg("Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=CLR_TEXT,
-        rowheight=30, font=(fam, 10), borderwidth=0)
+        rowheight=s(30), font=(fam, 10), borderwidth=0)
     cfg("Treeview.Heading", background=CLR_HEADER, foreground="#41506B",
-        font=(fam, 10, "bold"), relief="flat", padding=(6, 8), borderwidth=0)
+        font=(fam, 10, "bold"), relief="flat", padding=(s(6), s(8)), borderwidth=0)
     style.map("Treeview.Heading",
               background=[("active", "#E7EDF7")], relief=[("active", "flat")])
     style.map("Treeview",
@@ -269,7 +277,7 @@ def apply_theme(root):
         style.map("%s.TScrollbar" % orient,
                   background=[("active", "#ADBACC"), ("pressed", "#96A6BC")])
 
-    cfg("TSpinbox", padding=4, fieldbackground="#FFFFFF", bordercolor=CLR_BORDER,
+    cfg("TSpinbox", padding=s(4), fieldbackground="#FFFFFF", bordercolor=CLR_BORDER,
         arrowcolor=CLR_MUTED)
 
     root.option_add("*Font", (fam, 10))
