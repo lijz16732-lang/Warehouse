@@ -78,17 +78,21 @@ def work_area():
 
 
 def enable_dpi_awareness():
-    """开启 DPI 感知，避免高缩放笔记本上文字发虚。返回 2/1/0 表示级别。
+    """开启系统级 DPI 感知，避免高缩放笔记本上文字发虚。返回 1/0 表示级别。
 
     必须在创建 Tk 之前调用（main.py 里最先执行）。
+
+    注意：刻意用「系统级」而不是「按显示器（per-monitor）」——
+    Tk 8.6 在 per-monitor 模式下拖动改变窗口大小时内容会变白/消失（不重绘），
+    系统级没有这个问题，清晰度在本屏（登录 DPI）下完全一样。
     """
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)      # PER_MONITOR_AWARE
-        return 2
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)      # SYSTEM_AWARE
+        return 1
     except Exception:
         pass
     try:
-        ctypes.windll.user32.SetProcessDPIAware()           # 系统级（老系统）
+        ctypes.windll.user32.SetProcessDPIAware()           # 老系统等价接口
         return 1
     except Exception:
         return 0
