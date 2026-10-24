@@ -10,6 +10,7 @@ import socket
 import sqlite3
 import sys
 import threading
+import time
 import tkinter as tk
 import traceback
 from datetime import datetime
@@ -225,6 +226,20 @@ class App(object):
     def _save_lan_cfg(self):
         self.settings["lan"] = dict(self.lan_cfg)
         self._save_settings()
+
+    def _add_lan_history(self, host, port, code):
+        """连接成功的主机记入历史（同地址去重置顶，最多 8 条），供「历史连接」下拉用。
+
+        存在本机 settings.json 里，不会同步给其他电脑。
+        """
+        hist = [h for h in (self.lan_cfg.get("history") or [])
+                if isinstance(h, dict) and str(h.get("host") or "")]
+        hist = [h for h in hist
+                if str(h.get("host") or "") != str(host)
+                or int(h.get("port") or 0) != int(port)]
+        hist.insert(0, {"host": str(host), "port": int(port),
+                        "code": str(code or ""), "time": time.time()})
+        self.lan_cfg["history"] = hist[:8]
 
     def _open_store(self):
         """按局域网设置打开数据层：客户端连主机，其余情况用本机数据库。"""
@@ -3033,6 +3048,7 @@ class App(object):
         self.db_path = rs.path
         self.lan_cfg.update({"mode": "client", "host": host,
                              "port": port, "code": code})
+        self._add_lan_history(host, port, code)
         self._save_lan_cfg()
         self._reload_all()
         self._update_lan_ui()

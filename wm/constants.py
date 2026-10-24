@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.12.2"
+APP_VERSION = "1.13.1"
 
 
 def app_icon_path():
@@ -34,13 +34,17 @@ def apply_window_icon(win):
         pass
 
 
-def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True):
+def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
+                  force=False):
     """把窗口居中到主窗口（master），master 不可用时退回屏幕居中。
 
     - size: (宽, 高) 时按该尺寸摆放；否则用窗口自身请求尺寸（不改变大小）
     - vertical_ratio: 垂直位置比例，0.5 为正居中，略小于 0.5 视觉上更舒服
     - design: size 是否为「设计像素」。True 时按 DPI 缩放放大（弹窗写的是 100% 下的尺寸），
       传控件请求尺寸的调用方应传 False，避免二次放大
+    - force: True 时强制把 size 写进 geometry。默认 False 时若尺寸没被 DPI 放大或
+      屏幕收缩（scale=1.0 且装得下），只摆位置、让内容自动撑高（导入向导等窗口
+      依赖这一点）；内部带滚动区的固定尺寸窗口（如局域网共享）需要 force=True
 
     居中基准是「桌面工作区」而不是整块屏幕：Win10 / Win11 任务栏高度不同，
     用工作区才不会让 730 高的弹窗压到任务栏下面或被裁掉。
@@ -81,7 +85,7 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True)
             y = by + int((bh - fh) * vertical_ratio)
 
         x, y = clamp_position(x, y, fw, fh, m)
-        if (fw, fh) != (w, h):
+        if force or (fw, fh) != (w, h):
             # 只有尺寸被 DPI 放大或被屏幕收缩时才改大小；否则只摆位置，
             # 让内容继续自动撑高（导入向导、批量编辑等窗口依赖这一点）
             win.geometry("%dx%d+%d+%d" % (fw, fh, x, y))

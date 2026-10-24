@@ -24,10 +24,12 @@ class LanDialog(tk.Toplevel):
         apply_window_icon(self)
         self.resizable(False, False)
         self._build()
-        # 窗口高度按内容自适应：1080p 上一屏显示完整；1366×768 笔记本上
-        # 被屏幕限制时内容区自动出现滚动条，不会裁掉底部「关闭」按钮
+        # 窗口高度按实际内容计算（头部 + 卡片区 + 底部），1080p 上一屏显示完整；
+        # 1366×768 笔记本上被屏幕限制时内容区自动出现滚动条，不会裁掉「关闭」按钮
         self.update_idletasks()
-        center_window(self, master, size=(670, max(700, self.winfo_reqheight())))
+        need = (self.body.winfo_reqheight() + self._head.winfo_reqheight()
+                + self._foot.winfo_reqheight() + 24)
+        center_window(self, master, size=(760, max(760, need)), force=True)
         self.bind("<Escape>", lambda e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         app.lan_dlg = self
@@ -52,8 +54,8 @@ class LanDialog(tk.Toplevel):
         return card
 
     def _build(self):
-        head = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                        highlightthickness=1)
+        self._head = head = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                                     highlightthickness=1)
         head.pack(fill="x")
         tk.Label(head, text="局域网共享", bg=CLR_CARD, fg=CLR_TEXT,
                  font=(self.fam, 13, "bold")).pack(side="left", padx=(16, 8), pady=10)
@@ -187,6 +189,18 @@ class LanDialog(tk.Toplevel):
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 0), ipady=2)
 
+        # 历史连接：连接成功过的主机会自动记录，下拉选中即一键填入
+        rowch = tk.Frame(cli, bg=CLR_CARD)
+        rowch.pack(fill="x", padx=14, pady=(0, 6))
+        tk.Label(rowch, text="历史连接", bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        self.cb_hist = ttk.Combobox(rowch, state="readonly", width=30,
+                                    font=(self.fam, 9))
+        self.cb_hist.pack(side="left", padx=(6, 6))
+        self.cb_hist.bind("<<ComboboxSelected>>", self._pick_history)
+        ttk.Button(rowch, text="清空", style="Ghost.TButton", width=6,
+                   command=self.clear_history).pack(side="left")
+
         rowc2 = tk.Frame(cli, bg=CLR_CARD)
         rowc2.pack(fill="x", padx=14, pady=(0, 4))
         self.btn_test = ttk.Button(rowc2, text="测试连接", style="Ghost.TButton",
@@ -210,7 +224,7 @@ class LanDialog(tk.Toplevel):
         self._conn_busy = False
 
         # ---- 底部 ----
-        foot = tk.Frame(self, bg=CLR_BG)
+        self._foot = foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=10)
         ttk.Button(foot, text="关闭", width=10, command=self.destroy).pack(side="right")
         tk.Label(foot, text="提示：主机首次开启共享时，Windows 可能询问是否允许防火墙访问，请选择「允许」。",
@@ -366,6 +380,7 @@ class LanDialog(tk.Toplevel):
         self.btn_blk.configure(
             state="normal" if (hosting and sel) else "disabled")
         self.btn_blist.configure(state="normal" if hosting else "disabled")
+        self.refresh_hist()
 
     # ------------------------------------------------------------ 动作
     def copy_addr(self):
@@ -593,6 +608,53 @@ class LanDialog(tk.Toplevel):
             self.btn_test.configure(state="normal")
             done(box)
         self._async(go, finish)
+
+    def _hist_entries(self):
+        return [h for h in (self.app.lan_cfg.get("history") or [])
+                if isinstance(h, dict) and str(h.get("host") or "")]
+
+    def refresh_hist(self):
+        """刷新「历史连接」下拉（最近连过的排最前）。"""
+        import time as _t
+        ents = self._hist_entries()
+        vals = []
+        for e in ents:
+            try:
+                when = _t.strftime("%m-%d %H:%M",
+                                   _t.localtime(float(e.get("time") or 0)))
+            except Exception:
+                when = ""
+            vals.append("%s:%s · 上次 %s" % (e.get("host"), e.get("port"), when))
+        self.cb_hist["values"] = vals
+        if vals:
+            try:
+                self.cb_hist.current(0)
+                return
+            except Exception:
+                pass
+        self.cb_hist.set("（暂无，连接成功后自动记录）")
+
+    def _pick_history(self, event=None):
+        idx = self.cb_hist.current()
+        ents = self._hist_entries()
+        if not (0 <= idx < len(ents)):
+            return
+        e = ents[idx]
+        self.var_host.set(str(e.get("host") or ""))
+        self.var_cport.set(str(e.get("port") or DEFAULT_PORT))
+        self.var_ccode.set(str(e.get("code") or ""))
+        self.lbl_cli_msg.configure(
+            text="已填入历史连接 %s:%s，点「连接」即可（拿不准可先「测试连接」）。"
+                 % (e.get("host"), e.get("port")), fg=CLR_MUTED)
+
+    def clear_history(self):
+        if not messagebox.askyesno("清空历史连接",
+                                   "确定清空全部历史连接记录吗？\n\n"
+                                   "（不影响当前连接）", parent=self):
+            return
+        self.app.lan_cfg["history"] = []
+        self.app._save_lan_cfg()
+        self.refresh_hist()
 
     def test_conn(self):
         f, err = self._fields()

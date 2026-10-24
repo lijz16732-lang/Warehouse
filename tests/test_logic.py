@@ -2303,6 +2303,36 @@ try:
     app.lan_status = lambda: dict(fake_host)
     dlg2 = LanDialog(app.root, app)
     root.update()
+    # ---- 历史连接（v1.13.0）：记录 / 去重置顶 / 下拉一键填入 ----
+    app._add_lan_history("10.9.9.9", 8765, "654321")
+    app._add_lan_history("10.8.8.8", 9000, "111111")
+    app._add_lan_history("10.9.9.9", 8765, "999999")     # 同地址再去 → 置顶 + 更新码
+    _hist = app.lan_cfg["history"]
+    check("连接历史去重置顶且更新连接码",
+          len(_hist) == 2 and _hist[0]["host"] == "10.9.9.9"
+          and _hist[0]["code"] == "999999" and _hist[1]["host"] == "10.8.8.8",
+          _hist)
+    check("连接历史最多 8 条",
+          all(app._add_lan_history("10.0.0.%d" % i, 1000 + i, "c") or True
+              for i in range(12)) and len(app.lan_cfg["history"]) == 8,
+          len(app.lan_cfg["history"]))
+    app._add_lan_history("10.9.9.9", 8765, "999999")     # 再置顶用于下拉验证
+    dlg2.refresh_hist()
+    root.update()
+    check("历史连接下拉已填充",
+          any("10.9.9.9:8765" in str(v) for v in dlg2.cb_hist["values"]),
+          list(dlg2.cb_hist["values"])[:1])
+    dlg2.cb_hist.current(0)
+    dlg2._pick_history()
+    check("选中历史自动填入地址/端口/连接码",
+          dlg2.var_host.get() == "10.9.9.9" and dlg2.var_cport.get() == "8765"
+          and dlg2.var_ccode.get() == "999999",
+          "%s|%s|%s" % (dlg2.var_host.get(), dlg2.var_cport.get(),
+                        dlg2.var_ccode.get()))
+    app.lan_cfg["history"] = []
+    dlg2.refresh_hist()
+    check("清空后下拉显示暂无提示",
+          "暂无" in str(dlg2.cb_hist.get()), dlg2.cb_hist.get())
     _wa2 = scr.screen_metrics(app.root)
     check("局域网窗口高度不超过屏幕工作区",
           dlg2.winfo_height() <= _wa2["h"],
