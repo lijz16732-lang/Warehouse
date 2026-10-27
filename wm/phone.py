@@ -130,12 +130,22 @@ class PhoneTab(ttk.Frame):
         menu.add_command(label="刷新", command=self.refresh_rows)
 
         def _popup(ev):
+            # 空白处右键也弹菜单（此时保留原有选中，不动选择）
             iid = tree.identify_row(ev.y)
-            if iid:
-                if iid not in tree.selection():
-                    tree.selection_set(iid)   # 右键落在未选行：改为只选该行
+            if iid and iid not in tree.selection():
+                tree.selection_set(iid)      # 右键落在未选中的行：改为只选该行
                 tree.focus(iid)
+            try:
+                # 没有选中行时「删除选中/转入库存」灰掉，避免点了才提示
+                has_sel = bool(tree.selection())
+                for _i in range(menu.index("end") + 1):
+                    if (menu.type(_i) == "command"
+                            and menu.entrycget(_i, "label") in ("删除选中", "转入库存")):
+                        menu.entryconfigure(
+                            _i, state="normal" if has_sel else "disabled")
                 menu.tk_popup(ev.x_root, ev.y_root)
+            finally:
+                menu.grab_release()
             return "break"
 
         tree.bind("<Button-3>", _popup)
