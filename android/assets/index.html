@@ -351,54 +351,28 @@ $('btnReq').onclick = function () {
   }).catch(function (e) { toast(e.message || e); });
 };
 
-/* ================= 同步到电脑 ================= */
-function findPcId(pcCode) {
-  return api('GET', '/m/api/items?kw=' + encodeURIComponent(pcCode)).then(function (j) {
-    var hit = null;
-    (j.items || []).forEach(function (r) { if (r.code === pcCode) hit = r; });
-    return hit ? hit.id : 0;
-  });
-}
+/* ================= 同步到电脑 =================
+   手机数据同步进电脑端「手机数据」区（独立存放，不追加主库存）。
+   /m/api/m_item 按手机本地 id 覆盖保存商品；/m/api/m_sale 保存出售记录（幂等）。 */
 function pushItem(it) {
-  var unsold = 0;
-  DB.sales.forEach(function (s) { if (s.dirty && s.lidRef === it.lid) unsold += s.qty; });
-  var fields = {
+  return api('POST', '/m/api/m_item', {
+    lid: it.lid, code: it.code || '',
     brand: it.brand || '', category: it.category || '', model: it.model || '',
-    condition: it.condition || '', price: it.price || 0, shelf: it.shelf || '',
-    listed: it.listed === 0 ? 0 : 1, remark: it.remark || ''
-  };
-  if (!it.pc_code) {
-    // 首次上传：数量 = 当前库存 + 未同步的出售量（电脑端再按出售逐笔扣减）
-    fields.qty = it.qty + unsold;
-    return api('POST', '/m/api/add', fields).then(function (j) {
-      it.pc_code = j.code || '';
-      if (!unsold) it.dirty = 0;
-      saveDB();
-    });
-  }
-  // 已在电脑上：更新资料。有未同步出售时不动数量（电脑端按出售扣）。
-  return findPcId(it.pc_code).then(function (id) {
-    if (!id) { it.pc_code = ''; saveDB(); return pushItem(it); }   // 电脑上已被删 → 当新记录重传
-    fields.id = id;
-    if (unsold) delete fields.qty;
-    else fields.qty = it.qty;
-    return api('POST', '/m/api/update_all', fields).then(function () {
-      if (!unsold) it.dirty = 0;
-      saveDB();
-    });
-  });
+    condition: it.condition || '', price: it.price || 0, qty: it.qty || 0,
+    shelf: it.shelf || '', listed: it.listed === 0 ? 0 : 1,
+    remark: it.remark || '', sold_out: it.sold_out ? 1 : 0
+  }).then(function () { it.dirty = 0; saveDB(); });
 }
 function pushSale(s) {
   var it = itemByLid(s.lidRef);
-  var pre = Promise.resolve();
-  if (it && it.dirty) pre = pushItem(it);          // 先把商品传上去拿电脑编号
-  return pre.then(function () {
-    var pc = (it && it.pc_code) || s.pc_code;
-    if (!pc) { s.dirty = 0; saveDB(); return Promise.resolve(); }  // 商品已删，记录本地留档
-    return api('POST', '/m/api/sell',
-               { code: pc, qty: s.qty, price: s.price, buyer: s.buyer || '', remark: s.remark || '' })
-      .then(function () { s.pc_code = pc; s.dirty = 0; saveDB(); });
-  });
+  return api('POST', '/m/api/m_sale', {
+    lid: s.lid, item_lid: s.lidRef || 0, code: (it && it.code) || s.code || '',
+    brand: s.brand || (it && it.brand) || '', category: (it && it.category) || '',
+    model: s.model || (it && it.model) || '',
+    qty: s.qty, price: s.price, total: s.total || 0,
+    buyer: s.buyer || '', sale_date: s.sale_date || nowStr(),
+    out_type: s.out_type || '出售', remark: s.remark || ''
+  }).then(function () { s.dirty = 0; saveDB(); });
 }
 function syncAll(manual) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
@@ -588,7 +562,7 @@ $('btnAdd').onclick = function () {
     price: parseFloat($('aPrice').value) || 0,
     qty: parseInt($('aQty').value, 10) || 1,
     shelf: $('aShelf').value.trim(), listed: 1,
-    remark: $('aRemark').value.trim(), sold_out: 0, pc_code: '', dirty: 1
+    remark: $('aRemark').value.trim(), sold_out: 0, dirty: 1
   };
   if (!it.brand && !it.category && !it.model) { toast('品牌 / 品类 / 型号 至少填一项'); return; }
   DB.items.push(it);
@@ -609,7 +583,7 @@ $('btnSell').onclick = function () {
   if (qty > it.qty) { toast('库存只有 ' + it.qty + ' 个'); return; }
   var price = $('sPrice').value === '' ? it.price : (parseFloat($('sPrice').value) || 0);
   var s = {
-    lid: Date.now(), lidRef: it.lid, code: it.code, pc_code: it.pc_code || '',
+    lid: Date.now(), lidRef: it.lid, code: it.code,
     brand: it.brand, model: it.model, qty: qty, price: price,
     total: Math.round(qty * price * 100) / 100,
     buyer: $('sBuyer').value.trim(), sale_date: nowStr(),

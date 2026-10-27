@@ -88,7 +88,8 @@ class MobileService(object):
         with self._lock:
             self._fails.pop(ip, None)
             token = secrets.token_urlsafe(32)
-            self._sessions[token] = {"ip": ip, "expires": time.time() + SESSION_TTL}
+            self._sessions[token] = {"ip": ip, "expires": time.time() + SESSION_TTL,
+                                     "app": bool(app_mode)}
         body = {"ok": True}
         if app_mode:
             body["token"] = token
@@ -115,6 +116,12 @@ class MobileService(object):
     def logout(self, token):
         with self._lock:
             self._sessions.pop(token, None)
+
+    def is_app(self, token):
+        """该会话是否来自 APK（app:1 登录）。App 的数据同步写入手机数据区。"""
+        with self._lock:
+            s = self._sessions.get(token)
+            return bool(s and s.get("app"))
 
     def drop_ip(self, ip):
         """把某 IP 的手机会话全部踢下线（主机「手机下线」按钮用）。"""
@@ -452,6 +459,86 @@ def handle_request_write(srv, ip, token):
         c["requests"] = int(c.get("requests") or 0) + 1
     srv.on_event("request", {"ip": ip, "name": "手机（%s）" % ip})
     return 200, {"ok": True}, NO_STORE
+
+
+# ---------------------------------------------------------------- 手机数据区
+# App 同步的记录写入 phone_items / phone_sales（电脑端「手机数据」页查看管理），
+# 绝不写主库存；需要主机「允许录入」授权，和其它写接口同一套安全模型。
+
+_M_EDIT_LEN = {"brand": 40, "category": 40, "model": 120, "condition": 20,
+               "shelf": 120, "remark": 200, "code": 40}
+
+
+def _m_str(p, k, n=None):
+    v = p.get(k)
+    return str(v if v is not None else "").strip()[:(n or _M_EDIT_LEN.get(k, 120))]
+
+
+def _m_int(p, k):
+    try:
+        return int(float(p.get(k) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _m_float(p, k):
+    try:
+        return float(p.get(k) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def handle_m_item(srv, ip, token, payload):
+    """App 商品同步（按手机本地 id 覆盖保存）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    lid = _m_int(p, "lid")
+    if lid <= 0:
+        return 400, {"ok": False, "error": "缺少商品本地编号"}, NO_STORE
+    rec = {"lid": lid}
+    for k in ("code", "brand", "category", "model", "condition", "shelf", "remark"):
+        rec[k] = _m_str(p, k)
+    rec["price"] = _m_float(p, "price")
+    rec["qty"] = max(0, _m_int(p, "qty"))
+    rec["listed"] = 1 if p.get("listed") in (1, True, "1", "是") else 0
+    rec["sold_out"] = 1 if p.get("sold_out") in (1, True, "1", "是") else 0
+    if not any(rec.get(k) for k in ("brand", "model", "category")):
+        return 400, {"ok": False, "error": "品牌 / 型号 / 品类 至少填一个"}, NO_STORE
+    store = srv.get_store()
+    try:
+        store.m_upsert_item(rec)
+    except Exception as e:
+        return 500, {"ok": False, "error": "同步失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "message": "已同步到电脑「手机数据」"}, NO_STORE
+
+
+def handle_m_sale(srv, ip, token, payload):
+    """App 出售记录同步（幂等，按手机本地 id 覆盖保存；不在电脑端重复扣库存）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    lid = _m_int(p, "lid")
+    if lid <= 0:
+        return 400, {"ok": False, "error": "缺少记录本地编号"}, NO_STORE
+    qty = _m_int(p, "qty")
+    if qty <= 0:
+        return 400, {"ok": False, "error": "出售数量至少 1"}, NO_STORE
+    rec = {"lid": lid, "item_lid": _m_int(p, "item_lid"), "code": _m_str(p, "code"),
+           "brand": _m_str(p, "brand"), "category": _m_str(p, "category"),
+           "model": _m_str(p, "model"), "qty": qty, "price": _m_float(p, "price"),
+           "total": _m_float(p, "total") or round(qty * _m_float(p, "price"), 2),
+           "buyer": _m_str(p, "buyer"), "sale_date": _m_str(p, "sale_date", 20),
+           "out_type": _m_str(p, "out_type", 20) or "出售",
+           "remark": _m_str(p, "remark")}
+    store = srv.get_store()
+    try:
+        store.m_upsert_sale(rec)
+    except Exception as e:
+        return 500, {"ok": False, "error": "同步失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "message": "出售记录已同步到电脑「手机数据」"}, NO_STORE
 
 
 def handle_logout(srv, ip, token):

@@ -297,6 +297,77 @@ def _style_sheet(ws, headers, n_rows, widths=None):
     ws.freeze_panes = "A2"
 
 
+PHONE_ITEM_COLS = [c for c in FIELD_KEYS if c not in ("listed",)] + []
+PHONE_SALE_COLS = ("sale_date", "code", "brand", "category", "model", "qty",
+                   "price", "total", "buyer", "out_type", "remark")
+
+
+def export_phone_xlsx(path, items, sales):
+    """导出手机数据：两个工作表（手机库存 / 手机出售记录）。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "手机库存"
+
+    cols = ["code"] + [c for c in PHONE_ITEM_COLS if c != "code"]
+    headers = [FIELD_LABEL[c] for c in cols] + ["状态", "同步时间"]
+    widths = {i + 1: FIELD_WIDTH[c] / 8.2 + 2 for i, c in enumerate(cols)}
+    widths[len(cols) + 1] = 12
+    widths[len(cols) + 2] = 19
+    ws.append(headers)
+    for rec in items:
+        row = []
+        for c in cols:
+            v = rec.get(c)
+            t = FIELD_TYPE[c]
+            if t == "money":
+                row.append(round(float(v or 0), 2))
+            elif t == "int":
+                row.append(int(v or 0))
+            else:
+                row.append("" if v is None else str(v))
+        row.append("已转入库存" if rec.get("transferred") else "待转入")
+        row.append(str(rec.get("synced_at") or ""))
+        ws.append(row)
+    _style_sheet(ws, headers, len(items), widths)
+    for i, c in enumerate(cols, start=1):
+        letter = get_column_letter(i)
+        if FIELD_TYPE[c] in ("money", "int"):
+            for r in range(2, len(items) + 2):
+                ws["%s%d" % (letter, r)].number_format = (
+                    "#,##0.00" if FIELD_TYPE[c] == "money" else "#,##0")
+                ws["%s%d" % (letter, r)].alignment = Alignment(horizontal="right")
+    for r in range(2, len(items) + 2):
+        ws.cell(row=r, column=len(cols) + 1).alignment = Alignment(horizontal="center")
+
+    ws2 = wb.create_sheet("手机出售记录")
+    headers2 = [FIELD_LABEL.get(c, c) for c in PHONE_SALE_COLS]
+    widths2 = {i + 1: FIELD_WIDTH.get(c, 90) / 8.2 + 2
+               for i, c in enumerate(PHONE_SALE_COLS)}
+    ws2.append(headers2)
+    for rec in sales:
+        row = []
+        for c in PHONE_SALE_COLS:
+            v = rec.get(c)
+            if c in ("price", "total"):
+                row.append(round(float(v or 0), 2))
+            elif c == "qty":
+                row.append(int(v or 0))
+            else:
+                row.append("" if v is None else str(v))
+        ws2.append(row)
+    _style_sheet(ws2, headers2, len(sales), widths2)
+    for i, c in enumerate(PHONE_SALE_COLS, start=1):
+        if c in ("price", "total", "qty"):
+            letter = get_column_letter(i)
+            for r in range(2, len(sales) + 2):
+                ws2["%s%d" % (letter, r)].number_format = (
+                    "#,##0" if c == "qty" else "#,##0.00")
+                ws2["%s%d" % (letter, r)].alignment = Alignment(horizontal="right")
+
+    wb.save(path)
+    return path
+
+
 def export_xlsx(path, records, columns=None, sheet_name="库存明细"):
     """导出记录列表为带样式的 xlsx。"""
     columns = columns or FIELD_KEYS

@@ -21,9 +21,9 @@ from urllib.parse import parse_qs, urlparse
 
 from .constants import APP_NAME, APP_VERSION
 from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
-                     handle_logout, handle_page, handle_request_write,
-                     handle_sales, handle_sell, handle_update_all,
-                     handle_whoami, handle_items)
+                     handle_logout, handle_m_item, handle_m_sale, handle_page,
+                     handle_request_write, handle_sales, handle_sell,
+                     handle_update_all, handle_whoami, handle_items)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -35,6 +35,7 @@ RPC_METHODS.discard("close")
 # 只读方法：不需要授权
 READ_METHODS = {
     "all_records", "count", "distinct", "find_by_code", "generate_codes",
+    "m_items", "m_sales",
     "get_meta", "get_num", "list_sales", "sales_brands", "out_types_used",
     "buyer_names", "sale_addresses", "buyer_address_map", "buyer_stats",
     "list_purchases", "purchase_totals", "list_deleted", "deleted_count",
@@ -389,6 +390,10 @@ def _make_handler(srv):
                     return self._send_full(*handle_update_all(srv, ip, token, payload))
                 if path.startswith("/m/api/request_write"):
                     return self._send_full(*handle_request_write(srv, ip, token))
+                if path.startswith("/m/api/m_item"):
+                    return self._send_full(*handle_m_item(srv, ip, token, payload))
+                if path.startswith("/m/api/m_sale"):
+                    return self._send_full(*handle_m_sale(srv, ip, token, payload))
                 if path.startswith("/m/api/coltitles"):
                     return self._send_full(*handle_coltitles(srv, ip, token, payload))
                 return self._send(404, {"ok": False, "error": "not found"})

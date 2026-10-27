@@ -80,6 +80,34 @@ CREATE INDEX IF NOT EXISTS idx_sales_date  ON sales("sale_date");
 CREATE INDEX IF NOT EXISTS idx_sales_code  ON sales("code");
 CREATE INDEX IF NOT EXISTS idx_purch_date  ON purchases("purchase_date");
 CREATE INDEX IF NOT EXISTS idx_purch_item  ON purchases("item_id");
+-- 手机端独立数据（App 同步上来的记录，不进主库存；电脑端「手机数据」页查看管理）
+CREATE TABLE IF NOT EXISTS phone_items (
+    lid         INTEGER PRIMARY KEY,
+    {cols},
+    sold_out    INTEGER DEFAULT 0,
+    transferred INTEGER DEFAULT 0,
+    pc_id       INTEGER DEFAULT 0,
+    synced_at   TEXT,
+    created_at  TEXT,
+    updated_at  TEXT
+);
+CREATE TABLE IF NOT EXISTS phone_sales (
+    lid       INTEGER PRIMARY KEY,
+    item_lid  INTEGER DEFAULT 0,
+    code      TEXT,
+    brand     TEXT,
+    category  TEXT,
+    model     TEXT,
+    qty       INTEGER DEFAULT 0,
+    price     REAL DEFAULT 0,
+    total     REAL DEFAULT 0,
+    buyer     TEXT,
+    sale_date TEXT,
+    out_type  TEXT DEFAULT '出售',
+    remark    TEXT,
+    synced_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_phone_sales_date ON phone_sales("sale_date");
 """.format(cols=",\n    ".join(
     '"%s" %s DEFAULT %s' % (
         k,
@@ -111,6 +139,18 @@ BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 CREATE TRIGGER IF NOT EXISTS trg_sync_meta_u AFTER UPDATE ON meta
 BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 CREATE TRIGGER IF NOT EXISTS trg_sync_meta_d AFTER DELETE ON meta
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phitem_i AFTER INSERT ON phone_items
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phitem_u AFTER UPDATE ON phone_items
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phitem_d AFTER DELETE ON phone_items
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phsale_i AFTER INSERT ON phone_sales
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phsale_u AFTER UPDATE ON phone_sales
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_phsale_d AFTER DELETE ON phone_sales
 BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 """
 
@@ -307,6 +347,151 @@ class Store(object):
         self.set_meta(self.COL_TITLES_KEY,
                       _json.dumps(cur, ensure_ascii=False) if cur else "")
         return cur
+
+    # ---------------------------------------------------------------- 手机数据
+    # 手机 App 同步上来的记录单独存 phone_items / phone_sales，绝不写主库存；
+    # 电脑端「手机数据」页查看管理，可手动「转入库存」。
+
+    def _m_kw_match(self, r, kw):
+        if not kw:
+            return True
+        kw = kw.lower()
+        return any(kw in str(r.get(f) or "").lower()
+                   for f in ("code", "brand", "category", "model", "shelf", "condition"))
+
+    def _m_item_upsert_sql(self):
+        sets = ", ".join('"%s"=?' % k for k in FIELD_KEYS)
+        cols = SQL_COLS
+        ph = ", ".join(["?"] * (len(FIELD_KEYS) + 1))     # 字段 + lid
+        return sets, cols, ph
+
+    def m_upsert_item(self, rec):
+        """手机商品按本地 id（lid）覆盖保存：存在则更新，不存在则新增。"""
+        lid = int(rec.get("lid") or 0)
+        if lid <= 0:
+            raise ValueError("lid 无效")
+        vals = self._vals(rec)
+        ts = now_str()
+        so = 1 if rec.get("sold_out") in (1, True, "1", "是") else 0
+        sets, cols, ph = self._m_item_upsert_sql()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT lid, created_at FROM phone_items WHERE lid = ?", (lid,)).fetchone()
+            if row:
+                self.conn.execute(
+                    'UPDATE phone_items SET {sets}, sold_out=?, synced_at=?, updated_at=? '
+                    'WHERE lid=?'.format(sets=sets),
+                    tuple(vals) + (so, ts, ts, lid))
+            else:
+                self.conn.execute(
+                    'INSERT INTO phone_items (lid, {cols}, sold_out, synced_at, '
+                    'created_at, updated_at) VALUES ({ph}, ?, ?, ?, ?)'.format(
+                        cols=cols, ph=ph),
+                    tuple([lid] + vals) + (so, ts, ts, ts))
+        self.conn.commit()
+        return lid
+
+    def m_upsert_sale(self, rec):
+        """手机出售记录按本地 id（lid）覆盖保存（幂等，重复同步不产生重复行）。"""
+        lid = int(rec.get("lid") or 0)
+        if lid <= 0:
+            raise ValueError("lid 无效")
+        ts = now_str()
+
+        def _i(k):
+            try:
+                return int(float(rec.get(k) or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        def _f(k):
+            try:
+                return float(rec.get(k) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _s(k, n=120):
+            return str(rec.get(k) or "").strip()[:n]
+        args = (lid, _i("item_lid"), _s("code", 40), _s("brand", 40), _s("category", 40),
+                _s("model", 120), max(1, _i("qty")), _f("price"), _f("total"),
+                _s("buyer", 40), _s("sale_date", 20), _s("out_type", 20) or "出售",
+                _s("remark", 200), ts)
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO phone_sales (lid, item_lid, code, brand, category, model, "
+                "qty, price, total, buyer, sale_date, out_type, remark, synced_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(lid) DO UPDATE SET item_lid=excluded.item_lid, "
+                "code=excluded.code, brand=excluded.brand, category=excluded.category, "
+                "model=excluded.model, qty=excluded.qty, price=excluded.price, "
+                "total=excluded.total, buyer=excluded.buyer, sale_date=excluded.sale_date, "
+                "out_type=excluded.out_type, remark=excluded.remark, "
+                "synced_at=excluded.synced_at", args)
+        self.conn.commit()
+        return lid
+
+    def m_items(self, kw=""):
+        """手机商品列表（含 transferred/pc_id/synced_at），按同步顺序。"""
+        with self._lock:
+            rows = self.conn.execute(
+                'SELECT * FROM phone_items ORDER BY lid ASC').fetchall()
+        out = [dict(r) for r in rows]
+        return [r for r in out if self._m_kw_match(r, kw)]
+
+    def m_sales(self, kw=""):
+        """手机出售记录列表，按日期倒序（新的在前）。"""
+        with self._lock:
+            rows = self.conn.execute(
+                'SELECT * FROM phone_sales ORDER BY sale_date DESC, lid DESC').fetchall()
+        out = [dict(r) for r in rows]
+        return [r for r in out if self._m_kw_match(r, kw)]
+
+    def m_del_item(self, lid):
+        with self._lock:
+            self.conn.execute("DELETE FROM phone_items WHERE lid = ?", (int(lid),))
+        self.conn.commit()
+
+    def m_del_sale(self, lid):
+        with self._lock:
+            self.conn.execute("DELETE FROM phone_sales WHERE lid = ?", (int(lid),))
+        self.conn.commit()
+
+    def m_clear(self):
+        """清空全部手机数据（不影响主库存）。"""
+        with self._lock:
+            self.conn.execute("DELETE FROM phone_items")
+            self.conn.execute("DELETE FROM phone_sales")
+        self.conn.commit()
+
+    def m_transfer(self, lids):
+        """把手机商品转入主库存：生成电脑编号（接着最大号排）、插入 items，
+        并在手机数据里标记 transferred=1。返回 (转入条数, 新编号列表)。
+        已转入的自动跳过；原记录保留在手机数据页（标「已转入」），不删不重复转入。"""
+        lids = [int(x) for x in (lids or [])]
+        n, codes = 0, []
+        for lid in lids:
+            with self._lock:
+                row = self.conn.execute(
+                    "SELECT * FROM phone_items WHERE lid = ?", (lid,)).fetchone()
+            if row is None or row["transferred"]:
+                continue
+            rec = {k: row[k] for k in FIELD_KEYS}
+            rec["sold_out"] = row["sold_out"]
+            code = self.generate_codes(1)[0]
+            rec["code"] = code
+            rid = self.insert(rec)
+            if row["sold_out"]:
+                with self._lock:
+                    self.conn.execute("UPDATE items SET sold_out=1 WHERE id=?", (rid,))
+                self.conn.commit()
+            with self._lock:
+                self.conn.execute(
+                    "UPDATE phone_items SET transferred=1, pc_id=?, updated_at=? "
+                    "WHERE lid=?", (rid, now_str(), lid))
+            self.conn.commit()
+            n += 1
+            codes.append(code)
+        return n, codes
 
     # ---------------------------------------------------------------- 查询
     def all_records(self):

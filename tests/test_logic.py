@@ -735,9 +735,10 @@ try:
     _ajs = _app_html.split("<script>")[1].split("</" + "script>")[0]
     esprima.parseScript(_ajs)
     check("App 自带页面 JS 语法可解析（esprima）", True)
-    check("App 自带页面调用列题/库存/录入接口",
-          all(x in _ajs for x in ("/m/api/coltitles", "/m/api/items", "/m/api/add",
-                                  "X-MToken", "update_all")))
+    check("App 自带页面调用列题/库存/手机同步接口",
+          all(x in _ajs for x in ("/m/api/coltitles", "/m/api/items",
+                                  "/m/api/m_item", "/m/api/m_sale",
+                                  "X-MToken")))
 except ImportError:
     check("App 自带页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
 except Exception as _e:
@@ -752,6 +753,84 @@ except ImportError:
     check("手机页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
 except Exception as _e:
     check("手机页面 JS 语法可解析（esprima）", False, str(_e)[:100])
+# ---- 手机数据独立区（v1.18.0）：App 同步进 phone_items/phone_sales，不进主库存 ----
+def _mreq_tok(path, body=None, token=""):
+    """带 X-MToken 头的 POST（模拟 App 本地页面请求）。"""
+    _d = json.dumps(body or {}).encode("utf-8")
+    _q = _ureq.Request("http://127.0.0.1:%d%s" % (_lan_port, path), data=_d,
+                       headers={"Content-Type": "application/json",
+                                "X-MToken": token})
+    try:
+        with _ureq.build_opener().open(_q, timeout=6) as _r:
+            return _r.status, json.loads(_r.read()), None
+    except _uerr.HTTPError as _e:
+        return _e.code, json.loads(_e.read()), None
+
+
+_n_items_before = ss.count()
+_msc, _mb, _ = _mreq_tok("/m/api/m_item",
+    {"lid": 9001, "code": "APP-00001", "brand": "手机同步品", "qty": 4, "price": 33.3},
+    token=_app_tok)
+check("App 同步商品进入手机数据区",
+      _msc == 200 and _mb.get("ok"), (_msc, _mb))
+check("手机数据不进主库存", ss.count() == _n_items_before, (ss.count(), _n_items_before))
+check("手机数据表有这条记录",
+      len(ss.m_items("手机同步品")) == 1
+      and ss.m_items("手机同步品")[0]["lid"] == 9001
+      and ss.m_items("手机同步品")[0]["qty"] == 4, ss.m_items())
+_msc, _mb, _ = _mreq_tok("/m/api/m_item",
+    {"lid": 9001, "code": "APP-00001", "brand": "手机同步品", "qty": 2, "price": 33.3},
+    token=_app_tok)
+check("重复同步同一 lid 覆盖保存（不产生重复行）",
+      _msc == 200 and len(ss.m_items()) == 1 and ss.m_items()[0]["qty"] == 2,
+      (_msc, ss.m_items()))
+_msc, _mb, _ = _mreq_tok("/m/api/m_sale",
+    {"lid": 7001, "item_lid": 9001, "code": "APP-00001", "brand": "手机同步品",
+     "qty": 1, "price": 40, "total": 40, "buyer": "手机买家",
+     "sale_date": "2026-10-27 11:00"},
+    token=_app_tok)
+check("App 同步出售记录进入手机数据区",
+      _msc == 200 and _mb.get("ok"), (_msc, _mb))
+check("手机出售不扣主库存", ss.count() == _n_items_before and len(ss.m_sales()) == 1,
+      (ss.count(), ss.m_sales()))
+_msc, _mb, _ = _mreq_tok("/m/api/m_sale",
+    {"lid": 7001, "item_lid": 9001, "code": "APP-00001", "brand": "手机同步品",
+     "qty": 1, "price": 40, "total": 40, "buyer": "手机买家",
+     "sale_date": "2026-10-27 11:00"},
+    token=_app_tok)
+check("出售记录重复同步幂等（仍 1 条）", _msc == 200 and len(ss.m_sales()) == 1,
+      (_msc, len(ss.m_sales())))
+_msc, _mb, _ = _mreq_tok("/m/api/m_item", {"brand": "无lid"}, token=_app_tok)
+check("同步缺 lid 被拒（400）", _msc == 400, (_msc, _mb))
+_msc, _mb, _ = _mreq_tok("/m/api/m_item", {"lid": 9002, "brand": "x"})
+check("手机数据同步不登录被拒（401）", _msc == 401, (_msc, _mb))
+# 转入库存：生成电脑编号追加主库存，原手机记录标记已转入、不重复转入
+_n_before = ss.count()
+_n, _codes = ss.m_transfer([9001])
+check("转入库存成功并生成电脑编号",
+      _n == 1 and _codes and _codes[0].startswith("WL-") and ss.count() == _n_before + 1,
+      (_n, _codes, ss.count()))
+check("转入后手机记录标记已 transferred",
+      ss.m_items()[0]["transferred"] == 1 and ss.m_items()[0]["pc_id"] > 0,
+      ss.m_items()[0])
+_n2, _c2 = ss.m_transfer([9001])
+check("已转入的再次转入自动跳过", _n2 == 0 and not _c2, (_n2, _c2))
+# 清空手机数据不影响主库存
+ss.m_clear()
+check("清空手机数据后主库存不变", not ss.m_items() and not ss.m_sales()
+      and ss.count() == _n_before + 1, (ss.count(), _n_before + 1))
+# 导出手机数据 xlsx（两个工作表）
+from wm import xlsxio as _xio  # noqa: E402
+ss.m_upsert_item({"lid": 1, "code": "APP-00001", "brand": "导出测试", "qty": 1,
+                  "price": 5})
+ss.m_upsert_sale({"lid": 1, "item_lid": 1, "code": "APP-00001", "qty": 1,
+                  "price": 6, "total": 6, "sale_date": "2026-10-27 12:00"})
+_xls = os.path.join(tempfile.gettempdir(), "cgm_phone_export.xlsx")
+_xio.export_phone_xlsx(_xls, ss.m_items(), ss.m_sales())
+from openpyxl import load_workbook as _lwb  # noqa: E402
+_wb2 = _lwb(_xls)
+check("手机数据导出含库存+出售两个工作表",
+      _wb2.sheetnames == ["手机库存", "手机出售记录"], _wb2.sheetnames)
 _msc, _mb, _ = _mreq("/m/logout", {}, opener=_mb_op)
 check("退出登录成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
 _msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
@@ -1840,6 +1919,24 @@ try:
     root.update()
     stats = app.tab_ana.refresh()
     check("分析页KPI", stats["total"] == 7)
+    root.update()
+
+    # 手机数据页（v1.18.0）
+    check("主窗口含「手机数据」页签",
+          "手机数据" in app.nb.tab(app.tab_phone, "text"),
+          app.nb.tab(app.tab_phone, "text"))
+    app.nb.select(app.tab_phone)
+    root.update()
+    check("手机数据页两个子表（库存/出售）",
+          hasattr(app.tab_phone, "tree_items") and hasattr(app.tab_phone, "tree_sales"))
+    app.tab_phone.var_kw.set("不存在的关键字xyz")
+    app.tab_phone.refresh_rows()
+    root.update()
+    check("手机数据页搜索无结果不报错",
+          not app.tab_phone.tree_items.get_children()
+          and not app.tab_phone.tree_sales.get_children())
+    app.tab_phone.var_kw.set("")
+    app.tab_phone.refresh_rows()
     root.update()
 
     # 导入向导弹窗

@@ -18,6 +18,7 @@ from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 from . import screen, xlsxio
 from .analysis import AnalysisTab
+from .phone import PhoneTab
 from .sales import SalesTab, ask_sale
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
@@ -759,11 +760,13 @@ class App(object):
         self.tab_ana = AnalysisTab(self.nb, self, self.fam)
         self.tab_sales = SalesTab(self.nb, self, self.fam)
         self.tab_out = SalesTab(self.nb, self, self.fam, mode="out")
-        # 顺序：库存管理 | 出售记录 | 出库记录 | 数据分析
+        self.tab_phone = PhoneTab(self.nb, self, self.fam)
+        # 顺序：库存管理 | 出售记录 | 出库记录 | 数据分析 | 手机数据
         self.nb.add(self.tab_inv, text="  库存管理  ")
         self.nb.add(self.tab_sales, text="  出售记录  ")
         self.nb.add(self.tab_out, text="  出库记录  ")
         self.nb.add(self.tab_ana, text="  数据分析  ")
+        self.nb.add(self.tab_phone, text="  手机数据  ")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_toolbar()
@@ -1818,13 +1821,15 @@ class App(object):
     def _on_tab_changed(self, _e=None):
         try:
             idx = self.nb.index(self.nb.select())
-            # 标签顺序：0 库存管理 / 1 出售记录 / 2 出库记录 / 3 数据分析
+            # 标签顺序：0 库存管理 / 1 出售记录 / 2 出库记录 / 3 数据分析 / 4 手机数据
             if idx == 1:
                 self.tab_sales.refresh_tab()
             elif idx == 2:
                 self.tab_out.refresh_tab()
             elif idx == 3:
                 self.tab_ana.refresh()
+            elif idx == 4:
+                self.tab_phone.refresh_tab()
         except Exception:
             pass
 
@@ -3167,6 +3172,7 @@ class App(object):
             self.load_data()
             self.tab_sales.refresh_rows()
             self.tab_out.refresh_rows()
+            self.tab_phone.refresh_rows()
             self._status("已同步主机最新数据")
         except Exception as e:
             self._status("同步失败：%s" % e)
