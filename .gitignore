@@ -22,3 +22,4 @@ backups/
 # ---- 调试 / 截图 ----
 .tmpdbg/
 *.log
+android/.work/
