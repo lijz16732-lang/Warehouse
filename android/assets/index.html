@@ -149,6 +149,7 @@ tr:active { background:#f0f5ff; }
     <div class="card">
       <h3>数据共享到电脑端</h3>
       <div class="hint" style="margin:0 0 10px">手机数据照常存在手机里；开启后录入/出售会直接同步到电脑「手机数据」区（需电脑端已「开启共享」）。</div>
+      <button id="btnQrConn" style="width:100%;margin:0 0 10px">扫电脑二维码，自动连接</button>
       <div class="fcol"><label>电脑地址（局域网共享 → 手机访问）</label>
         <input id="shBase" placeholder="例如 192.168.1.5:8765" autocapitalize="off"></div>
       <div class="fcol"><label>连接码</label>
@@ -299,9 +300,10 @@ function refreshHead() {
   $('hPerm').className = 'badge' + (conn ? ' rw' : '');
 }
 
-/* 连接电脑 */
-$('btnShareConn').onclick = function () {
-  var b = normBase($('shBase').value), code = $('shCode').value.trim();
+/* 连接电脑（手填 / 扫二维码共用）：thenSync=true 时连上就把待同步数据推上去 */
+function connectTo(b, code, thenSync) {
+  b = normBase(b);
+  code = (code || '').trim();
   if (!b) { toast('请填写电脑地址'); return; }
   if (!code) { toast('请填写连接码'); return; }
   base = b;
@@ -320,14 +322,75 @@ $('btnShareConn').onclick = function () {
     saveDB();
     if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
     $('shBase').value = b;
+    $('shCode').value = code;
+    refreshHead(); renderShare(); renderSync();
     toast('已连接电脑');
     api('GET', '/m/api/whoami').then(function (w) {
       refreshHead(); renderShare(); renderSync();
       toast('已连接：' + (w.warehouse || '电脑端'));
+      if (thenSync) {
+        if (pendingCount()) { toast('正在同步手机数据…'); syncAll(true); }
+        else { toast('已连接，没有待同步的数据'); }
+      }
     }).catch(function () { refreshHead(); renderShare(); renderSync(); });
   };
   x.send(JSON.stringify({ code: code, app: 1 }));
+}
+$('btnShareConn').onclick = function () {
+  connectTo($('shBase').value, $('shCode').value, false);
 };
+
+/* 扫电脑二维码：按钮 → 原生扫码 → __qrResult 回填并自动连接 + 同步一次 */
+$('btnQrConn').onclick = function () {
+  if (!window.AndroidOcr || !window.AndroidOcr.scanQr) {
+    toast('扫码需要新版 App，请先安装最新版');
+    return;
+  }
+  window.AndroidOcr.scanQr();
+};
+window.__qrResult = function (text) {
+  var info = parseQr(text);
+  if (!info) { toast('这不是仓管家的连接二维码'); return; }
+  if (!info.code) { toast('二维码里没有连接码，请扫电脑端「手机访问」里的二维码'); return; }
+  $('shBase').value = info.base;
+  $('shCode').value = info.code;
+  toast('识别成功，正在连接…');
+  connectTo(info.base, info.code, true);
+};
+/* 二维码内容（电脑端生成）：http://192.168.1.5:8765/m#c=123456
+   兼容 ?c= / ?code= / &code= 几种写法（不用正则：页面里不能出现反斜杠） */
+function parseQr(text) {
+  if (!text) return null;
+  var s = String(text).trim();
+  var at = s.indexOf('http://');
+  if (at < 0) at = s.indexOf('https://');
+  if (at < 0) return null;
+  var rest = s.slice(at);
+  var cut = rest.length;
+  var h = rest.indexOf('#');
+  var q = rest.indexOf('?');
+  if (h >= 0 && h < cut) cut = h;
+  if (q >= 0 && q < cut) cut = q;
+  var base = normBase(rest.slice(0, cut));
+  if (!base) return null;
+  var tail = rest.slice(cut);
+  var code = '';
+  var names = ['c=', 'code='];
+  for (var i = 0; i < names.length && !code; i++) {
+    var p = tail.indexOf(names[i]);
+    if (p < 0) continue;
+    var v = tail.slice(p + names[i].length);
+    var keep = '';
+    for (var j = 0; j < v.length; j++) {
+      var ch = v.charAt(j);
+      if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
+          || (ch >= 'A' && ch <= 'Z')) keep += ch;
+      else break;
+    }
+    code = keep;
+  }
+  return { base: base, code: code };
+}
 $('btnShareOff').onclick = function () {
   if (DB.share.token) api('POST', '/m/logout').catch(function () {});
   DB.share.token = '';

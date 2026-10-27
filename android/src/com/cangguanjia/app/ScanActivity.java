@@ -31,6 +31,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.PlanarYUVLuminanceSource;
+import com.google.zxing.Result;
+import com.google.zxing.common.HybridBinarizer;
 import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.ByteArrayOutputStream;
@@ -38,8 +45,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -57,10 +67,16 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     public static final String EXTRA_TEXT = "text";
+    public static final String EXTRA_MODE = "mode";       // ocr（默认，识别型号文字）/ qr（扫电脑二维码）
+    public static final String MODE_QR = "qr";
 
     private static final int REQ_PERM = 21;
     private static final long MIN_GAP_MS = 900L;      // 两次识别的最小间隔（省电、防卡）
+    private static final long QR_GAP_MS = 260L;       // 二维码解码轻，间隔短一点跟手
     private static final String LANG = "chi_sim+eng";
+
+    private boolean isQr = false;
+    private final MultiFormatReader qrReader = new MultiFormatReader();
 
     /** 识别引擎较重，做成静态复用：第二次进入扫一扫就不用再加载。 */
     private static TessBaseAPI sApi;
@@ -94,6 +110,14 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        isQr = MODE_QR.equals(getIntent().getStringExtra(EXTRA_MODE));
+        if (isQr) {
+            Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
+            hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+            hints.put(DecodeHintType.POSSIBLE_FORMATS,
+                    Collections.singletonList(BarcodeFormat.QR_CODE));
+            qrReader.setHints(hints);
+        }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
 
@@ -101,7 +125,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_PERM);
         }
         // 相机不在这里开：等 surfaceCreated / 权限回调，避免 surface 未就绪导致黑屏
-        prepareEngine();
+        if (!isQr) prepareEngine();       // 扫二维码不需要 OCR 引擎，省 2 秒和内存
     }
 
     // ------------------------------------------------------------- 界面
@@ -119,8 +143,8 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         preview.getHolder().addCallback(this);
 
-        // 取景框（中间一条：型号铭牌通常是窄长一条）
-        root.addView(new FrameView(this), new FrameLayout.LayoutParams(
+        // 取景框（型号铭牌是窄长一条；扫二维码用方形框）
+        root.addView(new FrameView(this, isQr), new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         LinearLayout top = new LinearLayout(this);
@@ -130,7 +154,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         top.setBackgroundColor(Color.argb(150, 0, 0, 0));
 
         TextView title = new TextView(this);
-        title.setText("扫一扫识别型号");
+        title.setText(isQr ? "扫电脑二维码连接" : "扫一扫识别型号");
         title.setTextColor(Color.WHITE);
         title.setTextSize(16);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -164,7 +188,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         bottom.setBackgroundColor(Color.argb(170, 0, 0, 0));
 
         status = new TextView(this);
-        status.setText("正在打开相机…");
+        status.setText(isQr ? "把电脑上的二维码放进框内…" : "正在打开相机…");
         status.setTextColor(Color.parseColor("#d7e2f5"));
         status.setTextSize(13);
         status.setGravity(Gravity.CENTER);
@@ -207,14 +231,16 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(root);
     }
 
-    /** 半透明遮罩 + 中间取景框。 */
+    /** 半透明遮罩 + 取景框（型号=窄长条，二维码=方形）。 */
     private class FrameView extends View {
         private final Paint dim = new Paint();
         private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Rect box = new Rect();
+        private final boolean square;
 
-        FrameView(Activity c) {
+        FrameView(Activity c, boolean square) {
             super(c);
+            this.square = square;
             dim.setColor(Color.argb(110, 0, 0, 0));
             line.setColor(Color.parseColor("#46b1ff"));
             line.setStyle(Paint.Style.STROKE);
@@ -224,10 +250,21 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         private void calcBox() {
             int w = getWidth();
             int h = getHeight();
-            int bw = (int) (w * 0.86f);
-            int bh = Math.max(dp(64), (int) (h * 0.19f));
-            int left = (w - bw) / 2;
-            int top = (int) (h * 0.36f);
+            int bw, bh, left, top;
+            if (square) {
+                int side = Math.min((int) (w * 0.78f), (int) (h * 0.46f));
+                bw = side;
+                bh = side;
+                left = (w - side) / 2;
+                top = (h - side) / 2 - (int) (h * 0.04f);
+            } else {
+                bw = (int) (w * 0.86f);
+                bh = Math.max(dp(64), (int) (h * 0.19f));
+                left = (w - bw) / 2;
+                top = (int) (h * 0.36f);
+            }
+            if (top < 0) top = 0;
+            if (left < 0) left = 0;
             box.set(left, top, left + bw, top + bh);
         }
 
@@ -354,7 +391,11 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         restartCount = 0;          // 真的出画面了才算恢复正常
                         if (data != null) {
                             try {
-                                grab(data, cam);
+                                if (isQr) {
+                                    grabQr(data);
+                                } else {
+                                    grab(data, cam);
+                                }
                             } catch (Throwable ignored) {
                             }
                         }
@@ -393,7 +434,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             previewRunning = true;
             lastFrameAt = System.currentTimeMillis();
             String size = previewSize == null ? "" : (" " + previewSize.width + "×" + previewSize.height);
-            status.setText("把型号对准框内…" + size);
+            status.setText(isQr ? "把电脑上的二维码放进框内…" : ("把型号对准框内…" + size));
             startWatchdog();
         } catch (Throwable e) {
             previewRunning = false;
@@ -528,6 +569,55 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 } finally {
                     busy.set(false);
                 }
+            }
+        });
+    }
+
+    /** 二维码模式：抓一帧（频繁一点，跟手），交给 worker 解码。 */
+    private void grabQr(byte[] data) {
+        long now = System.currentTimeMillis();
+        if (now - lastAt < QR_GAP_MS) return;
+        if (!busy.compareAndSet(false, true)) return;
+        lastAt = now;
+
+        int w = previewSize != null ? previewSize.width : 0;
+        int h = previewSize != null ? previewSize.height : 0;
+        if (w <= 0 || h <= 0) {
+            busy.set(false);
+            return;
+        }
+        final byte[] copy = data.clone();
+        worker.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    decodeQr(copy, w, h);
+                } catch (Throwable ignored) {
+                } finally {
+                    busy.set(false);
+                }
+            }
+        });
+    }
+
+    /** ZXing 直接吃 NV21 的 Y 平面；QR 旋转 90° 也能解，不用先摆正。 */
+    private void decodeQr(byte[] nv21, int w, int h) {
+        String text = null;
+        try {
+            PlanarYUVLuminanceSource src =
+                    new PlanarYUVLuminanceSource(nv21, w, h, 0, 0, w, h, false);
+            Result r = qrReader.decode(new BinaryBitmap(new HybridBinarizer(src)));
+            if (r != null) text = r.getText();
+        } catch (Throwable ignored) {         // NotFoundException 等：这一帧没识别到
+        }
+        if (text == null || text.length() == 0) return;
+        final String t = text;
+        ui.post(new Runnable() {
+            @Override
+            public void run() {
+                if (isFinishing()) return;
+                status.setText("已识别二维码");
+                finishWith(t);
             }
         });
     }

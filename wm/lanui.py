@@ -426,6 +426,22 @@ class LanDialog(tk.Toplevel):
         port = self.var_port.get().strip() or str(DEFAULT_PORT)
         return "http://%s:%s/m" % (ips[0], port)
 
+    def _phone_qr_text(self, st=None):
+        """二维码内容：地址 + 连接码，手机 App 扫一下就能自动连接（# 后的码不会发给服务器）。
+
+        连接码取主机实际在用的那个（st["code"]），避免用户改了输入框还没重启时
+        二维码里是新码、服务器认旧码，扫了登不上。
+        """
+        url = self._phone_url()
+        code = ""
+        try:
+            code = str((st or {}).get("code") or "").strip()
+        except Exception:
+            code = ""
+        if not code:
+            code = self.var_code.get().strip()
+        return "%s#c=%s" % (url, code) if code else url
+
     def _refresh_phone(self, st):
         """③ 手机访问区：地址、二维码、会话数。"""
         url = self._phone_url()
@@ -441,13 +457,13 @@ class LanDialog(tk.Toplevel):
             else "开启共享后手机才能连上")
         if hosting:
             self.lbl_phone_msg.configure(
-                text="App 首次使用：打开 App → 填上面地址 → 输入连接码。"
-                     "连上即可把手机数据同步进来（写入「手机数据」页，不动主库存）。",
+                text="App 里点「扫电脑二维码，自动连接」，对着右边二维码扫一下即可"
+                     "（二维码含连接码，别发给外人）。也可以手动填地址 + 连接码。",
                 fg=CLR_MUTED)
         else:
             self.lbl_phone_msg.configure(
                 text="开启共享后，地址和二维码才会生效。", fg=CLR_MUTED)
-        self._render_qr(url if hosting else "")
+        self._render_qr(self._phone_qr_text(st) if hosting else "")
 
     def _render_qr(self, url):
         """手机扫一扫免手输地址（需要 segno；缺失时跳过）。"""

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""临时脚本：v1.20.0 部署后截屏（主界面 + 手机数据页）。"""
+"""临时脚本：v1.21.0 部署后截屏（主界面 + 手机数据页）。"""
 import ctypes
 import ctypes.wintypes as wintypes
 import os
@@ -20,7 +20,7 @@ def _enum_cb(h, _l):
     if user32.IsWindowVisible(h):
         n = ctypes.create_unicode_buffer(256)
         user32.GetWindowTextW(h, n, 256)
-        if "v1.20.0" in n.value:
+        if "v1.21.0" in n.value:
             hwnd = h
             return False
     return True
@@ -28,7 +28,7 @@ def _enum_cb(h, _l):
 
 user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
 if not hwnd:
-    print("未找到 v1.20.0 窗口")
+    print("未找到 v1.21.0 窗口")
     sys.exit(1)
 
 user32.ShowWindow(hwnd, 9)
@@ -39,8 +39,8 @@ except Exception:
 time.sleep(1.2)
 
 os.makedirs(os.path.join(ROOT, ".tmpdbg"), exist_ok=True)
-screenshot.capture(os.path.join(ROOT, ".tmpdbg", "deploy_1190_main.png"))
-print("shot -> deploy_1190_main.png")
+screenshot.capture(os.path.join(ROOT, ".tmpdbg", "deploy_1210_main.png"))
+print("shot -> deploy_1210_main.png")
 
 rect = wintypes.RECT()
 user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -58,5 +58,5 @@ def click(x, y):
 
 click(L + 391, T + 92)          # 「手机数据」页签
 time.sleep(0.8)
-screenshot.capture(os.path.join(ROOT, ".tmpdbg", "deploy_1190_phone.png"))
-print("shot -> deploy_1190_phone.png")
+screenshot.capture(os.path.join(ROOT, ".tmpdbg", "deploy_1210_phone.png"))
+print("shot -> deploy_1210_phone.png")

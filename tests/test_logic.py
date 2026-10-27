@@ -787,6 +787,65 @@ try:
     check("相机打不开/预览失败有提示与自动重试",
           "正在重试" in _sj and "相机打不开" in _sj
           and "releaseCamera();" in _sj and "startCamera();" in _sj)
+    # v1.21.0 扫电脑二维码自动连接
+    check("设置页有「扫电脑二维码，自动连接」按钮",
+          'id="btnQrConn"' in _app_html and "扫电脑二维码" in _app_html)
+    check("页面接收扫码结果并自动连接 + 同步",
+          "window.__qrResult" in _app_html and "function parseQr" in _app_html
+          and "function connectTo" in _app_html)
+    check("原生桥提供 scanQr 且结果回调分开",
+          "scanQr" in _mj and "REQ_QR" in _mj and "__qrResult" in _mj)
+    check("扫码页面支持二维码模式（ZXing 解码）",
+          "MODE_QR" in _sj and "MultiFormatReader" in _sj
+          and "PlanarYUVLuminanceSource" in _sj and "decodeQr" in _sj)
+    with open(os.path.join(_android_dir, "build_apk.py"), encoding="utf-8") as _f:
+        _bp = _f.read()
+    check("打包脚本把 libs/*.jar 纳入编译与 dex",
+          'endswith(".jar")' in _bp and 'os.path.join(LIBS, name)' in _bp)
+    with open(os.path.join(ROOT, "wm", "lanui.py"), encoding="utf-8") as _f:
+        _lu = _f.read()
+    check("电脑端二维码内容带连接码（#c=）",
+          '"%s#c=%s"' in _lu and "_phone_qr_text" in _lu)
+
+    def _qr_parse_like_app(s):
+        """与 assets/index.html 的 parseQr 同规则，验证两端格式契约。"""
+        at = s.find("http://")
+        if at < 0:
+            at = s.find("https://")
+        if at < 0:
+            return None, ""
+        rest = s[at:]
+        cut = len(rest)
+        for ch in ("#", "?"):
+            i = rest.find(ch)
+            if 0 <= i < cut:
+                cut = i
+        base = rest[:cut].rstrip("/")
+        if base.endswith("/m"):
+            base = base[:-2]
+        tail = rest[cut:]
+        code = ""
+        for name in ("c=", "code="):
+            p = tail.find(name)
+            if p < 0:
+                continue
+            keep = ""
+            for chh in tail[p + len(name):]:
+                if chh.isalnum():
+                    keep += chh
+                else:
+                    break
+            code = keep
+            if code:
+                break
+        return base, code
+
+    _qrb, _qrc = _qr_parse_like_app("http://192.168.1.5:8765/m#c=123456")
+    check("电脑端二维码内容能被 App 解析出地址+连接码",
+          _qrb == "http://192.168.1.5:8765" and _qrc == "123456", (_qrb, _qrc))
+    _qrb2, _qrc2 = _qr_parse_like_app("http://10.0.0.8:8765")
+    check("二维码只有地址时也不报错（连接码留空）",
+          _qrb2 == "http://10.0.0.8:8765" and _qrc2 == "", (_qrb2, _qrc2))
 except Exception as _e:
     check("扫一扫原生代码可检查", False, str(_e)[:100])
 # 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）

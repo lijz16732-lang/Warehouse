@@ -26,6 +26,7 @@ public class MainActivity extends Activity {
     private static final String KEY_URL = "server_url";
     private static final String LOCAL_PAGE = "file:///android_asset/index.html";
     private static final int REQ_SCAN = 1001;
+    private static final int REQ_QR = 1002;
 
     private WebView web;
 
@@ -60,7 +61,7 @@ public class MainActivity extends Activity {
         web.loadUrl(url);
     }
 
-    /** 页面 → 原生：window.AndroidOcr.scan() 打开扫一扫。 */
+    /** 页面 → 原生：window.AndroidOcr.scan() 识别型号文字；scanQr() 扫电脑二维码。 */
     public class ScanBridge {
         @JavascriptInterface
         public boolean available() {
@@ -69,11 +70,21 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void scan() {
+            open(ScanActivity.class, REQ_SCAN, null);
+        }
+
+        @JavascriptInterface
+        public void scanQr() {
+            open(ScanActivity.class, REQ_QR, ScanActivity.MODE_QR);
+        }
+
+        private void open(final Class<?> cls, final int req, final String mode) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Intent it = new Intent(MainActivity.this, ScanActivity.class);
-                    startActivityForResult(it, REQ_SCAN);
+                    Intent it = new Intent(MainActivity.this, cls);
+                    if (mode != null) it.putExtra(ScanActivity.EXTRA_MODE, mode);
+                    startActivityForResult(it, req);
                 }
             });
         }
@@ -82,11 +93,20 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_SCAN || resultCode != RESULT_OK || data == null) return;
+        if (data == null || resultCode != RESULT_OK) return;
         String text = data.getStringExtra(ScanActivity.EXTRA_TEXT);
         if (text == null || text.length() == 0) return;
-        String js = "window.__ocrFill(" + JSONObject.quote(text) + ")";
-        if (web != null) web.evaluateJavascript(js, null);
+        if (requestCode == REQ_SCAN) {
+            callPage("window.__ocrFill(", text);
+        } else if (requestCode == REQ_QR) {
+            callPage("window.__qrResult(", text);
+        }
+    }
+
+    /** 把扫描结果安全地回填给页面（JSON 转义，防引号/换行注入）。 */
+    private void callPage(String prefix, String text) {
+        if (web == null) return;
+        web.evaluateJavascript(prefix + JSONObject.quote(text) + ")", null);
     }
 
     @Override

@@ -40,6 +40,9 @@ def unpack_aars(work):
     out = os.path.join(work, "aar")
     os.makedirs(out, exist_ok=True)
     for name in sorted(os.listdir(LIBS)):
+        if name.lower().endswith(".jar"):        # 纯 Java 库（如 zxing-core）
+            jars.append(os.path.join(LIBS, name))
+            continue
         if not name.lower().endswith(".aar"):
             continue
         with zipfile.ZipFile(os.path.join(LIBS, name)) as z:
@@ -173,7 +176,7 @@ def main():
     print("\n=== APK 构建完成 ===")
     print("输出: %s (%.2f MB)" % (out, os.path.getsize(out) / 1048576.0))
     print("装到手机：把 apk 传到手机（微信文件传输/数据线均可）→ 安装 →")
-    print("打开 App 填电脑上「局域网共享 → 手机访问」的地址和连接码即可。")
+    print("打开 App「设置」→ 扫电脑二维码自动连接（也可手填地址 + 连接码）。")
 
 
 if __name__ == "__main__":
