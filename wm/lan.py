@@ -20,9 +20,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .constants import APP_NAME, APP_VERSION
-from .mobile import (MobileService, SECURITY_HEADERS, _token_of, handle_logout,
+from .mobile import (MobileService, _token_of, handle_add, handle_logout,
                      handle_page, handle_request_write, handle_sales,
-                     handle_sell, handle_whoami, handle_items)
+                     handle_sell, handle_update_all, handle_whoami,
+                     handle_items)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -379,6 +380,10 @@ def _make_handler(srv):
                 token = _token_of(self.headers.get("Cookie") or "")
                 if path.startswith("/m/api/sell"):
                     return self._send_full(*handle_sell(srv, ip, token, payload))
+                if path.startswith("/m/api/add"):
+                    return self._send_full(*handle_add(srv, ip, token, payload))
+                if path.startswith("/m/api/update_all"):
+                    return self._send_full(*handle_update_all(srv, ip, token, payload))
                 if path.startswith("/m/api/request_write"):
                     return self._send_full(*handle_request_write(srv, ip, token))
                 return self._send(404, {"ok": False, "error": "not found"})

@@ -7,8 +7,8 @@
     之后的请求只带令牌 Cookie（HttpOnly，页面脚本拿不到），连接码不再在网络上传输；
   · 会话令牌与手机 IP 绑定，换网络必须重新登录；12 小时滑动过期；
   · 登录失败限速：同一 IP 10 分钟内失败满 5 次 → 锁定 10 分钟（防连接码暴力试解）；
-  · 写操作（出售登记）沿用主机「允许录入」授权：未授权的手机只读，
-    可点「请求录入」，主机上弹窗审批；
+  · 写操作（新增 / 修改 / 出售登记）沿用主机「允许录入」授权：未授权的手机只读，
+    可点「申请权限」，主机上弹窗审批；
   · 手机端只能调本模块固定白名单接口，不能像电脑客户端那样调任意 Store 方法；
   · 会话只存在内存里：主机关掉共享即全部下线，重启共享后手机要重新登录。
 """
@@ -29,6 +29,11 @@ ITEM_FIELDS = ("id", "code", "brand", "category", "model", "condition",
                "price", "qty", "shelf", "listed", "sold_out", "remark")
 SALE_FIELDS = ("id", "code", "brand", "model", "category", "qty", "price",
                "total", "buyer", "sale_date", "out_type", "remark")
+# 手机端「新增 / 修改」允许写的字段（编号自动生成，不允许改 deleted_at 等）
+EDIT_FIELDS = ("brand", "category", "model", "condition",
+               "price", "qty", "shelf", "listed", "remark")
+_EDIT_LEN = {"brand": 40, "category": 40, "model": 120, "condition": 20,
+             "shelf": 120, "remark": 200}
 
 
 def _trim(v, n=80):
@@ -204,9 +209,10 @@ def handle_items(srv, ip, token, query):
     rows.sort(key=lambda r: (int(r.get("sold_out") or 0), str(r.get("code") or "")))
     out = []
     for r in rows[:PAGE_LIMIT]:
-        out.append({k: r.get(k) for k in ITEM_FIELDS})
-        out[-1]["remark"] = _trim(out[-1]["remark"], 60)
-        out[-1]["price"] = _fmt_price(out[-1]["price"])
+        d = {k: r.get(k) for k in ITEM_FIELDS}
+        d["remark"] = _trim(d["remark"], 60)
+        d["price"] = _fmt_price(d["price"])
+        out.append(d)
     return 200, {"ok": True, "total": len(rows), "items": out}, NO_STORE
 
 
@@ -228,13 +234,137 @@ def handle_sales(srv, ip, token, query):
     return 200, {"ok": True, "sales": out}, NO_STORE
 
 
-def handle_sell(srv, ip, token, payload):
-    """出售登记：需要主机已授权该手机所在电脑/设备「允许录入」。"""
+def _need_write(srv, ip, token):
+    """公共前置检查：返回 (None) 或 (http_code, body)。"""
     if not srv.mobile.check(token, ip):
-        return 401, {"ok": False, "need_login": True, "error": "请先登录"}, NO_STORE
+        return 401, {"ok": False, "need_login": True, "error": "请先登录"}
     if not srv.can_write(ip):
         return 403, {"ok": False, "readonly": True,
-                     "error": "主机未授权录入（只读模式），可点「请求录入」向主机申请"}, NO_STORE
+                     "error": "主机未授权录入（只读模式），可点「申请权限」向主机申请"}
+    return None
+
+
+def handle_add(srv, ip, token, payload):
+    """新增一条库存记录：编号自动生成（与电脑端同一套编号规则）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    rec = {}
+    for k in EDIT_FIELDS:
+        v = p.get(k)
+        if k in _EDIT_LEN:
+            rec[k] = str(v or "").strip()[:_EDIT_LEN[k]]
+        elif k == "price":
+            try:
+                rec[k] = float(v or 0)
+            except (TypeError, ValueError):
+                rec[k] = 0.0
+        elif k == "qty":
+            try:
+                rec[k] = int(float(v or 0))
+            except (TypeError, ValueError):
+                rec[k] = 0
+        elif k == "listed":
+            rec[k] = 1 if v in (1, True, "1", "是") else 0
+    if not any(rec.get(k) for k in ("brand", "model", "category")):
+        return 400, {"ok": False, "error": "品牌 / 型号 / 品类 至少填一个"}, NO_STORE
+    store = srv.get_store()
+    try:
+        codes = store.generate_codes(1)
+        rec["code"] = codes[0]
+        rid = store.insert(rec)
+    except Exception as e:
+        return 500, {"ok": False, "error": "保存失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "id": rid, "code": rec["code"],
+                 "message": "已入库，编号 %s" % rec["code"]}, NO_STORE
+
+
+def handle_update(srv, ip, token, payload):
+    """修改一条记录的指定字段（字段白名单内的才能改）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    try:
+        rid = int(p.get("id") or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    field = str(p.get("field") or "").strip()
+    if rid <= 0 or field not in EDIT_FIELDS:
+        return 400, {"ok": False, "error": "参数不正确（字段不允许修改）"}, NO_STORE
+    value = p.get("value")
+    if field in _EDIT_LEN:
+        value = str(value if value is not None else "").strip()[:_EDIT_LEN[field]]
+    elif field == "price":
+        try:
+            value = float(value or 0)
+        except (TypeError, ValueError):
+            return 400, {"ok": False, "error": "价格格式不正确"}, NO_STORE
+    elif field == "qty":
+        try:
+            value = int(float(value or 0))
+        except (TypeError, ValueError):
+            return 400, {"ok": False, "error": "数量格式不正确"}, NO_STORE
+    elif field == "listed":
+        value = 1 if value in (1, True, "1", "是") else 0
+    store = srv.get_store()
+    try:
+        if not any(r.get("id") == rid for r in store.all_records()):
+            return 404, {"ok": False, "error": "记录不存在（可能已被删除）"}, NO_STORE
+        store.update_field(rid, field, value)
+    except Exception as e:
+        return 500, {"ok": False, "error": "保存失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "message": "已保存"}, NO_STORE
+
+
+def handle_update_all(srv, ip, token, payload):
+    """整条保存（手机「修改」表单）：先取原记录合并，编号等不可改字段原样保留。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    try:
+        rid = int(p.get("id") or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    if rid <= 0:
+        return 400, {"ok": False, "error": "参数不正确"}, NO_STORE
+    store = srv.get_store()
+    try:
+        rec = None
+        for r in store.all_records():
+            if r.get("id") == rid:
+                rec = dict(r)
+                break
+        if rec is None:
+            return 404, {"ok": False, "error": "记录不存在（可能已被删除）"}, NO_STORE
+        for k in EDIT_FIELDS:
+            v = p.get(k)
+            if k in _EDIT_LEN:
+                rec[k] = str(v if v is not None else rec.get(k) or "").strip()[:_EDIT_LEN[k]]
+            elif k == "price":
+                try:
+                    rec[k] = float(v if v not in (None, "") else rec.get(k) or 0)
+                except (TypeError, ValueError):
+                    return 400, {"ok": False, "error": "价格格式不正确"}, NO_STORE
+            elif k == "qty":
+                try:
+                    rec[k] = int(float(v if v not in (None, "") else rec.get(k) or 0))
+                except (TypeError, ValueError):
+                    return 400, {"ok": False, "error": "数量格式不正确"}, NO_STORE
+            # listed 手机表单暂不提供，保持原值
+        store.update(rid, rec)
+    except Exception as e:
+        return 500, {"ok": False, "error": "保存失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "message": "已保存"}, NO_STORE
+
+
+def handle_sell(srv, ip, token, payload):
+    """出售登记：需要主机已授权该手机所在电脑/设备「允许录入」。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
     code = str((payload or {}).get("code") or "").strip()
     if not code:
         return 400, {"ok": False, "error": "请填写商品编号"}, NO_STORE
@@ -277,6 +407,7 @@ def handle_logout(srv, ip, token):
 
 # ================================================================ 手机页面
 # 单文件、无外部依赖（局域网里未必有互联网）：原生 JS + 内联 CSS。
+# 注意：本字符串里不允许出现反斜杠（tests 有断言）——Python 会把 JS 的转义吃掉。
 
 PAGE_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -299,25 +430,31 @@ header .wh { font-size:12px; opacity:.85; margin-left:8px; }
 #badge { float:right; font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,.25); }
 nav { display:flex; background:var(--card); border-bottom:1px solid var(--line);
       position:sticky; top:0; z-index:5; }
-nav button { flex:1; border:0; background:none; padding:11px 0; font-size:15px; color:var(--mut); }
+nav button { flex:1; border:0; background:none; padding:11px 0; font-size:14px; color:var(--mut); }
 nav button.on { color:var(--acc); font-weight:600; box-shadow:inset 0 -2px 0 var(--acc); }
 main { padding:12px 12px 40px; }
 .srch { display:flex; gap:8px; margin-bottom:10px; }
 .srch input { flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 12px; font-size:15px; background:var(--card); }
 .srch button { border:0; border-radius:10px; background:var(--acc); color:#fff; padding:0 18px; font-size:15px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
-.card .t { font-weight:600; font-size:15px; }
-.card .t .sold { color:#fff; background:var(--warn); font-size:11px; border-radius:8px; padding:1px 6px; margin-left:6px; font-weight:400; }
-.card .row { display:flex; flex-wrap:wrap; gap:4px 14px; color:var(--mut); font-size:13px; margin-top:4px; }
-.card .row b { color:var(--txt); font-weight:500; }
-.price { color:var(--bad); font-weight:600; }
+.tblwrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:12px; }
+table { border-collapse:collapse; min-width:720px; width:100%; font-size:13px; }
+th, td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; white-space:nowrap; }
+th { background:#eef2f8; color:#5a6478; font-weight:600; position:sticky; top:0; }
+tr:last-child td { border-bottom:0; }
+tbody tr:active { background:#eef4ff; }
+td .sold { color:#fff; background:var(--warn); font-size:10px; border-radius:8px; padding:1px 6px; }
+td.num { text-align:right; }
+td.price { color:var(--bad); font-weight:600; }
+.tblhint { color:var(--mut); font-size:12px; margin:6px 2px 0; }
 .empty { text-align:center; color:var(--mut); padding:40px 0; }
 .notice { background:#fff7e6; border:1px solid #ffe0a3; color:#8a5a00; font-size:13px;
           border-radius:10px; padding:10px 12px; margin-bottom:10px; }
-form.sell label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
-form.sell input { width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:15px; background:var(--card); }
-form.sell .go { width:100%; border:0; border-radius:12px; background:var(--acc); color:#fff; padding:12px; font-size:16px; margin-top:16px; }
-form.sell .go:disabled { background:#a9c4f2; }
+form.mform label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+form.mform input { width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:15px; background:var(--card); }
+form.mform .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
+form.mform .go { width:100%; border:0; border-radius:12px; background:var(--acc); color:#fff; padding:12px; font-size:16px; margin-top:16px; }
+form.mform .go:disabled { background:#a9c4f2; }
+.card-title { font-weight:600; font-size:15px; margin:4px 2px 10px; }
 .link { color:var(--acc); background:none; border:0; font-size:13px; padding:6px 0; text-decoration:underline; }
 #toast { position:fixed; left:50%; bottom:60px; transform:translateX(-50%); background:rgba(28,35,51,.92);
          color:#fff; padding:10px 18px; border-radius:20px; font-size:14px; max-width:86%; display:none; z-index:99; }
@@ -349,21 +486,42 @@ footer a { color:var(--mut); }
 <header><h1>📦 仓管家</h1><span class="wh" id="wh"></span><span id="badge"></span></header>
 <nav>
   <button data-p="items" class="on">库存</button>
-  <button data-p="sales">出售记录</button>
-  <button data-p="sell">登记出售</button>
+  <button data-p="entry">录入</button>
+  <button data-p="sell">出售</button>
+  <button data-p="sales">记录</button>
 </nav>
 <main>
   <div id="p_items">
     <div class="srch"><input id="kwItems" placeholder="搜编号 / 品牌 / 型号 / 货架"><button id="goItems">搜索</button></div>
-    <div id="listItems"><div class="empty">加载中…</div></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>编号</th><th>品牌</th><th>型号</th><th>数量</th><th>价格</th><th>货架</th></tr></thead>
+      <tbody id="listItems"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+    </table></div>
+    <div class="tblhint">点一行可修改该商品的数量 / 价格 / 货架等；只读模式只能看。</div>
   </div>
-  <div id="p_sales" style="display:none">
-    <div class="srch"><input id="kwSales" placeholder="搜编号 / 买家 / 备注"><button id="goSales">搜索</button></div>
-    <div id="listSales"><div class="empty">加载中…</div></div>
+  <div id="p_entry" style="display:none">
+    <div class="notice" id="entryNotice" style="display:none"></div>
+    <div class="card-title" id="entryTitle">＋ 新增入库</div>
+    <form class="mform" id="entryForm" onsubmit="return false">
+      <input type="hidden" id="eId" value="">
+      <div class="grid2">
+        <div><label>品牌</label><input id="eBrand" placeholder="如 ABB"></div>
+        <div><label>品类</label><input id="eCategory" placeholder="如 断路器"></div>
+        <div><label>型号</label><input id="eModel" placeholder=""></div>
+        <div><label>成色</label><input id="eCondition" placeholder="如 全新 / 99新"></div>
+        <div><label>单价（元）</label><input id="ePrice" type="number" inputmode="decimal" placeholder="0.00"></div>
+        <div><label>数量</label><input id="eQty" type="number" inputmode="numeric" value="1" min="0"></div>
+      </div>
+      <label>货架</label><input id="eShelf" placeholder="如 6排A-3">
+      <label>备注</label><input id="eRemark" placeholder="">
+      <button class="go" id="btnSaveEntry">保存入库</button>
+      <button class="link" id="btnResetEntry" type="button">清空，重新新增</button>
+      <button class="link" id="btnAskEntry" type="button" style="display:none">主机未授权录入？点此申请权限</button>
+    </form>
   </div>
   <div id="p_sell" style="display:none">
     <div class="notice" id="sellNotice" style="display:none"></div>
-    <form class="sell" id="sellForm" onsubmit="return false">
+    <form class="mform" id="sellForm" onsubmit="return false">
       <label>商品编号（如 WL-00001）</label>
       <input id="sCode" placeholder="WL-00001">
       <label>数量</label>
@@ -379,6 +537,13 @@ footer a { color:var(--mut); }
       <button class="go" id="btnSell">登记出售</button>
       <button class="link" id="btnAsk" type="button" style="display:none">主机未授权录入？点此申请权限</button>
     </form>
+  </div>
+  <div id="p_sales" style="display:none">
+    <div class="srch"><input id="kwSales" placeholder="搜编号 / 买家 / 备注"><button id="goSales">搜索</button></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>日期</th><th>编号</th><th>品牌</th><th>型号</th><th>数量</th><th>合计</th><th>买家</th><th>类型</th></tr></thead>
+      <tbody id="listSales"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+    </table></div>
   </div>
 </main>
 <footer><a href="javascript:logout()">退出登录</a> · 仓管家手机端</footer>
@@ -403,8 +568,8 @@ function api(path, opts, cb){
     .catch(function(e){ if (e.message !== "need_login") toast("网络错误，请确认与电脑连着同一 WiFi"); });
 }
 function esc(s){
-  return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]; });
+  return String(s == null ? "" : s).replace(/[&<>]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; });
 }
 function showLogin(){
   $("app").style.display = "none"; $("login").style.display = "block";
@@ -422,9 +587,13 @@ function refreshWho(){
     $("badge").textContent = CAN_WRITE ? "可录入" : "只读";
     $("badge").style.background = CAN_WRITE ? "rgba(24,160,88,.85)" : "rgba(255,255,255,.25)";
     $("sellNotice").style.display = CAN_WRITE ? "none" : "block";
-    $("sellNotice").textContent = "当前为只读：可查看库存和出售记录；登记出售需要主机在「局域网共享」里允许录入。";
+    $("sellNotice").textContent = "当前为只读：可查看库存和记录；登记出售需要主机在「局域网共享」里允许录入。";
+    $("entryNotice").style.display = CAN_WRITE ? "none" : "block";
+    $("entryNotice").textContent = "当前为只读：不能新增或修改数据；点下面「申请权限」由主机确认。";
     $("btnAsk").style.display = CAN_WRITE ? "none" : "inline";
+    $("btnAskEntry").style.display = CAN_WRITE ? "none" : "inline";
     $("btnSell").disabled = !CAN_WRITE;
+    $("btnSaveEntry").disabled = !CAN_WRITE;
   });
 }
 /* ---- 登录 ---- */
@@ -448,7 +617,7 @@ function logout(){
   api("/m/logout", {method:"POST"}, function(){ showLogin(); });
 }
 /* ---- 页签 ---- */
-var pages = ["items", "sales", "sell"];
+var pages = ["items", "entry", "sell", "sales"];
 function goPage(p){
   pages.forEach(function(x){
     $("p_" + x).style.display = (x === p) ? "" : "none";
@@ -457,54 +626,112 @@ function goPage(p){
   for (var i = 0; i < bs.length; i++) bs[i].className = (bs[i].getAttribute("data-p") === p) ? "on" : "";
   if (p === "items") loadItems();
   if (p === "sales") loadSales();
-  if (p === "sell") refreshWho();
+  if (p === "sell" || p === "entry") refreshWho();
 }
 (function(){
   var bs = document.querySelectorAll("nav button");
   for (var i = 0; i < bs.length; i++) bs[i].onclick = function(){ goPage(this.getAttribute("data-p")); };
 })();
-/* ---- 库存 ---- */
+/* ---- 库存表格 ---- */
 function loadItems(){
-  $("listItems").innerHTML = '<div class="empty">加载中…</div>';
+  $("listItems").innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
   api("/m/api/items?kw=" + encodeURIComponent($("kwItems").value.trim()), {}, function(b){
-    if (!b.ok) { $("listItems").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
-    if (!b.items.length) { $("listItems").innerHTML = '<div class="empty">没有找到匹配的商品</div>'; return; }
+    if (!b.ok) { $("listItems").innerHTML = '<tr><td colspan="6" class="empty">' + esc(b.error) + "</td></tr>"; return; }
+    if (!b.items.length) { $("listItems").innerHTML = '<tr><td colspan="6" class="empty">没有找到匹配的商品</td></tr>'; return; }
     var h = "";
     b.items.forEach(function(r){
-      h += '<div class="card"><div class="t">' + esc(r.code) +
-           (r.sold_out ? ' <span class="sold">已售完</span>' : "") + "</div>" +
-           '<div class="row"><span>品牌 <b>' + esc(r.brand || "-") + "</b></span>" +
-           "<span>品类 <b>" + esc(r.category || "-") + "</b></span>" +
-           "<span>型号 <b>" + esc(r.model || "-") + "</b></span></div>" +
-           '<div class="row"><span>数量 <b>' + esc(r.qty) + "</b></span>" +
-           '<span class="price">¥<b>' + esc(r.price || "0") + "</b></span>" +
-           "<span>货架 <b>" + esc(r.shelf || "-") + "</b></span>" +
-           "<span>成色 <b>" + esc(r.condition || "-") + "</b></span></div>" +
-           (r.remark ? '<div class="row"><span>' + esc(r.remark) + "</span></div>" : "") +
-           "</div>";
+      h += '<tr data-id="' + esc(r.id) + '" data-code="' + esc(r.code) + '">'
+         + "<td>" + esc(r.code) + (r.sold_out ? ' <span class="sold">售完</span>' : "") + "</td>"
+         + "<td>" + esc(r.brand || "-") + "</td>"
+         + "<td>" + esc(r.model || "-") + "</td>"
+         + '<td class="num">' + esc(r.qty) + "</td>"
+         + '<td class="num price">' + esc(r.price || "0") + "</td>"
+         + "<td>" + esc(r.shelf || "-") + "</td></tr>";
     });
     $("listItems").innerHTML = h;
+    var rows = document.querySelectorAll("#listItems tr");
+    for (var i = 0; i < rows.length; i++) {
+      rows[i].onclick = function(){ openEdit(this.getAttribute("data-id")); };
+    }
   });
 }
 $("goItems").onclick = loadItems;
 $("kwItems").addEventListener("keydown", function(e){ if (e.key === "Enter") loadItems(); });
-/* ---- 出售记录 ---- */
+/* ---- 编辑 / 新增 ---- */
+function openEdit(id){
+  api("/m/api/items?kw=", {}, function(b){
+    if (!b.ok) { toast(b.error || "读取失败"); return; }
+    var rec = null;
+    for (var i = 0; i < b.items.length; i++) { if (String(b.items[i].id) === String(id)) { rec = b.items[i]; break; } }
+    if (!rec) { toast("记录不存在"); return; }
+    $("eId").value = rec.id;
+    $("entryTitle").textContent = "修改 " + rec.code + "（编号不可改）";
+    $("eBrand").value = rec.brand || "";
+    $("eCategory").value = rec.category || "";
+    $("eModel").value = rec.model || "";
+    $("eCondition").value = rec.condition || "";
+    $("ePrice").value = rec.price || "";
+    $("eQty").value = rec.qty;
+    $("eShelf").value = rec.shelf || "";
+    $("eRemark").value = rec.remark || "";
+    $("btnSaveEntry").textContent = "保存修改";
+    goPage("entry");
+  });
+}
+function resetEntry(){
+  $("eId").value = "";
+  $("entryTitle").textContent = "＋ 新增入库";
+  $("eBrand").value = ""; $("eCategory").value = ""; $("eModel").value = "";
+  $("eCondition").value = ""; $("ePrice").value = ""; $("eQty").value = "1";
+  $("eShelf").value = ""; $("eRemark").value = "";
+  $("btnSaveEntry").textContent = "保存入库";
+}
+$("btnResetEntry").onclick = resetEntry;
+$("btnSaveEntry").onclick = function(){
+  if (!CAN_WRITE) { toast("只读模式：请先向主机申请录入权限"); return; }
+  var editing = $("eId").value !== "";
+  var body = {brand: $("eBrand").value.trim(), category: $("eCategory").value.trim(),
+              model: $("eModel").value.trim(), condition: $("eCondition").value.trim(),
+              price: $("ePrice").value, qty: $("eQty").value,
+              shelf: $("eShelf").value.trim(), remark: $("eRemark").value.trim()};
+  $("btnSaveEntry").disabled = true;
+  if (editing) {
+    body.id = $("eId").value;
+    api("/m/api/update_all", {method:"POST", body: JSON.stringify(body)}, function(b){
+      $("btnSaveEntry").disabled = false;
+      if (b.ok) { toast(b.message || "已保存", 2600); resetEntry(); loadItems(); goPage("items"); }
+      else toast(b.error || "保存失败", 3000);
+    });
+  } else {
+    api("/m/api/add", {method:"POST", body: JSON.stringify(body)}, function(b){
+      $("btnSaveEntry").disabled = false;
+      if (b.ok) { toast(b.message || "已入库", 2600); resetEntry(); }
+      else toast(b.error || "保存失败", 3000);
+    });
+  }
+};
+$("btnAskEntry").onclick = function(){
+  api("/m/api/request_write", {method:"POST"}, function(b){
+    if (b.ok) { toast(b.already ? "已有录入权限" : "已向主机发送申请，请主机在电脑上确认", 3000); refreshWho(); }
+    else toast(b.error || "申请失败", 3000);
+  });
+};
+/* ---- 出售记录表格 ---- */
 function loadSales(){
-  $("listSales").innerHTML = '<div class="empty">加载中…</div>';
+  $("listSales").innerHTML = '<tr><td colspan="8" class="empty">加载中…</td></tr>';
   api("/m/api/sales?kw=" + encodeURIComponent($("kwSales").value.trim()), {}, function(b){
-    if (!b.ok) { $("listSales").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
-    if (!b.sales.length) { $("listSales").innerHTML = '<div class="empty">暂无出售记录</div>'; return; }
+    if (!b.ok) { $("listSales").innerHTML = '<tr><td colspan="8" class="empty">' + esc(b.error) + "</td></tr>"; return; }
+    if (!b.sales.length) { $("listSales").innerHTML = '<tr><td colspan="8" class="empty">暂无出售记录</td></tr>'; return; }
     var h = "";
     b.sales.forEach(function(r){
-      h += '<div class="card"><div class="t">' + esc(r.code) + " × " + esc(r.qty) +
-           ' <span style="color:var(--mut);font-size:12px;font-weight:400">' + esc(r.sale_date || "") +
-           " · " + esc(r.out_type || "销售") + "</span></div>" +
-           '<div class="row"><span>品牌 <b>' + esc(r.brand || "-") + "</b></span>" +
-           "<span>型号 <b>" + esc(r.model || "-") + "</b></span>" +
-           '<span class="price">¥<b>' + esc(r.total || "0") + "</b></span>" +
-           "<span>买家 <b>" + esc(r.buyer || "-") + "</b></span></div>" +
-           (r.remark ? '<div class="row"><span>' + esc(r.remark) + "</span></div>" : "") +
-           "</div>";
+      h += "<tr><td>" + esc(r.sale_date || "-") + "</td>"
+         + "<td>" + esc(r.code) + "</td>"
+         + "<td>" + esc(r.brand || "-") + "</td>"
+         + "<td>" + esc(r.model || "-") + "</td>"
+         + '<td class="num">' + esc(r.qty) + "</td>"
+         + '<td class="num price">' + esc(r.total || "0") + "</td>"
+         + "<td>" + esc(r.buyer || "-") + "</td>"
+         + "<td>" + esc(r.out_type || "销售") + "</td></tr>";
     });
     $("listSales").innerHTML = h;
   });

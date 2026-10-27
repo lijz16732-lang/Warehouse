@@ -598,6 +598,11 @@ _mb_op = _ureq.build_opener(_ureq.HTTPCookieProcessor(CookieJar()))
 _msc, _mb, _mh = _mreq("/m")
 check("手机页面可访问（HTML）", _msc == 200 and "仓管家" in _mb and "<html" in _mb.lower(),
       "%s %s…" % (_msc, _mb[:40]))
+check("手机页面 JS 无 Python 转义残留（反斜杠=页面脚本必坏）",
+      "\\" not in PAGE_HTML,
+      [l for l in PAGE_HTML.splitlines() if "\\" in l][:2])
+check("手机页面登录按钮已绑定事件",
+      '$("btnLogin").onclick' in PAGE_HTML and "function esc" in PAGE_HTML)
 check("手机页面禁止被 iframe 嵌套",
       _mh.get("X-Frame-Options") == "DENY", dict(_mh))
 _msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
@@ -644,6 +649,44 @@ _msc, _mb, _ = _mreq("/m/api/sell", {"code": "NO-SUCH-CODE", "qty": 1, "price": 
                      opener=_mb_op)
 check("手机端出售不存在的编号被拒", _msc == 404 and "没有找到" in _mb.get("error", ""),
       (_msc, _mb))
+# 手机端新增 / 修改（v1.15.0）
+_msc, _mb, _ = _mreq("/m/api/add", {"brand": "手机新增", "qty": 4, "price": 12.5,
+                                    "shelf": "测试架"}, opener=_mb_op)
+check("手机端新增入库成功且自动编号",
+      _msc == 200 and _mb.get("ok") and str(_mb.get("code", "")).startswith("WL-"),
+      (_msc, _mb))
+_mob_code = _mb.get("code")
+check("手机新增的记录与电脑同库可见",
+      any(r.get("code") == _mob_code and int(r.get("qty")) == 4
+          for r in ss.all_records()), _mob_code)
+_msc, _mb, _ = _mreq("/m/api/add", {"brand": "", "model": ""}, opener=_mb_op)
+check("手机端新增时品牌/型号/品类全空被拒", _msc == 400, (_msc, _mb))
+_mob_id = [r["id"] for r in ss.all_records() if r["code"] == _mob_code][0]
+_msc, _mb, _ = _mreq("/m/api/update_all",
+                     {"id": _mob_id, "brand": "手机新增", "qty": 9, "price": 20,
+                      "shelf": "新架位", "model": "MX-1"}, opener=_mb_op)
+check("手机端修改记录成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+_ed = [r for r in ss.all_records() if r["id"] == _mob_id][0]
+check("修改后数量/价格/货架与电脑同库一致",
+      int(_ed["qty"]) == 9 and float(_ed["price"]) == 20.0
+      and _ed["shelf"] == "新架位" and _ed["code"] == _mob_code,
+      dict(qty=_ed["qty"], price=_ed["price"], shelf=_ed["shelf"]))
+_msc, _mb, _ = _mreq("/m/api/update_all", {"id": 99999999, "qty": 1}, opener=_mb_op)
+check("手机端修改不存在的记录被拒（404）", _msc == 404, (_msc, _mb))
+_lan_srv.allow("127.0.0.1", False)
+_msc, _mb, _ = _mreq("/m/api/add", {"brand": "x"}, opener=_mb_op)
+check("只读时手机新增被拒（403）", _msc == 403 and _mb.get("readonly"), (_msc, _mb))
+_lan_srv.allow("127.0.0.1", True)
+# 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）
+try:
+    import esprima  # noqa: E402
+    _js = PAGE_HTML.split("<script>")[1].split("</" + "script>")[0]
+    esprima.parseScript(_js)
+    check("手机页面 JS 语法可解析（esprima）", True)
+except ImportError:
+    check("手机页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
+except Exception as _e:
+    check("手机页面 JS 语法可解析（esprima）", False, str(_e)[:100])
 _msc, _mb, _ = _mreq("/m/logout", {}, opener=_mb_op)
 check("退出登录成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
 _msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
