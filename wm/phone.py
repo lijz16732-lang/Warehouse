@@ -27,7 +27,15 @@ PHONE_SALE_COLS = (
     ("price", "单价", 75), ("total", "合计", 85), ("buyer", "买家", 90),
     ("out_type", "类型", 65), ("remark", "备注", 150),
 )
-_LEFT = ("brand", "model", "remark", "shelf", "buyer")
+# 对齐与主库存表格一致（constants.FIELD_ANCHOR）：品牌/品类/成色/货架居中，
+# 价格/数量等数字靠右，文字列靠左 —— 否则和主表格并排看会感觉「数据位置怪」
+_PHONE_ANCHOR = {"code": "w", "brand": "center", "category": "center",
+                 "model": "w", "condition": "center", "price": "e",
+                 "qty": "e", "shelf": "center", "remark": "w",
+                 "state": "center", "synced_at": "center",
+                 "sale_date": "center", "total": "e", "buyer": "center",
+                 "out_type": "center"}
+_LEFT = ("brand", "model", "remark", "shelf", "buyer")   # 可横向拉伸的列
 
 
 class PhoneTab(ttk.Frame):
@@ -102,9 +110,9 @@ class PhoneTab(ttk.Frame):
                            command=tree.yview)
         tree.configure(yscrollcommand=vs.set)
         for key, title, w in cols_def:
-            tree.heading(key, text=title)
-            tree.column(key, width=w,
-                        anchor="w" if key in _LEFT else "center",
+            anc = _PHONE_ANCHOR.get(key, "center")
+            tree.heading(key, text=title, anchor=anc)
+            tree.column(key, width=w, anchor=anc,
                         stretch=(key in ("model", "remark", "brand")))
         # 滚动条先占位（pack 顺序坑：expand 的表格先 pack 会把滚动条挤掉）
         vs.pack(side="right", fill="y")
