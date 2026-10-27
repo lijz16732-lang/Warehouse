@@ -739,6 +739,8 @@ try:
           all(x in _ajs for x in ("/m/api/coltitles", "/m/api/items",
                                   "/m/api/m_item", "/m/api/m_sale",
                                   "X-MToken")))
+    check("App 同步不再要求申请录入（无 request_write / 申请按钮）",
+          "/m/api/request_write" not in _ajs and "btnReq" not in _app_html)
 except ImportError:
     check("App 自带页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
 except Exception as _e:
@@ -804,6 +806,32 @@ _msc, _mb, _ = _mreq_tok("/m/api/m_item", {"brand": "无lid"}, token=_app_tok)
 check("同步缺 lid 被拒（400）", _msc == 400, (_msc, _mb))
 _msc, _mb, _ = _mreq_tok("/m/api/m_item", {"lid": 9002, "brand": "x"})
 check("手机数据同步不登录被拒（401）", _msc == 401, (_msc, _mb))
+# v1.19.0：手机数据区同步只需登录，不再要求主机「允许录入」授权
+_lan_srv.allow("127.0.0.1", False)
+_msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
+check("撤掉录入授权后 whoami 回到只读（对照）",
+      _msc == 200 and _mb.get("can_write") is False, (_msc, _mb))
+_msc, _mb, _ = _mreq_tok("/m/api/m_item",
+    {"lid": 9100, "code": "APP-00002", "brand": "免授权同步", "qty": 1, "price": 8},
+    token=_app_tok)
+check("未授权也能直接同步手机商品（无需申请录入）",
+      _msc == 200 and _mb.get("ok")
+      and any(r.get("lid") == 9100 for r in ss.m_items()), (_msc, _mb))
+_msc, _mb, _ = _mreq_tok("/m/api/m_sale",
+    {"lid": 7100, "item_lid": 9100, "code": "APP-00002", "brand": "免授权同步",
+     "qty": 1, "price": 8, "total": 8, "sale_date": "2026-10-27 11:30"},
+    token=_app_tok)
+check("未授权也能直接同步手机出售记录",
+      _msc == 200 and _mb.get("ok")
+      and any(r.get("lid") == 7100 for r in ss.m_sales()), (_msc, _mb))
+check("免授权同步不影响主库存", ss.count() == _n_items_before, ss.count())
+_msc, _mb, _ = _mreq_tok("/m/api/sell", {"code": "WL-MOB", "qty": 1, "price": 1},
+                         token=_app_tok)
+check("主库存出售仍需授权（安全边界不变）", _msc == 403 and _mb.get("readonly"),
+      (_msc, _mb))
+ss.m_del_sale(7100)
+ss.m_del_item(9100)
+_lan_srv.allow("127.0.0.1", True)
 # 转入库存：生成电脑编号追加主库存，原手机记录标记已转入、不重复转入
 _n_before = ss.count()
 _n, _codes = ss.m_transfer([9001])

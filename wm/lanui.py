@@ -442,7 +442,7 @@ class LanDialog(tk.Toplevel):
         if hosting:
             self.lbl_phone_msg.configure(
                 text="App 首次使用：打开 App → 填上面地址 → 输入连接码。"
-                     "手机默认只读，登记出售需主机授权。",
+                     "连上即可把手机数据同步进来（写入「手机数据」页，不动主库存）。",
                 fg=CLR_MUTED)
         else:
             self.lbl_phone_msg.configure(

@@ -75,7 +75,6 @@ tr:active { background:#f0f5ff; }
 <header>
   <b>仓管家</b>
   <span class="badge" id="hPerm">本地模式</span>
-  <button id="btnReq" class="hide">申请录入</button>
 </header>
 
 <nav>
@@ -146,7 +145,7 @@ tr:active { background:#f0f5ff; }
   <div id="pSet" class="hide">
     <div class="card">
       <h3>数据共享到电脑端</h3>
-      <div class="hint" style="margin:0 0 10px">手机数据照常存在手机里；开启后可把录入/出售同步到电脑（需电脑端已「开启共享」并授权）。</div>
+      <div class="hint" style="margin:0 0 10px">手机数据照常存在手机里；开启后录入/出售会直接同步到电脑「手机数据」区（需电脑端已「开启共享」）。</div>
       <div class="fcol"><label>电脑地址（局域网共享 → 手机访问）</label>
         <input id="shBase" placeholder="例如 192.168.1.5:8765" autocapitalize="off"></div>
       <div class="fcol"><label>连接码</label>
@@ -293,12 +292,9 @@ function normBase(v) {
 }
 function refreshHead() {
   var conn = !!DB.share.token;
-  $('hPerm').textContent = conn ? (shareWritable() ? '已连接电脑 · 可录入' : '已连接电脑') : '本地模式';
-  $('hPerm').className = 'badge' + (conn && shareWritable() ? ' rw' : '');
-  $('btnReq').classList.toggle('hide', !(conn && !shareWritable()));
+  $('hPerm').textContent = conn ? '已连接电脑' : '本地模式';
+  $('hPerm').className = 'badge' + (conn ? ' rw' : '');
 }
-function shareWritable() { return !!shareWritableFlag; }
-var shareWritableFlag = false;
 
 /* 连接电脑 */
 $('btnShareConn').onclick = function () {
@@ -323,7 +319,6 @@ $('btnShareConn').onclick = function () {
     $('shBase').value = b;
     toast('已连接电脑');
     api('GET', '/m/api/whoami').then(function (w) {
-      shareWritableFlag = !!w.can_write;
       refreshHead(); renderShare(); renderSync();
       toast('已连接：' + (w.warehouse || '电脑端'));
     }).catch(function () { refreshHead(); renderShare(); renderSync(); });
@@ -332,28 +327,15 @@ $('btnShareConn').onclick = function () {
 };
 $('btnShareOff').onclick = function () {
   if (DB.share.token) api('POST', '/m/logout').catch(function () {});
-  DB.share.token = ''; shareWritableFlag = false;
+  DB.share.token = '';
   saveDB(); refreshHead(); renderShare(); renderSync();
   toast('已断开（手机数据不受影响）');
-};
-$('btnReq').onclick = function () {
-  api('POST', '/m/api/request_write').then(function () {
-    toast('已向电脑发送申请，请在电脑上确认弹窗');
-    var n = 0;
-    var h = setInterval(function () {
-      n += 1;
-      api('GET', '/m/api/whoami').then(function (w) {
-        shareWritableFlag = !!w.can_write; refreshHead();
-        if (shareWritableFlag) { toast('已授权，可以同步到电脑了'); clearInterval(h); renderShare(); }
-      }).catch(function () { clearInterval(h); });
-      if (n >= 20) clearInterval(h);
-    }, 3000);
-  }).catch(function (e) { toast(e.message || e); });
 };
 
 /* ================= 同步到电脑 =================
    手机数据同步进电脑端「手机数据」区（独立存放，不追加主库存）。
-   /m/api/m_item 按手机本地 id 覆盖保存商品；/m/api/m_sale 保存出售记录（幂等）。 */
+   /m/api/m_item 按手机本地 id 覆盖保存商品；/m/api/m_sale 保存出售记录（幂等）。
+   只写独立的手机数据表、不碰主库存，所以登录后直接同步，不需要申请录入。 */
 function pushItem(it) {
   return api('POST', '/m/api/m_item', {
     lid: it.lid, code: it.code || '',
@@ -377,21 +359,14 @@ function pushSale(s) {
 function syncAll(manual) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
   if (!pendingCount()) { if (manual) toast('没有待同步的数据'); renderSync(); return Promise.resolve(); }
-  return api('GET', '/m/api/whoami').then(function (w) {
-    shareWritableFlag = !!w.can_write; refreshHead();
-    if (!w.can_write) {
-      api('POST', '/m/api/request_write').catch(function () {});
-      throw new Error('电脑端未授权录入：已发出申请，请在电脑上确认弹窗后重试');
-    }
-    var p = Promise.resolve();
-    DB.items.forEach(function (it) {
-      if (it.dirty) p = p.then(function () { return pushItem(it); });
-    });
-    DB.sales.forEach(function (s) {
-      if (s.dirty) p = p.then(function () { return pushSale(s); });
-    });
-    return p;
-  }).then(function () {
+  var p = Promise.resolve();
+  DB.items.forEach(function (it) {
+    if (it.dirty) p = p.then(function () { return pushItem(it); });
+  });
+  DB.sales.forEach(function (s) {
+    if (s.dirty) p = p.then(function () { return pushSale(s); });
+  });
+  return p.then(function () {
     DB.share.last = nowStr();
     saveDB(); renderSync(); refreshHead();
     if (manual) toast('同步完成：待同步 0 条');
@@ -416,7 +391,7 @@ function renderShare() {
   $('shareStat').innerHTML = '';
   var line = $('shareStat');
   line.textContent = DB.share.token
-    ? '已连接：' + (DB.share.base || '') + (shareWritable() ? '（已授权录入）' : '（只读，可申请录入）')
+    ? '已连接：' + (DB.share.base || '') + '（数据直接同步到电脑「手机数据」）'
     : '未连接。连接后手机数据可同步到电脑。';
 }
 function renderSync() {
@@ -693,9 +668,9 @@ renderSync(); renderData();
   $('shBase').value = base;
   if (base && DB.share.token) {
     api('GET', '/m/api/whoami').then(function (w) {
-      shareWritableFlag = !!w.can_write;
       refreshHead(); renderShare();
       loadTitles().then(function () { if (invView === 'pc') loadPc($('inKw').value); });
+      autoSync();          /* 已连接电脑：开机就把待同步的数据送上去 */
     }).catch(function () {});
   } else {
     renderShare();

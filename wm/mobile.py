@@ -9,6 +9,8 @@
   · 登录失败限速：同一 IP 10 分钟内失败满 5 次 → 锁定 10 分钟（防连接码暴力试解）；
   · 写操作（新增 / 修改 / 出售登记）沿用主机「允许录入」授权：未授权的手机只读，
     可点「申请权限」，主机上弹窗审批；
+  · 例外：App 把数据同步到电脑「手机数据」区（/m/api/m_item、/m/api/m_sale）
+    只写独立的手机数据表，不碰主库存，登录后即可直接同步，无需申请录入；
   · 手机端只能调本模块固定白名单接口，不能像电脑客户端那样调任意 Store 方法；
   · 会话只存在内存里：主机关掉共享即全部下线，重启共享后手机要重新登录。
 """
@@ -295,6 +297,13 @@ def handle_coltitles(srv, ip, token, payload=None):
                  "titles": all_titles, "custom": custom}, NO_STORE
 
 
+def _need_login(srv, ip, token):
+    """只校验登录（用于手机数据区：写入独立表，不需要「允许录入」授权）。"""
+    if not srv.mobile.check(token, ip):
+        return 401, {"ok": False, "need_login": True, "error": "请先登录"}
+    return None
+
+
 def _need_write(srv, ip, token):
     """公共前置检查：返回 (None) 或 (http_code, body)。"""
     if not srv.mobile.check(token, ip):
@@ -463,7 +472,8 @@ def handle_request_write(srv, ip, token):
 
 # ---------------------------------------------------------------- 手机数据区
 # App 同步的记录写入 phone_items / phone_sales（电脑端「手机数据」页查看管理），
-# 绝不写主库存；需要主机「允许录入」授权，和其它写接口同一套安全模型。
+# 绝不写主库存。这两张表与主库存完全隔离，所以只校验登录、不要求「允许录入」：
+# 手机录完数据连上电脑就自动/一键同步，不用再去电脑上批一次授权。
 
 _M_EDIT_LEN = {"brand": 40, "category": 40, "model": 120, "condition": 20,
                "shelf": 120, "remark": 200, "code": 40}
@@ -489,8 +499,8 @@ def _m_float(p, k):
 
 
 def handle_m_item(srv, ip, token, payload):
-    """App 商品同步（按手机本地 id 覆盖保存）。"""
-    gate = _need_write(srv, ip, token)
+    """App 商品同步（按手机本地 id 覆盖保存）。登录即可，无需申请录入。"""
+    gate = _need_login(srv, ip, token)
     if gate:
         return gate[0], gate[1], NO_STORE
     p = payload or {}
@@ -516,7 +526,7 @@ def handle_m_item(srv, ip, token, payload):
 
 def handle_m_sale(srv, ip, token, payload):
     """App 出售记录同步（幂等，按手机本地 id 覆盖保存；不在电脑端重复扣库存）。"""
-    gate = _need_write(srv, ip, token)
+    gate = _need_login(srv, ip, token)
     if gate:
         return gate[0], gate[1], NO_STORE
     p = payload or {}
