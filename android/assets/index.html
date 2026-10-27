@@ -424,7 +424,10 @@ function pushSale(s) {
 }
 function syncAll(manual) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
-  if (!pendingCount()) { if (manual) toast('没有待同步的数据'); renderSync(); return Promise.resolve(); }
+  if (!pendingCount()) {
+    if (manual) toast('手机数据都已同步过了（新增或修改后会出现待同步）');
+    renderSync(); return Promise.resolve();
+  }
   var p = Promise.resolve();
   DB.items.forEach(function (it) {
     if (it.dirty) p = p.then(function () { return pushItem(it); });
@@ -465,7 +468,8 @@ function renderSync() {
   $('syncStat').textContent = '待同步 ' + n + ' 条' +
     (DB.share.last ? ' · 上次同步 ' + DB.share.last : '') +
     (n && !DB.share.token ? '（连接电脑后同步）' : '');
-  $('btnSync').disabled = !DB.share.token || !n;
+  /* 只要已连接就能随时点同步（没有待同步数据时点了会提示，不置灰） */
+  $('btnSync').disabled = !DB.share.token;
 }
 
 /* ================= 库存 ================= */
