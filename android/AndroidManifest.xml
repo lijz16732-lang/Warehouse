@@ -1,21 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 仓管家手机 App：WebView 壳，加载电脑端局域网共享的手机页面（/m）。
+<!-- 仓管家手机 App：WebView 壳 + 本机离线 OCR（扫一扫识别型号）。
      usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="5"
-    android:versionName="1.19.0">
+    android:versionCode="6"
+    android:versionName="1.20.0">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
   <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+  <!-- 扫一扫：相机只用于实时取景识别，不存照片、不上传 -->
+  <uses-permission android:name="android.permission.CAMERA"/>
+  <uses-feature android:name="android.hardware.camera" android:required="false"/>
+  <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
   <application
       android:label="仓管家"
       android:icon="@mipmap/ic_launcher"
       android:usesCleartextTraffic="true"
+      android:extractNativeLibs="true"
       android:allowBackup="false">
 
     <activity
@@ -29,5 +34,11 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
+
+    <activity
+        android:name=".ScanActivity"
+        android:exported="false"
+        android:screenOrientation="portrait"
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"/>
   </application>
 </manifest>

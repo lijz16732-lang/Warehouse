@@ -2,14 +2,18 @@ package com.cangguanjia.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+
+import org.json.JSONObject;
 
 /**
  * 仓管家手机 App：独立应用，数据存在手机本地（离线可用）；
@@ -21,6 +25,7 @@ public class MainActivity extends Activity {
     private static final String PREFS = "cgm";
     private static final String KEY_URL = "server_url";
     private static final String LOCAL_PAGE = "file:///android_asset/index.html";
+    private static final int REQ_SCAN = 1001;
 
     private WebView web;
 
@@ -41,6 +46,8 @@ public class MainActivity extends Activity {
         s.setAllowUniversalAccessFromFileURLs(true);       // 本地页 → http 接口跨源
         s.setMediaPlaybackRequiresUserGesture(true);
         web.setWebViewClient(new WebViewClient());
+        // 页面调用本机「扫一扫」识别文字（完全离线，不走电脑）
+        web.addJavascriptInterface(new ScanBridge(), "AndroidOcr");
 
         setContentView(web);
 
@@ -51,6 +58,35 @@ public class MainActivity extends Activity {
             url += "#base=" + Uri.encode(saved);
         }
         web.loadUrl(url);
+    }
+
+    /** 页面 → 原生：window.AndroidOcr.scan() 打开扫一扫。 */
+    public class ScanBridge {
+        @JavascriptInterface
+        public boolean available() {
+            return true;
+        }
+
+        @JavascriptInterface
+        public void scan() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    Intent it = new Intent(MainActivity.this, ScanActivity.class);
+                    startActivityForResult(it, REQ_SCAN);
+                }
+            });
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_SCAN || resultCode != RESULT_OK || data == null) return;
+        String text = data.getStringExtra(ScanActivity.EXTRA_TEXT);
+        if (text == null || text.length() == 0) return;
+        String js = "window.__ocrFill(" + JSONObject.quote(text) + ")";
+        if (web != null) web.evaluateJavascript(js, null);
     }
 
     @Override

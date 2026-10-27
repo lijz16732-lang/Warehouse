@@ -741,10 +741,45 @@ try:
                                   "X-MToken")))
     check("App 同步不再要求申请录入（无 request_write / 申请按钮）",
           "/m/api/request_write" not in _ajs and "btnReq" not in _app_html)
+    # v1.20.0 扫一扫识别型号（手机本地离线 OCR）
+    check("型号框有「扫一扫」按钮",
+          'id="btnScanModel"' in _app_html and "扫一扫" in _app_html)
+    check("扫一扫调用本机能力并回填型号",
+          "AndroidOcr" in _ajs and "function startScan" in _ajs
+          and "window.__ocrFill" in _ajs
+          and "$('btnScanModel').onclick" in _ajs)
 except ImportError:
     check("App 自带页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
 except Exception as _e:
     check("App 自带页面 JS 语法可解析（esprima）", False, str(_e)[:100])
+# ---- 扫一扫：原生相机 + 离线 OCR（不需要电脑/网络）----
+_android_dir = os.path.dirname(os.path.dirname(_app_path))     # android/（页面在 assets/ 下）
+_scan_java = os.path.join(_android_dir, "src", "com", "cangguanjia", "app", "ScanActivity.java")
+_manifest = os.path.join(_android_dir, "AndroidManifest.xml")
+check("扫一扫界面存在（ScanActivity.java）", os.path.isfile(_scan_java), _scan_java)
+try:
+    with open(_scan_java, encoding="utf-8") as _f:
+        _sj = _f.read()
+    with open(_manifest, encoding="utf-8") as _f:
+        _mf = _f.read()
+    with open(os.path.join(_android_dir, "src", "com", "cangguanjia", "app",
+                           "MainActivity.java"), encoding="utf-8") as _f:
+        _mj = _f.read()
+    check("扫一扫用相机实时取景（不拍照、不选图）",
+          "Camera.open" in _sj and "setPreviewCallbackWithBuffer" in _sj
+          and "ACTION_IMAGE_CAPTURE" not in _sj and "ACTION_GET_CONTENT" not in _sj)
+    check("识别在手机本地跑（Tesseract，无网络请求）",
+          "TessBaseAPI" in _sj and "http" not in _sj.lower())
+    check("扫一扫会申请相机权限", "permission.CAMERA" in _sj and "android.permission.CAMERA" in _mf)
+    check("扫一扫 Activity 已注册且竖屏", '.ScanActivity' in _mf
+          and 'android:screenOrientation="portrait"' in _mf)
+    check("页面 → 原生桥（AndroidOcr）与回填回调",
+          'addJavascriptInterface' in _mj and '"AndroidOcr"' in _mj
+          and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
+    check("中文识别模型随 App 打包（chi_sim）",
+          os.path.isfile(os.path.join(_android_dir, "assets", "tessdata", "chi_sim.traineddata")))
+except Exception as _e:
+    check("扫一扫原生代码可检查", False, str(_e)[:100])
 # 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）
 try:
     import esprima  # noqa: E402
