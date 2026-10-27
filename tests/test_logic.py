@@ -748,6 +748,16 @@ try:
     check("App 连接电脑后不自动上传（待同步数保留给用户手动点）",
           "正在同步手机数据" not in _ajs
           and "待同步 ' + n + ' 条，点「立即同步到电脑」上传" in _ajs)
+    # v1.22.0：深色模式 / 表格列自定义 / 搜索历史与快捷筛选
+    check("App 有深色模式（三档外观 + CSS 变量主题）",
+          all(x in _app_html for x in ("id=\"thDark\"", "body.dark", "applyTheme",
+                                       "--bg:", "prefers-color-scheme: dark")))
+    check("App 有库存表格列自定义（编号锁定 + 恢复默认）",
+          all(x in _app_html for x in ("id=\"colList\"", "renderColList",
+                                       "curCols()", "btnColReset")))
+    check("App 有搜索历史与快捷筛选（待同步/在售/已售完）",
+          all(x in _app_html for x in ("id=\"kwHist\"", "renderFlts",
+                                       "pushKwHist", "curFlt")))
     # v1.20.0 扫一扫识别型号（手机本地离线 OCR）
     check("型号框有「扫一扫」按钮",
           'id="btnScanModel"' in _app_html and "扫一扫" in _app_html)
@@ -785,6 +795,8 @@ try:
           and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
     check("中文识别模型随 App 打包（chi_sim）",
           os.path.isfile(os.path.join(_android_dir, "assets", "tessdata", "chi_sim.traineddata")))
+    check("Android 壳不显示系统标题栏（黑色「仓管家」条）",
+          'Theme.Material.Light.NoActionBar' in _mf)
     # v1.20.1 修黑屏：必须等 surface 就绪再 setPreviewDisplay，且有无帧看门狗
     check("相机等 surface 就绪再开预览（防黑屏）",
           "surfaceReady()" in _sj and "getSurface().isValid()" in _sj

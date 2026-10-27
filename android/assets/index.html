@@ -5,14 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>仓管家</title>
 <style>
+:root { --accent:#1f6feb;
+  --bg:#f4f6fa; --fg:#1c2333; --card:#fff; --line:#e2e7f0; --line2:#d7dde8;
+  --line3:#eef1f6; --muted:#8a94a6; --soft:#5a6478; --th:#eef1f6; --thf:#44506a;
+  --input:#fff; --seg:#e9edf4; --segOn:#fff; --active:#f0f5ff; --btnGray:#eef1f6;
+  --btnGrayF:#44506a; --sold:#b3b9c6; --ctline:#f0f2f7; --sheet:#fff; }
+body.dark { --accent:#4d8dff;
+  --bg:#12151c; --fg:#e8ecf4; --card:#1b202b; --line:#2a3140; --line2:#39435a;
+  --line3:#242b38; --muted:#7d8798; --soft:#aab3c5; --th:#242b38; --thf:#aab3c5;
+  --input:#161b25; --seg:#242b38; --segOn:#1b202b; --active:#22304a; --btnGray:#2a3140;
+  --btnGrayF:#c6cddc; --sold:#5d6678; --ctline:#242b38; --sheet:#1b202b; }
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:#f4f6fa; color:#1c2333;
+body { font-family:-apple-system,"Microsoft YaHei",sans-serif; background:var(--bg); color:var(--fg);
        font-size:15px; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 .hide { display:none !important; }
 input,select,textarea,button { font-family:inherit; font-size:15px; }
-input,select,textarea { border:1px solid #d7dde8; border-radius:8px; padding:9px 10px; background:#fff; width:100%; }
-button { border:0; border-radius:8px; padding:11px 14px; background:#1f6feb; color:#fff; font-weight:600; }
-button.gray { background:#eef1f6; color:#44506a; }
+input,select,textarea { border:1px solid var(--line2); border-radius:8px; padding:9px 10px;
+                        background:var(--input); color:var(--fg); width:100%; }
+button { border:0; border-radius:8px; padding:11px 14px; background:var(--accent); color:#fff; font-weight:600; }
+button.gray { background:var(--btnGray); color:var(--btnGrayF); }
 button.danger { background:#e5484d; }
 button.small { padding:7px 12px; font-size:13px; font-weight:500; }
 button:disabled { opacity:.5; }
@@ -21,43 +32,49 @@ header b { font-size:16px; flex:1; overflow:hidden; text-overflow:ellipsis; whit
 header .badge { font-size:11px; background:rgba(255,255,255,.22); border-radius:10px; padding:3px 8px; flex:none; }
 header .badge.rw { background:#2fb344; }
 header button { padding:6px 10px; font-size:12px; background:rgba(255,255,255,.18); flex:none; }
-nav { display:flex; background:#fff; border-bottom:1px solid #e2e7f0; flex:none; }
-nav div { flex:1; text-align:center; padding:10px 0; color:#5a6478; font-size:14px; border-bottom:2px solid transparent; }
-nav div.on { color:#1f6feb; border-bottom-color:#1f6feb; font-weight:700; }
+nav { display:flex; background:var(--card); border-bottom:1px solid var(--line); flex:none; }
+nav div { flex:1; text-align:center; padding:10px 0; color:var(--soft); font-size:14px;
+          border-bottom:2px solid transparent; }
+nav div.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:700; }
 main { flex:1; overflow:auto; padding:12px; }
-.card { background:#fff; border:1px solid #e2e7f0; border-radius:12px; padding:14px; margin-bottom:12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
 .card h3 { font-size:15px; margin-bottom:10px; }
-.card .hint { color:#8a94a6; font-size:12px; margin-top:8px; line-height:1.6; }
+.card .hint { color:var(--muted); font-size:12px; margin-top:8px; line-height:1.6; }
 .frow { display:flex; gap:10px; }
 .fcol { flex:1; margin-bottom:10px; }
-.fcol label { display:block; font-size:12px; color:#5a6478; margin-bottom:4px; }
+.fcol label { display:block; font-size:12px; color:var(--soft); margin-bottom:4px; }
 /* 带「扫一扫」的标签行 */
 label.lbl-io { display:flex; align-items:center; }
 label.lbl-io button { margin-left:auto; padding:3px 10px; font-size:12px; line-height:1.6; }
 /* 分段 */
-.seg { display:flex; background:#e9edf4; border-radius:9px; padding:3px; margin-bottom:10px; }
-.seg div { flex:1; text-align:center; padding:7px 0; font-size:13px; color:#5a6478; border-radius:7px; }
-.seg div.on { background:#fff; color:#1f6feb; font-weight:700; }
+.seg { display:flex; background:var(--seg); border-radius:9px; padding:3px; margin-bottom:10px; }
+.seg div { flex:1; text-align:center; padding:7px 0; font-size:13px; color:var(--soft); border-radius:7px; }
+.seg div.on { background:var(--segOn); color:var(--accent); font-weight:700; }
 /* 表格 */
-.tblwrap { overflow:auto; background:#fff; border:1px solid #e2e7f0; border-radius:12px; }
+.tblwrap { overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:12px; }
 table { border-collapse:collapse; min-width:100%; }
-th { background:#eef1f6; color:#44506a; font-size:12px; font-weight:600; padding:9px 10px;
-     white-space:nowrap; position:sticky; top:0; text-align:left; border-bottom:1px solid #d7dde8; }
-td { padding:9px 10px; border-bottom:1px solid #eef1f6; font-size:13px; white-space:nowrap; }
-tr.sold td { color:#b3b9c6; }
-tr:active { background:#f0f5ff; }
-.empty { text-align:center; color:#8a94a6; padding:30px 0; font-size:13px; }
+th { background:var(--th); color:var(--thf); font-size:12px; font-weight:600; padding:9px 10px;
+     white-space:nowrap; position:sticky; top:0; text-align:left; border-bottom:1px solid var(--line2); }
+td { padding:9px 10px; border-bottom:1px solid var(--line3); font-size:13px; white-space:nowrap; }
+tr.sold td { color:var(--sold); }
+tr:active { background:var(--active); }
+.empty { text-align:center; color:var(--muted); padding:30px 0; font-size:13px; }
 .searchrow { display:flex; gap:8px; margin-bottom:10px; }
 .searchrow input { flex:1; }
 .searchrow button { flex:none; }
-.stat { color:#8a94a6; font-size:12px; margin:6px 2px 0; }
+.stat { color:var(--muted); font-size:12px; margin:6px 2px 0; }
 .tag { display:inline-block; font-size:11px; border-radius:8px; padding:2px 7px; margin-left:6px; }
 .tag.ok { background:#e5f6eb; color:#218a4a; }
 .tag.wait { background:#fdf1e2; color:#b96e12; }
+/* 快捷筛选 / 搜索历史 chips */
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 8px; }
+.chips span { font-size:12px; padding:5px 11px; border-radius:14px; background:var(--card);
+              border:1px solid var(--line); color:var(--soft); }
+.chips span.on { background:var(--accent); border-color:var(--accent); color:#fff; }
 /* 弹层 */
 #mask { position:fixed; inset:0; background:rgba(20,26,40,.45); z-index:20;
         display:flex; align-items:flex-end; justify-content:center; }
-#sheet { background:#fff; border-radius:16px 16px 0 0; width:100%; max-height:88vh;
+#sheet { background:var(--sheet); border-radius:16px 16px 0 0; width:100%; max-height:88vh;
          overflow:auto; padding:16px 16px 26px; }
 #sheet h3 { margin-bottom:12px; display:flex; align-items:center; }
 #sheet h3 span { flex:1; }
@@ -67,10 +84,15 @@ tr:active { background:#f0f5ff; }
          background:rgba(20,26,40,.85); color:#fff; padding:9px 16px; border-radius:20px;
          font-size:13px; z-index:30; max-width:80vw; text-align:center; }
 /* 列题行 / 设置行 */
-.ctrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #f0f2f7; }
-.ctrow .def { flex:none; width:64px; font-size:13px; color:#8a94a6; }
+.ctrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--ctline); }
+.ctrow .def { flex:none; width:64px; font-size:13px; color:var(--muted); }
 .ctrow input { flex:1; padding:7px 9px; }
-.statline { font-size:13px; color:#44506a; line-height:1.8; margin-top:8px; }
+.statline { font-size:13px; color:var(--soft); line-height:1.8; margin-top:8px; }
+/* 勾选行（表格列自定义） */
+.ckrow { display:flex; align-items:center; gap:9px; padding:9px 2px;
+         border-bottom:1px solid var(--ctline); font-size:14px; color:var(--fg); }
+.ckrow input { width:auto; flex:none; }
+.ckrow.dis { color:var(--muted); }
 </style>
 </head>
 <body>
@@ -97,6 +119,8 @@ tr:active { background:#f0f5ff; }
     </div>
     <div class="searchrow"><input id="inKw" placeholder="搜编号 / 品牌 / 型号 / 货架 / 备注">
       <button id="btnKw">搜索</button></div>
+    <div class="chips" id="fltRow"></div>
+    <div class="chips hide" id="kwHist"></div>
     <div class="stat" id="invStat"></div>
     <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
   </div>
@@ -174,6 +198,21 @@ tr:active { background:#f0f5ff; }
       <div class="stat" id="prefixStat"></div>
     </div>
     <div class="card">
+      <h3>外观</h3>
+      <div class="seg">
+        <div id="thLight">浅色</div>
+        <div id="thDark">深色</div>
+        <div id="thAuto">跟随系统</div>
+      </div>
+      <div class="stat" style="margin-top:0">深色模式晚上盘货不刺眼；「跟随系统」随手机昼夜自动切换。</div>
+    </div>
+    <div class="card">
+      <h3>库存表格列</h3>
+      <div class="hint" style="margin:0 0 6px">勾选要在「库存」表格里显示的列（编号始终显示），改动立即生效。</div>
+      <div id="colList"></div>
+      <button id="btnColReset" class="gray small" style="margin-top:10px">恢复默认列</button>
+    </div>
+    <div class="card">
       <h3>数据管理</h3>
       <div class="statline" id="dataStat"></div>
       <button id="btnWipe" class="danger" style="width:100%;margin-top:10px">清空手机数据</button>
@@ -202,8 +241,10 @@ var curItem = null;                   // 正在编辑的本地记录
 var invView = 'loc';                  // loc=手机库存 pc=电脑库存
 
 /* ================= 本地数据库 ================= */
+var DEF_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
 function blankDB() {
   return { items: [], sales: [], seq: 1, prefix: 'APP',
+           theme: 'auto', locCols: DEF_COLS.slice(), kwHist: [],
            share: { base: '', code: '', token: '', auto: 0, last: '' } };
 }
 var DB = blankDB();
@@ -213,6 +254,9 @@ function loadDB() {
     if (raw) DB = JSON.parse(raw);
   } catch (e) { DB = blankDB(); }
   if (!DB.share) DB.share = blankDB().share;
+  if (!DB.theme) DB.theme = 'auto';                      // 旧版本数据补默认
+  if (!DB.locCols || !DB.locCols.length) DB.locCols = DEF_COLS.slice();
+  if (!DB.kwHist) DB.kwHist = [];
 }
 function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
 function itemByLid(lid) {
@@ -249,7 +293,7 @@ function askConfirm(msg, okText, cb) {
   var b = $('shBody');
   b.innerHTML = '';
   var p = document.createElement('div');
-  p.style.cssText = 'font-size:14px;line-height:1.7;color:#44506a';
+  p.style.cssText = 'font-size:14px;line-height:1.7;color:var(--soft)';
   p.textContent = msg;
   b.appendChild(p);
   var row = document.createElement('div'); row.className = 'btnrow';
@@ -483,14 +527,68 @@ function renderSync() {
 /* ================= 库存 ================= */
 var LOC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
 var PC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
-$('btnKw').onclick = function () { invView === 'loc' ? loadLoc($('inKw').value) : loadPc($('inKw').value); };
+
+/* ================= 快捷筛选（手机库存） ================= */
+var FLTS = [['all', '全部'], ['sale', '在售'], ['sold', '已售完'], ['dirty', '待同步']];
+var curFlt = 'all';
+function renderFlts() {
+  var box = $('fltRow'); box.innerHTML = '';
+  FLTS.forEach(function (p) {
+    var el = document.createElement('span');
+    el.textContent = p[1];
+    if (curFlt === p[0]) el.className = 'on';
+    el.onclick = function () { curFlt = p[0]; renderFlts(); refreshInv(); };
+    box.appendChild(el);
+  });
+}
+
+/* ================= 搜索历史（最近 8 条，点一下直接搜） ================= */
+function pushKwHist(kw) {
+  kw = (kw || '').trim();
+  if (!kw) return;
+  var i = DB.kwHist.indexOf(kw);
+  if (i >= 0) DB.kwHist.splice(i, 1);
+  DB.kwHist.unshift(kw);
+  if (DB.kwHist.length > 8) DB.kwHist.length = 8;
+  saveDB(); renderKwHist();
+}
+function renderKwHist() {
+  var box = $('kwHist');
+  if (!DB.kwHist.length) { box.classList.add('hide'); return; }
+  box.innerHTML = '';
+  box.classList.remove('hide');
+  DB.kwHist.forEach(function (k) {
+    var el = document.createElement('span');
+    el.textContent = k;
+    el.onclick = function () { $('inKw').value = k; refreshInv(); };
+    box.appendChild(el);
+  });
+}
+/* 表格列自定义：用户在设置页勾选，编号始终显示 */
+function curCols() {
+  return (DB.locCols && DB.locCols.length) ? DB.locCols : LOC_COLS;
+}
+/* 库存搜索：执行时记录到搜索历史 */
+function runSearch() {
+  pushKwHist($('inKw').value);
+  refreshInv();
+}
+function refreshInv() {
+  (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
+}
+$('btnKw').onclick = runSearch;
 $('inKw').addEventListener('keydown', function (e) {
-  if (e.key === 'Enter') $('btnKw').click();
+  if (e.key === 'Enter') runSearch();
 });
-$('segLoc').onclick = function () { invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = ''; loadLoc($('inKw').value); };
+$('segLoc').onclick = function () {
+  invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = '';
+  $('fltRow').classList.remove('hide');
+  loadLoc($('inKw').value);
+};
 $('segPc').onclick = function () {
   if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
   invView = 'pc'; $('segPc').className = 'on'; $('segLoc').className = '';
+  $('fltRow').classList.add('hide');   // 快捷筛选只对手机库存有意义
   loadPc($('inKw').value);
 };
 function mkHead(tbl, cols) {
@@ -505,21 +603,29 @@ function mkHead(tbl, cols) {
 }
 function loadLoc(kw) {
   kw = (kw || '').toLowerCase();
-  mkHead($('tInv'), LOC_COLS);
+  var cols = curCols();
+  mkHead($('tInv'), cols);
   var tb = $('tInv').tBodies[0]; tb.innerHTML = '';
   var rows = DB.items.filter(function (it) {
+    if (curFlt === 'sale' && it.sold_out) return false;
+    if (curFlt === 'sold' && !it.sold_out) return false;
+    if (curFlt === 'dirty' && !it.dirty) return false;
     if (!kw) return true;
-    return LOC_COLS.concat(['category', 'remark']).some(function (f) {
+    return cols.concat(['category', 'remark', 'condition']).some(function (f) {
       return String(it[f] || '').toLowerCase().indexOf(kw) >= 0;
     });
   });
   rows.sort(function (a, b) { return a.lid - b.lid; });
   $('invStat').textContent = '手机库存 ' + DB.items.length + ' 条（点行可修改；数据存在手机）';
-  if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">还没有记录，去「录入」添加</td></tr>'; return; }
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="' + cols.length +
+      '" class="empty">没有符合条件的记录</td></tr>';
+    return;
+  }
   rows.forEach(function (r) {
     var tr = document.createElement('tr');
     if (r.sold_out) tr.className = 'sold';
-    LOC_COLS.forEach(function (f) {
+    cols.forEach(function (f) {
       var td = document.createElement('td');
       td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
       tr.appendChild(td);
@@ -529,17 +635,21 @@ function loadLoc(kw) {
   });
 }
 function loadPc(kw) {
-  mkHead($('tInv'), PC_COLS);
+  var cols = curCols();
+  mkHead($('tInv'), cols);
   var tb = $('tInv').tBodies[0];
-  tb.innerHTML = '<tr><td colspan="6" class="empty">读取电脑库存…</td></tr>';
+  tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">读取电脑库存…</td></tr>';
   api('GET', '/m/api/items?kw=' + encodeURIComponent(kw || '')).then(function (j) {
     tb.innerHTML = '';
     $('invStat').textContent = '电脑库存 ' + j.total + ' 条（只读；修改请在电脑端或手机录入后同步）';
-    if (!(j.items || []).length) { tb.innerHTML = '<tr><td colspan="6" class="empty">没有找到记录</td></tr>'; return; }
-    j.items.forEach(function (r) {
+    if (!(j.items || []).length) {
+      tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">没有找到记录</td></tr>';
+      return;
+    }
+    (j.items || []).forEach(function (r) {
       var tr = document.createElement('tr');
       if (r.sold_out) tr.className = 'sold';
-      PC_COLS.forEach(function (f) {
+      cols.forEach(function (f) {
         var td = document.createElement('td');
         td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
         tr.appendChild(td);
@@ -547,7 +657,8 @@ function loadPc(kw) {
       tb.appendChild(tr);
     });
   }).catch(function (e) {
-    tb.innerHTML = '<tr><td colspan="6" class="empty">' + (e.message || e) + '</td></tr>';
+    tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">' +
+      (e.message || e) + '</td></tr>';
   });
 }
 /* 编辑本地商品 */
@@ -728,8 +839,10 @@ $('btnPrefix').onclick = function () {
 };
 $('btnWipe').onclick = function () {
   askConfirm('确定清空手机上的全部库存和出售记录？\n已同步到电脑的数据不受影响，但未同步的会丢失。', '全部清空', function () {
-    var keep = { seq: DB.seq, prefix: DB.prefix, share: DB.share };
+    var keep = { seq: DB.seq, prefix: DB.prefix, share: DB.share,
+                 theme: DB.theme, locCols: DB.locCols, kwHist: DB.kwHist };
     DB = blankDB(); DB.seq = keep.seq; DB.prefix = keep.prefix; DB.share = keep.share;
+    DB.theme = keep.theme; DB.locCols = keep.locCols; DB.kwHist = keep.kwHist;
     saveDB();
     loadLoc(''); loadRec(); renderSync(); renderData();
     toast('已清空手机数据');
@@ -750,7 +863,7 @@ function tab2(name) {
   $('p' + map[name]).classList.remove('hide');
   if (name === 'inv') (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
   if (name === 'rec') loadRec();
-  if (name === 'set') { renderShare(); renderSync(); renderData(); }
+  if (name === 'set') { renderShare(); renderSync(); renderData(); renderColList(); }
 }
 (function () {
   var tabs = document.querySelectorAll('nav div');
@@ -769,9 +882,68 @@ function loadTitles() {
   }).catch(function () { titles = {}; });
 }
 
+/* ================= 外观：浅色 / 深色 / 跟随系统 ================= */
+var _mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  var t = DB.theme || 'auto';
+  var dark = t === 'dark' || (t === 'auto' && _mqDark && _mqDark.matches);
+  document.body.classList.toggle('dark', dark);
+  renderThemeSeg();
+}
+function setTheme(t) { DB.theme = t; saveDB(); applyTheme(); }
+function renderThemeSeg() {
+  var t = DB.theme || 'auto';
+  [['thLight', 'light'], ['thDark', 'dark'], ['thAuto', 'auto']].forEach(function (p) {
+    var el = $(p[0]);
+    if (el) el.className = (t === p[1]) ? 'on' : '';
+  });
+}
+if (_mqDark && _mqDark.addEventListener)
+  _mqDark.addEventListener('change', function () { if (DB.theme === 'auto') applyTheme(); });
+$('thLight').onclick = function () { setTheme('light'); };
+$('thDark').onclick = function () { setTheme('dark'); };
+$('thAuto').onclick = function () { setTheme('auto'); };
+
+/* ================= 库存表格列自定义 ================= */
+var ALL_COLS = [['code', '编号'], ['brand', '品牌'], ['category', '品类'],
+                ['model', '型号'], ['condition', '成色'], ['price', '单价'],
+                ['qty', '数量'], ['shelf', '货架'], ['remark', '备注']];
+function renderColList() {
+  var box = $('colList'); box.innerHTML = '';
+  ALL_COLS.forEach(function (p) {
+    var row = document.createElement('label');
+    row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '');
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = DB.locCols.indexOf(p[0]) >= 0;
+    if (p[0] === 'code') cb.disabled = true;
+    cb.onchange = function () {
+      var i = DB.locCols.indexOf(p[0]);
+      if (cb.checked) {
+        if (i < 0) DB.locCols.push(p[0]);
+      } else {
+        if (p[0] === 'code') { cb.checked = true; return; }
+        if (DB.locCols.length <= 1) { cb.checked = true; toast('至少保留一列'); return; }
+        if (i >= 0) DB.locCols.splice(i, 1);
+      }
+      saveDB(); refreshInv();
+    };
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(' ' + p[1]));
+    box.appendChild(row);
+  });
+}
+$('btnColReset').onclick = function () {
+  DB.locCols = DEF_COLS.slice();
+  saveDB(); renderColList(); refreshInv();
+  toast('已恢复默认列');
+};
+
 /* ================= 启动 ================= */
 loadDB();
 $('inPrefix').value = DB.prefix || 'APP';
+applyTheme();
+renderFlts(); renderKwHist();
 refreshHead();
 renderSync(); renderData();
 (function () {
