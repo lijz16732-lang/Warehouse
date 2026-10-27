@@ -741,6 +741,13 @@ try:
                                   "X-MToken")))
     check("App 同步不再要求申请录入（无 request_write / 申请按钮）",
           "/m/api/request_write" not in _ajs and "btnReq" not in _app_html)
+    # v1.21.5：「立即同步」是全量推送（不依赖 dirty），连上电脑不自动清待同步
+    check("App「立即同步」全量推送（无需先保存）",
+          "syncAll(true, true)" in _ajs and "function syncAll(manual, full)" in _ajs
+          and "full ? true : it.dirty" in _ajs)
+    check("App 连接电脑后不自动上传（待同步数保留给用户手动点）",
+          "正在同步手机数据" not in _ajs
+          and "待同步 ' + n + ' 条，点「立即同步到电脑」上传" in _ajs)
     # v1.20.0 扫一扫识别型号（手机本地离线 OCR）
     check("型号框有「扫一扫」按钮",
           'id="btnScanModel"' in _app_html and "扫一扫" in _app_html)
@@ -946,6 +953,19 @@ check("转入后手机记录标记已 transferred",
       ss.m_items()[0])
 _n2, _c2 = ss.m_transfer([9001])
 check("已转入的再次转入自动跳过", _n2 == 0 and not _c2, (_n2, _c2))
+# v1.21.5：手机端「立即同步」是全量重传（同一 lid 再次上传）→ 不能丢 transferred，
+# 也不能让主库存重复增加
+_cnt_after = ss.count()
+ss.m_upsert_item({"lid": 9001, "code": "APP-00001", "brand": "全量重传",
+                  "qty": 3, "price": 10})
+_row = [r for r in ss.m_items() if r["lid"] == 9001][0]
+check("全量重传保留已转入标记（不会重复转入）",
+      _row["transferred"] == 1 and _row["pc_id"] > 0 and ss.count() == _cnt_after,
+      (_row["transferred"], _row["pc_id"], ss.count()))
+check("全量重传更新手机记录的字段", _row["brand"] == "全量重传"
+      and int(_row["qty"]) == 3, (_row["brand"], _row["qty"]))
+check("全量重传后记录仍只有一条（按 lid 幂等）",
+      len([r for r in ss.m_items() if r["lid"] == 9001]) == 1)
 # 清空手机数据不影响主库存
 ss.m_clear()
 check("清空手机数据后主库存不变", not ss.m_items() and not ss.m_sales()

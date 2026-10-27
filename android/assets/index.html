@@ -329,8 +329,11 @@ function connectTo(b, code, thenSync) {
       refreshHead(); renderShare(); renderSync();
       toast('已连接：' + (w.warehouse || '电脑端'));
       if (thenSync) {
-        if (pendingCount()) { toast('正在同步手机数据…'); syncAll(true); }
-        else { toast('已连接，没有待同步的数据'); }
+        // 连上后不自动上传：待同步数保留，由用户点「立即同步到电脑」决定
+        var n = pendingCount();
+        if (n) { toast('已连接 · 待同步 ' + n + ' 条，点「立即同步到电脑」上传'); }
+        else { toast('已连接（手机数据已全部同步过）'); }
+        renderSync();
       }
     }).catch(function () { refreshHead(); renderShare(); renderSync(); });
   };
@@ -422,29 +425,33 @@ function pushSale(s) {
     out_type: s.out_type || '出售', remark: s.remark || ''
   }).then(function () { s.dirty = 0; saveDB(); });
 }
-function syncAll(manual) {
+/* full=true：全量推送（不看是否待同步），点「立即同步」用它 → 任何时候都能同步，
+   不需要先在数据里点保存；/m/api/m_item、m_sale 按手机 lid 幂等覆盖，重复同步安全。 */
+function syncAll(manual, full) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
-  if (!pendingCount()) {
-    if (manual) toast('手机数据都已同步过了（新增或修改后会出现待同步）');
+  var items = DB.items.filter(function (it) { return full ? true : it.dirty; });
+  var sales = DB.sales.filter(function (s) { return full ? true : s.dirty; });
+  if (!items.length && !sales.length) {
+    if (manual) toast('手机里还没有数据，先在「录入」里添加');
     renderSync(); return Promise.resolve();
   }
   var p = Promise.resolve();
-  DB.items.forEach(function (it) {
-    if (it.dirty) p = p.then(function () { return pushItem(it); });
+  items.forEach(function (it) {
+    p = p.then(function () { return pushItem(it); });
   });
-  DB.sales.forEach(function (s) {
-    if (s.dirty) p = p.then(function () { return pushSale(s); });
+  sales.forEach(function (s) {
+    p = p.then(function () { return pushSale(s); });
   });
   return p.then(function () {
     DB.share.last = nowStr();
     saveDB(); renderSync(); refreshHead();
-    if (manual) toast('同步完成：待同步 0 条');
+    if (manual) toast('同步完成：已上传 ' + (items.length + sales.length) + ' 条');
   }).catch(function (e) {
     renderSync();
     if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
   });
 }
-$('btnSync').onclick = function () { syncAll(true); };
+$('btnSync').onclick = function () { syncAll(true, true); };
 $('btnAuto').onclick = function () {
   DB.share.auto = DB.share.auto ? 0 : 1;
   saveDB(); renderShare(); renderSync();
@@ -465,7 +472,8 @@ function renderShare() {
 }
 function renderSync() {
   var n = pendingCount();
-  $('syncStat').textContent = '待同步 ' + n + ' 条' +
+  $('syncStat').textContent = (n ? '待同步 ' + n + ' 条' : '已全部同步') +
+    ' · 手机共 ' + (DB.items.length + DB.sales.length) + ' 条' +
     (DB.share.last ? ' · 上次同步 ' + DB.share.last : '') +
     (n && !DB.share.token ? '（连接电脑后同步）' : '');
   /* 只要已连接就能随时点同步（没有待同步数据时点了会提示，不置灰） */

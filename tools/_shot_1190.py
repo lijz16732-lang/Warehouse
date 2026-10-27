@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""临时脚本：v1.21.3 部署后截屏（主界面 + 手机数据页）。"""
+"""临时脚本：v1.21.5 部署后截屏（主界面 + 手机数据页）。"""
 import ctypes
 import ctypes.wintypes as wintypes
 import os
@@ -20,7 +20,7 @@ def _enum_cb(h, _l):
     if user32.IsWindowVisible(h):
         n = ctypes.create_unicode_buffer(256)
         user32.GetWindowTextW(h, n, 256)
-        if "v1.21.3" in n.value:
+        if "v1.21.5" in n.value:
             hwnd = h
             return False
     return True
@@ -28,7 +28,7 @@ def _enum_cb(h, _l):
 
 user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
 if not hwnd:
-    print("未找到 v1.21.3 窗口")
+    print("未找到 v1.21.5 窗口")
     sys.exit(1)
 
 user32.ShowWindow(hwnd, 9)

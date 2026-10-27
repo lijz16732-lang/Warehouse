@@ -3,8 +3,8 @@
      usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="9"
-    android:versionName="1.21.4">
+    android:versionCode="10"
+    android:versionName="1.21.5">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
