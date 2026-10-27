@@ -2097,6 +2097,16 @@ try:
     else:
         check("手机数据页选中库存行可取到 lid（两表映射独立）", True,
               "无手机数据，跳过")
+    # v1.21.3：右键菜单（删除选中 / 转入库存 / 刷新）
+    def _menu_labels(m):
+        return [m.entrycget(i, "label") for i in range(m.index("end") + 1)
+                if m.type(i) == "command"]
+    _mi = _menu_labels(app.tab_phone._ctx_items)
+    _ms = _menu_labels(app.tab_phone._ctx_sales)
+    check("手机库存表右键菜单（删除/转入/刷新）",
+          set(_mi) == {"删除选中", "转入库存", "刷新"}, str(_mi))
+    check("手机出售表右键菜单（删除/刷新，无转入）",
+          set(_ms) == {"删除选中", "刷新"}, str(_ms))
 
     # 导入向导弹窗
     from wm.importer import ImportDialog

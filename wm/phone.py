@@ -96,10 +96,11 @@ class PhoneTab(ttk.Frame):
         self.frm_sales = ttk.Frame(self.nb)
         self.nb.add(self.frm_items, text="  手机库存  ")
         self.nb.add(self.frm_sales, text="  手机出售记录  ")
-        self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS)
+        self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS,
+                                          is_items=True)
         self.tree_sales = self._make_tree(self.frm_sales, PHONE_SALE_COLS)
 
-    def _make_tree(self, parent, cols_def):
+    def _make_tree(self, parent, cols_def, is_items=False):
         wrap = tk.Frame(parent, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)
         wrap.pack(fill="both", expand=True, padx=0, pady=10)
@@ -121,6 +122,27 @@ class PhoneTab(ttk.Frame):
         tree.tag_configure("odd", background="#F7FAFD")
         RowHover(tree, self.app.root)
         tree.bind("<Delete>", lambda e: self.delete_selected())
+        # 右键菜单：删除选中 / 转入库存（仅手机库存表）
+        menu = tk.Menu(tree, tearoff=0)
+        menu.add_command(label="删除选中", command=self.delete_selected)
+        if is_items:
+            menu.add_command(label="转入库存", command=self.transfer_selected)
+        menu.add_command(label="刷新", command=self.refresh_rows)
+
+        def _popup(ev):
+            iid = tree.identify_row(ev.y)
+            if iid:
+                if iid not in tree.selection():
+                    tree.selection_set(iid)   # 右键落在未选行：改为只选该行
+                tree.focus(iid)
+                menu.tk_popup(ev.x_root, ev.y_root)
+            return "break"
+
+        tree.bind("<Button-3>", _popup)
+        if is_items:
+            self._ctx_items = menu
+        else:
+            self._ctx_sales = menu
         return tree
 
     # ------------------------------------------------------------ 数据
