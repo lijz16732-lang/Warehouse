@@ -245,11 +245,13 @@ class LanDialog(tk.Toplevel):
                    command=self.copy_phone_url).pack(side="right")
         rowq = tk.Frame(ph, bg=CLR_CARD)
         rowq.pack(fill="x", padx=14, pady=(0, 8))
-        self.lbl_phone_msg = tk.Label(rowq, text="", bg=CLR_CARD, fg=CLR_MUTED,
-                                      font=(self.fam, 8), anchor="w", justify="left")
-        self.lbl_phone_msg.pack(side="left", fill="x", expand=True)
+        # 右侧二维码必须先 pack：左侧文字先 pack 且不折行时会把它挤到窗口外（老坑）
         self.lbl_qr = tk.Label(rowq, text="", bg=CLR_CARD)
         self.lbl_qr.pack(side="right", padx=(6, 0))
+        self.lbl_phone_msg = tk.Label(rowq, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                                      font=(self.fam, 8), anchor="w", justify="left",
+                                      wraplength=520)
+        self.lbl_phone_msg.pack(side="left", fill="x", expand=True)
         self._qr_img = None
         self._qr_path = None
         rowps = tk.Frame(ph, bg=CLR_CARD)
@@ -479,7 +481,12 @@ class LanDialog(tk.Toplevel):
                     pass
             fd, path = tempfile.mkstemp(prefix="cgm_qr_", suffix=".png")
             os.close(fd)
-            segno.make(url).save(path, kind="png", scale=4, border=2)
+            qr = segno.make(url)
+            # 内容越长模块越多，按模块数收缩 scale，PNG 始终约 150px，
+            # 否则 PhotoImage 原尺寸显示会把右侧布局挤爆、二维码被窗口裁掉
+            modules = qr.version * 4 + 17
+            scale = max(2, min(4, 150 // (modules + 8)))     # border=2 → 左右各 4 模块
+            qr.save(path, kind="png", scale=scale, border=2)
             img = tk.PhotoImage(file=path)
             self._qr_img = img          # 防被垃圾回收
             self._qr_path = path
