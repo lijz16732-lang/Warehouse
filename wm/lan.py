@@ -20,6 +20,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .constants import APP_NAME, APP_VERSION
+from .mobile import (MobileService, SECURITY_HEADERS, _token_of, handle_logout,
+                     handle_page, handle_request_write, handle_sales,
+                     handle_sell, handle_whoami, handle_items)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -82,6 +85,7 @@ class LanServer(object):
         self.httpd = None
         self._thread = None
         self.last_error = ""
+        self.mobile = MobileService()   # 手机端：会话与手机专用接口
 
     # ------------------------------------------------------------ 生命周期
     def start(self):
@@ -109,6 +113,7 @@ class LanServer(object):
             except Exception:
                 pass
         self.clients.clear()
+        self.mobile.clear_all()     # 手机端会话随共享一起下线
         self.on_event("clients", None)
 
     @property
@@ -289,19 +294,55 @@ def _make_handler(srv):
             except Exception:
                 pass
 
+        def _send_full(self, http_code, body, extra_headers=()):
+            """body 为 dict（发 JSON）或 bytes（Content-Type 由 extra_headers 给出）。"""
+            try:
+                if isinstance(body, dict):
+                    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                    ctype = "application/json; charset=utf-8"
+                else:
+                    data = body
+                    ctype = ""
+                self.send_response(http_code)
+                if ctype:
+                    self.send_header("Content-Type", ctype)
+                for k, v in extra_headers:
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception:
+                pass
+
         def _query(self):
             q = parse_qs(urlparse(self.path).query)
             return {k: (v[0] if v else "") for k, v in q.items()}
 
-        # ---------------------------------------------------- GET /ping
+        # ---------------------------------------------------- GET /ping /m
         def do_GET(self):
-            if not urlparse(self.path).path.startswith("/ping"):
+            path = urlparse(self.path).path
+            if not (path.startswith("/ping") or path == "/m" or path == "/m/"
+                    or path.startswith("/m/api/")):
                 return self._send(404, {"ok": False, "error": "not found"})
-            q = self._query()
             ip = self._client_ip()
             gate = srv._gate(ip)
             if gate:
                 return self._send(*gate)
+            if path == "/m" or path == "/m/":
+                return self._send_full(*handle_page())
+            if path.startswith("/m/api/"):
+                # 手机端：会话 Cookie 鉴权（黑名单已在上面 _gate 拦过）
+                token = _token_of(self.headers.get("Cookie") or "")
+                q = self._query()
+                if path.startswith("/m/api/whoami"):
+                    return self._send_full(*handle_whoami(srv, ip, token))
+                if path.startswith("/m/api/items"):
+                    return self._send_full(*handle_items(srv, ip, token, q))
+                if path.startswith("/m/api/sales"):
+                    return self._send_full(*handle_sales(srv, ip, token, q))
+                return self._send(404, {"ok": False, "error": "not found"})
+            # /ping（电脑客户端 4 秒轮询）
+            q = self._query()
             if not srv._code_ok(q.get("code", "")):
                 return self._send(401, {"ok": False, "error": "连接码不正确",
                                         "need_code": True})
@@ -310,7 +351,7 @@ def _make_handler(srv):
             info["clients"] = len(srv.clients)
             return self._send(200, info)
 
-        # ---------------------------------------------------- POST /rpc
+        # ---------------------------------------------------- POST /rpc /m
         def do_POST(self):
             path = urlparse(self.path).path
             try:
@@ -327,6 +368,20 @@ def _make_handler(srv):
             gate = srv._gate(ip)
             if gate:
                 return self._send(*gate)
+            if path == "/m/login":
+                code, body, hdrs = srv.mobile.login(
+                    ip, str((payload or {}).get("code") or ""), srv._code_ok)
+                return self._send_full(code, body, hdrs)
+            if path == "/m/logout":
+                token = _token_of(self.headers.get("Cookie") or "")
+                return self._send_full(*handle_logout(srv, ip, token))
+            if path.startswith("/m/api/"):
+                token = _token_of(self.headers.get("Cookie") or "")
+                if path.startswith("/m/api/sell"):
+                    return self._send_full(*handle_sell(srv, ip, token, payload))
+                if path.startswith("/m/api/request_write"):
+                    return self._send_full(*handle_request_write(srv, ip, token))
+                return self._send(404, {"ok": False, "error": "not found"})
             if path.startswith("/request_write"):
                 if not srv._code_ok(str(payload.get("code") or "")):
                     return self._send(401, {"ok": False, "error": "连接码不正确"})

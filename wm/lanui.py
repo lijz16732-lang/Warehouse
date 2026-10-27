@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """局域网共享窗口：一台电脑当主机，其他电脑连接；主机逐台授权是否可录入。"""
 
+import os
+import tempfile
 import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
+
+try:
+    import segno
+except ImportError:          # 二维码库缺失时只显示文字地址，不影响其他功能
+    segno = None
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN, apply_window_icon,
@@ -223,6 +230,36 @@ class LanDialog(tk.Toplevel):
         self.pb = ttk.Progressbar(cli, mode="indeterminate", maximum=100)
         self._conn_busy = False
 
+        # ---- ③ 手机访问 ----
+        ph = self._card(
+            "③ 手机访问（手机 App 数据互通）",
+            "手机安装《仓管家》App 后，首次打开把下面的地址填进去即可；\n"
+            "手机和电脑要连同一个 WiFi，App 里输入连接码登录。", parent=self.body)
+        self.ph_badge = ph.badge
+        rowp = tk.Frame(ph, bg=CLR_CARD)
+        rowp.pack(fill="x", padx=14, pady=(0, 6))
+        self.lbl_phone_url = tk.Label(rowp, text="", bg=CLR_CARD, fg=CLR_TEXT,
+                                      font=(self.fam, 11, "bold"), anchor="w")
+        self.lbl_phone_url.pack(side="left")
+        ttk.Button(rowp, text="复制地址", style="Ghost.TButton", width=9,
+                   command=self.copy_phone_url).pack(side="right")
+        rowq = tk.Frame(ph, bg=CLR_CARD)
+        rowq.pack(fill="x", padx=14, pady=(0, 8))
+        self.lbl_phone_msg = tk.Label(rowq, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                                      font=(self.fam, 8), anchor="w", justify="left")
+        self.lbl_phone_msg.pack(side="left", fill="x", expand=True)
+        self.lbl_qr = tk.Label(rowq, text="", bg=CLR_CARD)
+        self.lbl_qr.pack(side="right", padx=(6, 0))
+        self._qr_img = None
+        self._qr_path = None
+        rowps = tk.Frame(ph, bg=CLR_CARD)
+        rowps.pack(fill="x", padx=14, pady=(0, 10))
+        self.lbl_phone_sessions = tk.Label(rowps, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                                           font=(self.fam, 8))
+        self.lbl_phone_sessions.pack(side="left")
+        ttk.Button(rowps, text="手机全部下线", style="Ghost.TButton", width=12,
+                   command=self.phones_offline).pack(side="right")
+
         # ---- 底部 ----
         self._foot = foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=10)
@@ -380,7 +417,85 @@ class LanDialog(tk.Toplevel):
         self.btn_blk.configure(
             state="normal" if (hosting and sel) else "disabled")
         self.btn_blist.configure(state="normal" if hosting else "disabled")
+        self._refresh_phone(st)
         self.refresh_hist()
+
+    # ------------------------------------------------------------ 手机端
+    def _phone_url(self):
+        ips = self.app.lan_status()["ips"]
+        port = self.var_port.get().strip() or str(DEFAULT_PORT)
+        return "http://%s:%s/m" % (ips[0], port)
+
+    def _refresh_phone(self, st):
+        """③ 手机访问区：地址、二维码、会话数。"""
+        url = self._phone_url()
+        self.lbl_phone_url.configure(text=url)
+        srv = self.app.lan_server
+        hosting = st["mode"] == "host" and st["running"]
+        try:
+            n = srv.mobile.count() if (hosting and srv) else 0
+        except Exception:
+            n = 0
+        self.lbl_phone_sessions.configure(
+            text=("手机在线：%d 台（会话 12 小时有效）" % n) if hosting
+            else "开启共享后手机才能连上")
+        if hosting:
+            self.lbl_phone_msg.configure(
+                text="App 首次使用：打开 App → 填上面地址 → 输入连接码。"
+                     "手机默认只读，登记出售需主机授权。",
+                fg=CLR_MUTED)
+        else:
+            self.lbl_phone_msg.configure(
+                text="开启共享后，地址和二维码才会生效。", fg=CLR_MUTED)
+        self._render_qr(url if hosting else "")
+
+    def _render_qr(self, url):
+        """手机扫一扫免手输地址（需要 segno；缺失时跳过）。"""
+        if not segno or not url:
+            self.lbl_qr.configure(text="", image="")
+            self._qr_img = None
+            return
+        try:
+            if self._qr_path and os.path.exists(self._qr_path):
+                try:
+                    os.remove(self._qr_path)
+                except OSError:
+                    pass
+            fd, path = tempfile.mkstemp(prefix="cgm_qr_", suffix=".png")
+            os.close(fd)
+            segno.make(url).save(path, kind="png", scale=4, border=2)
+            img = tk.PhotoImage(file=path)
+            self._qr_img = img          # 防被垃圾回收
+            self._qr_path = path
+            self.lbl_qr.configure(image=img, text="")
+        except Exception:
+            self.lbl_qr.configure(text="", image="")
+            self._qr_img = None
+
+    def copy_phone_url(self):
+        url = self._phone_url()
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            self.lbl_phone_msg.configure(text="已复制：%s（发给手机填进 App）" % url,
+                                         fg=CLR_MUTED)
+        except Exception as e:
+            messagebox.showerror("复制失败", str(e), parent=self)
+
+    def phones_offline(self):
+        """把所有手机的会话踢下线（App 里要重新输连接码）。"""
+        srv = self.app.lan_server
+        if srv is None:
+            return
+        n = srv.mobile.count()
+        if not n:
+            messagebox.showinfo("手机全部下线", "当前没有手机在线", parent=self)
+            return
+        if messagebox.askyesno("手机全部下线",
+                               "让 %d 台手机全部下线？\nApp 里需要重新输入连接码才能登录。" % n,
+                               parent=self):
+            srv.mobile.clear_all()
+            self.refresh()
 
     # ------------------------------------------------------------ 动作
     def copy_addr(self):
@@ -724,6 +839,11 @@ class LanDialog(tk.Toplevel):
         try:
             if getattr(self.app, "lan_dlg", None) is self:
                 self.app.lan_dlg = None
+        except Exception:
+            pass
+        try:
+            if self._qr_path and os.path.exists(self._qr_path):
+                os.remove(self._qr_path)
         except Exception:
             pass
         super().destroy()

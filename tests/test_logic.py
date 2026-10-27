@@ -558,6 +558,122 @@ check("启动时恢复黑名单（set_blocked）",
       [b["ip"] for b in _lan_srv.blocked_snapshot()] == ["10.9.9.9"],
       _lan_srv.blocked_snapshot())
 _lan_srv.set_blocked([])
+
+# ---- 手机端（v1.14.0）：/m 登录会话 + 只读 / 授权出售 ----
+import urllib.error as _uerr  # noqa: E402
+import urllib.request as _ureq  # noqa: E402
+from http.cookiejar import CookieJar  # noqa: E402
+
+from wm.mobile import COOKIE_NAME, MobileService, PAGE_HTML, _token_of  # noqa: E402
+
+ss.insert(blank_record() | {"code": "WL-MOB", "brand": "手机测试", "qty": 3, "price": 66.0})
+
+
+def _mreq(path, data=None, opener=None):
+    """手机端 HTTP 实测：返回 (status, body, headers)。"""
+    url = "http://127.0.0.1:%d%s" % (_lan_port, path)
+    if data is not None:
+        req = _ureq.Request(url, data=json.dumps(data).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST")
+    else:
+        req = _ureq.Request(url)
+    op = opener or _ureq.build_opener(_ureq.HTTPCookieProcessor(CookieJar()))
+    try:
+        with op.open(req, timeout=6) as r:
+            raw = r.read()
+            ct = r.headers.get("Content-Type", "")
+            body = json.loads(raw) if "json" in ct else raw.decode("utf-8")
+            return r.status, body, r.headers
+    except _uerr.HTTPError as e:
+        raw = e.read()
+        try:
+            body = json.loads(raw)
+        except Exception:
+            body = raw.decode("utf-8", "replace")
+        return e.code, body, e.headers
+
+
+_mb_op = _ureq.build_opener(_ureq.HTTPCookieProcessor(CookieJar()))
+_msc, _mb, _mh = _mreq("/m")
+check("手机页面可访问（HTML）", _msc == 200 and "仓管家" in _mb and "<html" in _mb.lower(),
+      "%s %s…" % (_msc, _mb[:40]))
+check("手机页面禁止被 iframe 嵌套",
+      _mh.get("X-Frame-Options") == "DENY", dict(_mh))
+_msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
+check("未登录调 API 被拒（401）", _msc == 401 and _mb.get("need_login"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/login", {"code": "000000"}, opener=_mb_op)
+check("错误连接码登录被拒（401）", _msc == 401 and not _mb.get("ok"), (_msc, _mb))
+_msc, _mb, _mh = _mreq("/m/login", {"code": "987654"}, opener=_mb_op)
+check("正确连接码登录成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+check("登录下发的 Cookie 是 HttpOnly",
+      "httponly" in str(_mh.get("Set-Cookie", "")).lower()
+      and COOKIE_NAME in str(_mh.get("Set-Cookie", "")),
+      _mh.get("Set-Cookie"))
+_msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
+check("登录后 whoami 正常且默认只读",
+      _msc == 200 and _mb.get("ok") and _mb.get("can_write") is False
+      and _mb.get("warehouse") == "测试仓", _mb)
+_msc, _mb, _ = _mreq("/m/api/items?kw=", opener=_mb_op)
+check("手机端能读到库存",
+      _msc == 200 and _mb.get("ok") and len(_mb.get("items") or []) == ss.count(),
+      "items=%d" % len(_mb.get("items") or []))
+_msc, _mb, _ = _mreq("/m/api/sales?kw=", opener=_mb_op)
+check("手机端能读到出售记录", _msc == 200 and _mb.get("ok") and "sales" in _mb, _msc)
+_msc, _mb, _ = _mreq("/m/api/sell", {"code": "WL-MOB", "qty": 1, "price": 9.9},
+                     opener=_mb_op)
+check("只读时手机出售被拒（403）",
+      _msc == 403 and _mb.get("readonly"), (_msc, _mb))
+# 请求录入 → 主机审批 → 可写
+_req_seen = []
+_orig_evt = _lan_srv.on_event
+_lan_srv.on_event = lambda ev, data=None: _req_seen.append((ev, data))
+_msc, _mb, _ = _mreq("/m/api/request_write", {}, opener=_mb_op)
+check("手机「请求录入」触发主机审批事件",
+      _msc == 200 and any(ev == "request" for ev, _ in _req_seen), (_msc, _req_seen))
+_lan_srv.on_event = _orig_evt
+_lan_srv.allow("127.0.0.1", True)
+_msc, _mb, _ = _mreq("/m/api/sell", {"code": "WL-MOB", "qty": 1, "price": 9.9},
+                     opener=_mb_op)
+check("授权后手机登记出售成功",
+      _msc == 200 and _mb.get("ok") and "已登记" in (_mb.get("message") or ""),
+      (_msc, _mb))
+check("手机出售后库存真实扣减（与电脑同库）",
+      [r for r in ss.all_records() if r["code"] == "WL-MOB"][0]["qty"] == 2)
+_msc, _mb, _ = _mreq("/m/api/sell", {"code": "NO-SUCH-CODE", "qty": 1, "price": 1},
+                     opener=_mb_op)
+check("手机端出售不存在的编号被拒", _msc == 404 and "没有找到" in _mb.get("error", ""),
+      (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/logout", {}, opener=_mb_op)
+check("退出登录成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/whoami", opener=_mb_op)
+check("退出后再调 API 需要重新登录", _msc == 401, _msc)
+# 会话安全单元测试：IP 绑定 / 过期
+_ms = MobileService()
+_mc, _mb3, _mh3 = _ms.login("10.1.1.1", "123456", lambda c: c == "123456")
+_t = _token_of(_mh3[0][1])
+check("会话令牌足够长（token_urlsafe 32B）",
+      isinstance(_t, str) and len(_t) >= 40, _t)
+check("同 IP 会话有效", _ms.check(_t, "10.1.1.1") is True)
+check("换 IP 后会话失效（IP 绑定）",
+      _ms.check(_t, "10.1.1.2") is False and _ms.check(_t, "10.1.1.1") is False,
+      "换网必须重新登录")
+_ms2 = MobileService()
+for _i in range(5):
+    _mc, _mb2, _ = _ms2.login("10.2.2.2", "wrong", lambda c: False)
+check("连续错 5 次触发锁定", _mc == 429 and _mb2.get("locked"), (_mc, _mb2))
+_mc, _mb2, _ = _ms2.login("10.2.2.2", "123456", lambda c: c == "123456")
+check("锁定期间连接码正确也拒绝登录", _mc == 429 and _mb2.get("locked"), (_mc, _mb2))
+# 登录限速实测（最后做，避免锁住 127.0.0.1 影响前面的测试）
+for _i in range(5):
+    _mreq("/m/login", {"code": "000000"})
+_msc, _mb, _ = _mreq("/m/login", {"code": "987654"})
+check("手机端登录限速生效（错 5 次后锁 10 分钟）",
+      _msc == 429 and _mb.get("locked"), (_msc, _mb))
+_lan_srv.mobile._fails.clear()
+_lan_srv.mobile._locked.clear()
+_lan_srv.mobile.clear_all()
+
 _lan_bad = RemoteStore("127.0.0.1", _lan_port, "000000", "t2", "错码电脑")
 try:
     _lan_bad.ping()
@@ -2339,6 +2455,19 @@ try:
           "%s vs %s" % (dlg2.winfo_height(), _wa2["h"]))
     check("局域网窗口内容区可滚动（小屏不裁按钮）",
           hasattr(dlg2, "canvas") and hasattr(dlg2, "vsb") and hasattr(dlg2, "body"))
+    check("局域网窗口有「手机访问」区块",
+          all(hasattr(dlg2, x) for x in
+              ("lbl_phone_url", "lbl_qr", "lbl_phone_sessions", "lbl_phone_msg")))
+    check("手机访问地址格式正确（http://IP:端口/m）",
+          dlg2._phone_url().startswith("http://") and dlg2._phone_url().endswith("/m"),
+          dlg2._phone_url())
+    try:
+        dlg2._render_qr("http://192.168.1.5:8765/m")
+        check("手机地址二维码已生成", dlg2._qr_img is not None)
+        dlg2._render_qr("")
+        check("清空地址后二维码清除", dlg2._qr_img is None)
+    except Exception as e:
+        check("手机地址二维码已生成", False, str(e))
     check("主机未选中电脑时「移除连接」置灰",
           str(dlg2.btn_kick.cget("state")) == "disabled",
           dlg2.btn_kick.cget("state"))
