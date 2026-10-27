@@ -2069,6 +2069,34 @@ try:
     app.tab_phone.var_kw.set("")
     app.tab_phone.refresh_rows()
     root.update()
+    # v1.21.2 回归：手机库存有数据、出售记录为空时，选中库存行必须能取到 lid
+    # （旧 bug：两表共用 _by_id，后填的出售表把库存映射清空 → 删除误报"请先选中"）
+    _plid = 990001
+    app.store.m_upsert_item({"lid": _plid, "brand": "回归测试", "qty": 1})
+    app.tab_phone.refresh_rows()
+    root.update()
+    if app.tab_phone.tree_items.get_children():
+        _kid = app.tab_phone.tree_items.get_children()[0]
+        app.tab_phone.tree_items.selection_set(_kid)
+        check("手机数据页选中库存行可取到 lid（两表映射独立）",
+              bool(app.tab_phone._sel_lids(app.tab_phone.tree_items)),
+              "selection=%s maps=%s" % (app.tab_phone.tree_items.selection(),
+                                        list(app.tab_phone._maps)))
+        # 端到端：选中行走 delete_selected 真正删除（跳过确认弹窗）
+        _n0 = len(app.tab_phone.tree_items.get_children())
+        _orig_ask = wapp.messagebox.askyesno
+        wapp.messagebox.askyesno = lambda *a, **k: True
+        try:
+            app.tab_phone.delete_selected()
+        finally:
+            wapp.messagebox.askyesno = _orig_ask
+        check("手机数据页删除选中真正生效",
+              len(app.tab_phone.tree_items.get_children()) == _n0 - 1,
+              "删除前=%d 删除后=%d" % (_n0,
+                                       len(app.tab_phone.tree_items.get_children())))
+    else:
+        check("手机数据页选中库存行可取到 lid（两表映射独立）", True,
+              "无手机数据，跳过")
 
     # 导入向导弹窗
     from wm.importer import ImportDialog

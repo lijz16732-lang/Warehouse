@@ -47,7 +47,7 @@ class PhoneTab(ttk.Frame):
         self.fam = fam
         self.item_rows = []
         self.sale_rows = []
-        self._by_id = {}          # 各表格 iid → 记录
+        self._maps = {}           # tree → {iid: 记录}（两表各自独立，防覆盖）
         self._kw_debounce = None
         self._build()
 
@@ -155,7 +155,8 @@ class PhoneTab(ttk.Frame):
 
     def _fill(self, tree, rows, cols_def, extra=None):
         tree.delete(*tree.get_children())
-        self._by_id = {}
+        mapping = {}                       # 每个 tree 独立映射（共用会互相覆盖）
+        self._maps[tree] = mapping
         for i, r in enumerate(rows):
             vals = []
             for key, _t, _w in cols_def:
@@ -173,7 +174,7 @@ class PhoneTab(ttk.Frame):
             if i % 2 == 1:
                 tags.append("odd")
             iid = tree.insert("", "end", values=vals, tags=tags)
-            self._by_id[iid] = r
+            mapping[iid] = r
 
     def _debounce(self, _ev=None):
         if self._kw_debounce is not None:
@@ -186,9 +187,10 @@ class PhoneTab(ttk.Frame):
 
     # ------------------------------------------------------------ 动作
     def _sel_lids(self, tree):
+        mapping = self._maps.get(tree) or {}
         out = []
         for iid in tree.selection():
-            r = self._by_id.get(iid)
+            r = mapping.get(iid)
             if r:
                 out.append(int(r.get("lid") or 0))
         return [x for x in out if x > 0]
