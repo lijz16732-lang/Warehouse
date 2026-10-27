@@ -14,16 +14,8 @@ input,select,textarea { border:1px solid #d7dde8; border-radius:8px; padding:9px
 button { border:0; border-radius:8px; padding:11px 14px; background:#1f6feb; color:#fff; font-weight:600; }
 button.gray { background:#eef1f6; color:#44506a; }
 button.danger { background:#e5484d; }
+button.small { padding:7px 12px; font-size:13px; font-weight:500; }
 button:disabled { opacity:.5; }
-/* ---- 登录 ---- */
-#vLogin { flex:1; display:flex; flex-direction:column; justify-content:center; padding:34px 26px; }
-#vLogin .logo { font-size:46px; text-align:center; }
-#vLogin h1 { font-size:21px; text-align:center; margin:8px 0 20px; }
-#vLogin .tip { color:#8a94a6; font-size:13px; text-align:center; margin-bottom:18px; line-height:1.6; }
-#vLogin label { font-size:13px; color:#5a6478; margin:10px 0 5px; }
-#vLogin input { margin-bottom:4px; }
-#vLogin .err { color:#e5484d; font-size:13px; min-height:18px; margin:6px 0; }
-/* ---- 主界面 ---- */
 header { background:#1f6feb; color:#fff; padding:10px 14px; display:flex; align-items:center; gap:8px; flex:none; }
 header b { font-size:16px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 header .badge { font-size:11px; background:rgba(255,255,255,.22); border-radius:10px; padding:3px 8px; flex:none; }
@@ -39,12 +31,15 @@ main { flex:1; overflow:auto; padding:12px; }
 .frow { display:flex; gap:10px; }
 .fcol { flex:1; margin-bottom:10px; }
 .fcol label { display:block; font-size:12px; color:#5a6478; margin-bottom:4px; }
-/* ---- 表格 ---- */
+/* 分段 */
+.seg { display:flex; background:#e9edf4; border-radius:9px; padding:3px; margin-bottom:10px; }
+.seg div { flex:1; text-align:center; padding:7px 0; font-size:13px; color:#5a6478; border-radius:7px; }
+.seg div.on { background:#fff; color:#1f6feb; font-weight:700; }
+/* 表格 */
 .tblwrap { overflow:auto; background:#fff; border:1px solid #e2e7f0; border-radius:12px; }
 table { border-collapse:collapse; min-width:100%; }
 th { background:#eef1f6; color:#44506a; font-size:12px; font-weight:600; padding:9px 10px;
      white-space:nowrap; position:sticky; top:0; text-align:left; border-bottom:1px solid #d7dde8; }
-th.edit { color:#1f6feb; }
 td { padding:9px 10px; border-bottom:1px solid #eef1f6; font-size:13px; white-space:nowrap; }
 tr.sold td { color:#b3b9c6; }
 tr:active { background:#f0f5ff; }
@@ -52,156 +47,143 @@ tr:active { background:#f0f5ff; }
 .searchrow { display:flex; gap:8px; margin-bottom:10px; }
 .searchrow input { flex:1; }
 .searchrow button { flex:none; }
-/* ---- 弹层 ---- */
+.stat { color:#8a94a6; font-size:12px; margin:6px 2px 0; }
+.tag { display:inline-block; font-size:11px; border-radius:8px; padding:2px 7px; margin-left:6px; }
+.tag.ok { background:#e5f6eb; color:#218a4a; }
+.tag.wait { background:#fdf1e2; color:#b96e12; }
+/* 弹层 */
 #mask { position:fixed; inset:0; background:rgba(20,26,40,.45); z-index:20;
         display:flex; align-items:flex-end; justify-content:center; }
 #sheet { background:#fff; border-radius:16px 16px 0 0; width:100%; max-height:88vh;
          overflow:auto; padding:16px 16px 26px; }
 #sheet h3 { margin-bottom:12px; display:flex; align-items:center; }
 #sheet h3 span { flex:1; }
+#sheet .btnrow { display:flex; gap:10px; margin-top:14px; }
+#sheet .btnrow button { flex:1; }
 #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
          background:rgba(20,26,40,.85); color:#fff; padding:9px 16px; border-radius:20px;
          font-size:13px; z-index:30; max-width:80vw; text-align:center; }
-#errBox { background:#fdecec; color:#c03538; border:1px solid #f5c2c4; border-radius:8px;
-          padding:9px 11px; font-size:13px; margin-bottom:10px; line-height:1.5; }
-/* ---- 列题设置 ---- */
+/* 列题行 / 设置行 */
 .ctrow { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #f0f2f7; }
 .ctrow .def { flex:none; width:64px; font-size:13px; color:#8a94a6; }
 .ctrow input { flex:1; padding:7px 9px; }
-.ctrow input.custom { border-color:#1f6feb; }
-.stat { color:#8a94a6; font-size:12px; margin:6px 2px 0; }
+.statline { font-size:13px; color:#44506a; line-height:1.8; margin-top:8px; }
 </style>
 </head>
 <body>
 
-<!-- 登录 -->
-<div id="vLogin">
-  <div class="logo">&#128230;</div>
-  <h1>仓管家 · 手机端</h1>
-  <div class="tip">界面装在手机里，数据实时来自电脑。<br>电脑和手机需连同一个 WiFi，电脑端已「开启共享」。</div>
-  <label>电脑地址（局域网共享 → 手机访问）</label>
-  <input id="inBase" placeholder="例如 192.168.1.5:8765" autocapitalize="off" autocomplete="off">
-  <label>连接码</label>
-  <input id="inCode" type="password" inputmode="numeric" placeholder="电脑上显示的 6 位连接码">
-  <div class="err" id="loginErr"></div>
-  <button id="btnLogin" style="width:100%">进 入</button>
-</div>
+<header>
+  <b>仓管家</b>
+  <span class="badge" id="hPerm">本地模式</span>
+  <button id="btnReq" class="hide">申请录入</button>
+</header>
 
-<!-- 主界面 -->
-<div id="vMain" class="hide" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
-  <header>
-    <b id="hWh">仓管家</b>
-    <span class="badge" id="hPerm">只读</span>
-    <button id="btnReq">申请录入</button>
-    <button id="btnOut">退出</button>
-  </header>
-  <nav>
-    <div data-t="inv" class="on">库存</div>
-    <div data-t="add">录入</div>
-    <div data-t="sell">出售</div>
-    <div data-t="rec">记录</div>
-    <div data-t="set">设置</div>
-  </nav>
-  <main id="main">
-    <!-- 库存 -->
-    <div id="pInv">
-      <div class="searchrow"><input id="inKw" placeholder="搜编号 / 品牌 / 型号 / 货架 / 备注">
-        <button id="btnKw">搜索</button></div>
-      <div class="stat" id="invStat"></div>
-      <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
-    </div>
-    <!-- 录入 -->
-    <div id="pAdd" class="hide">
-      <div class="card">
-        <h3>新增入库（编号自动生成）</h3>
-        <div class="frow">
-          <div class="fcol"><label>品牌</label><input id="aBrand"></div>
-          <div class="fcol"><label>品类</label><input id="aCate"></div>
-        </div>
-        <div class="frow">
-          <div class="fcol"><label>型号</label><input id="aModel"></div>
-          <div class="fcol"><label>成色</label><input id="aCond"></div>
-        </div>
-        <div class="frow">
-          <div class="fcol"><label>单价</label><input id="aPrice" inputmode="decimal"></div>
-          <div class="fcol"><label>数量</label><input id="aQty" inputmode="numeric" value="1"></div>
-        </div>
-        <div class="fcol"><label>货架</label><input id="aShelf"></div>
-        <div class="fcol"><label>备注</label><textarea id="aRemark" rows="2"></textarea></div>
-        <div id="errAdd" style="display:none"></div>
-        <button id="btnAdd" style="width:100%">保存到电脑</button>
-        <div class="hint">保存后电脑端几秒内可见；未授权时先点右上角「申请录入」。</div>
-      </div>
-    </div>
-    <!-- 出售 -->
-    <div id="pSell" class="hide">
-      <div class="card">
-        <h3>登记出售</h3>
-        <div class="fcol"><label>商品编号</label><input id="sCode" autocapitalize="characters"></div>
-        <div class="frow">
-          <div class="fcol"><label>数量</label><input id="sQty" inputmode="numeric" value="1"></div>
-          <div class="fcol"><label>单价（留空按原价）</label><input id="sPrice" inputmode="decimal"></div>
-        </div>
-        <div class="frow">
-          <div class="fcol"><label>买家</label><input id="sBuyer"></div>
-          <div class="fcol"><label>备注</label><input id="sRemark"></div>
-        </div>
-        <button id="btnSell" style="width:100%">登记出售</button>
-        <div class="hint" id="sellMsg"></div>
-      </div>
-    </div>
-    <!-- 记录 -->
-    <div id="pRec" class="hide">
-      <div class="searchrow"><input id="inSkw" placeholder="搜编号 / 买家">
-        <button id="btnSkw">搜索</button></div>
-      <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
-    </div>
-    <!-- 设置 -->
-    <div id="pSet" class="hide">
-      <div class="card">
-        <h3>表格列题自定义</h3>
-        <div class="hint" style="margin:0 0 10px">改列标题（如把「品牌」改成「名称」），保存后手机和电脑端表格同步生效。留空 = 恢复默认。</div>
-        <div id="ctList"></div>
-        <div style="display:flex;gap:10px;margin-top:12px">
-          <button id="btnCtSave" style="flex:1">保存到电脑</button>
-          <button id="btnCtReset" class="gray" style="flex:1">全部恢复默认</button>
-        </div>
-        <div class="stat" id="ctStat"></div>
-      </div>
-      <div class="card">
-        <h3>连接</h3>
-        <div class="stat" id="setBase" style="font-size:13px;color:#44506a"></div>
-        <div style="display:flex;gap:10px;margin-top:10px">
-          <button id="btnReconn" class="gray" style="flex:1">重新登录</button>
-          <button id="btnChange" class="gray" style="flex:1">更换电脑地址</button>
-        </div>
-      </div>
-    </div>
-  </main>
-</div>
+<nav>
+  <div data-t="inv" class="on">库存</div>
+  <div data-t="add">录入</div>
+  <div data-t="sell">出售</div>
+  <div data-t="rec">记录</div>
+  <div data-t="set">设置</div>
+</nav>
 
-<!-- 编辑商品弹层 -->
+<main id="main">
+  <!-- 库存 -->
+  <div id="pInv">
+    <div class="seg">
+      <div id="segLoc" class="on">手机库存</div>
+      <div id="segPc">电脑库存</div>
+    </div>
+    <div class="searchrow"><input id="inKw" placeholder="搜编号 / 品牌 / 型号 / 货架 / 备注">
+      <button id="btnKw">搜索</button></div>
+    <div class="stat" id="invStat"></div>
+    <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <!-- 录入 -->
+  <div id="pAdd" class="hide">
+    <div class="card">
+      <h3>新增入库（编号自动生成）</h3>
+      <div class="frow">
+        <div class="fcol"><label>品牌</label><input id="aBrand"></div>
+        <div class="fcol"><label>品类</label><input id="aCate"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label>型号</label><input id="aModel"></div>
+        <div class="fcol"><label>成色</label><input id="aCond"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label>单价</label><input id="aPrice" inputmode="decimal"></div>
+        <div class="fcol"><label>数量</label><input id="aQty" inputmode="numeric" value="1"></div>
+      </div>
+      <div class="fcol"><label>货架</label><input id="aShelf"></div>
+      <div class="fcol"><label>备注</label><textarea id="aRemark" rows="2"></textarea></div>
+      <button id="btnAdd" style="width:100%">保存到手机</button>
+      <div class="hint">数据存在手机里，离线可用；开启「数据共享到电脑端」后会自动/手动同步到电脑。</div>
+    </div>
+  </div>
+  <!-- 出售 -->
+  <div id="pSell" class="hide">
+    <div class="card">
+      <h3>登记出售（手机库存）</h3>
+      <div class="fcol"><label>商品编号</label><input id="sCode" autocapitalize="characters" placeholder="手机库存里的编号"></div>
+      <div class="frow">
+        <div class="fcol"><label>数量</label><input id="sQty" inputmode="numeric" value="1"></div>
+        <div class="fcol"><label>单价（留空按原价）</label><input id="sPrice" inputmode="decimal"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label>买家</label><input id="sBuyer"></div>
+        <div class="fcol"><label>备注</label><input id="sRemark"></div>
+      </div>
+      <button id="btnSell" style="width:100%">登记出售</button>
+      <div class="hint" id="sellMsg"></div>
+    </div>
+  </div>
+  <!-- 记录 -->
+  <div id="pRec" class="hide">
+    <div class="stat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
+    <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
+  </div>
+  <!-- 设置 -->
+  <div id="pSet" class="hide">
+    <div class="card">
+      <h3>数据共享到电脑端</h3>
+      <div class="hint" style="margin:0 0 10px">手机数据照常存在手机里；开启后可把录入/出售同步到电脑（需电脑端已「开启共享」并授权）。</div>
+      <div class="fcol"><label>电脑地址（局域网共享 → 手机访问）</label>
+        <input id="shBase" placeholder="例如 192.168.1.5:8765" autocapitalize="off"></div>
+      <div class="fcol"><label>连接码</label>
+        <input id="shCode" type="password" inputmode="numeric" placeholder="电脑上显示的 6 位连接码"></div>
+      <div class="btnrow" style="display:flex;gap:10px">
+        <button id="btnShareConn" style="flex:1">连接电脑</button>
+        <button id="btnShareOff" class="gray" style="flex:1">断开</button>
+      </div>
+      <div class="statline" id="shareStat"></div>
+      <div class="btnrow" style="display:flex;gap:10px;margin-top:6px">
+        <button id="btnSync" style="flex:1">立即同步到电脑</button>
+        <button id="btnAuto" class="gray" style="flex:1">自动同步：关</button>
+      </div>
+      <div class="stat" id="syncStat"></div>
+    </div>
+    <div class="card">
+      <h3>编号前缀</h3>
+      <div class="frow">
+        <div class="fcol"><input id="inPrefix" placeholder="APP"></div>
+        <button id="btnPrefix" class="gray" style="flex:none">保存</button>
+      </div>
+      <div class="stat" id="prefixStat"></div>
+    </div>
+    <div class="card">
+      <h3>数据管理</h3>
+      <div class="statline" id="dataStat"></div>
+      <button id="btnWipe" class="danger" style="width:100%;margin-top:10px">清空手机数据</button>
+      <div class="hint">只清手机上的库存和出售记录；已同步到电脑的数据不受影响。操作前请先同步。</div>
+    </div>
+  </div>
+</main>
+
+<!-- 编辑商品 -->
 <div id="mask" class="hide">
   <div id="sheet">
-    <h3><span id="shTitle">修改商品</span><button class="gray" id="shClose" style="padding:6px 12px">关闭</button></h3>
-    <div class="frow">
-      <div class="fcol"><label>品牌</label><input id="eBrand"></div>
-      <div class="fcol"><label>品类</label><input id="eCate"></div>
-    </div>
-    <div class="frow">
-      <div class="fcol"><label>型号</label><input id="eModel"></div>
-      <div class="fcol"><label>成色</label><input id="eCond"></div>
-    </div>
-    <div class="frow">
-      <div class="fcol"><label>单价</label><input id="ePrice" inputmode="decimal"></div>
-      <div class="fcol"><label>数量</label><input id="eQty" inputmode="numeric"></div>
-    </div>
-    <div class="frow">
-      <div class="fcol"><label>货架</label><input id="eShelf"></div>
-      <div class="fcol"><label>上架</label><select id="eListed"><option value="1">上架</option><option value="0">下架</option></select></div>
-    </div>
-    <div class="fcol"><label>备注</label><textarea id="eRemark" rows="2"></textarea></div>
-    <button id="btnESave" style="width:100%;margin-top:6px">保存到电脑</button>
+    <h3><span id="shTitle">修改商品</span><button class="gray small" id="shClose">关闭</button></h3>
+    <div id="shBody"></div>
   </div>
 </div>
 
@@ -211,31 +193,83 @@ tr:active { background:#f0f5ff; }
 'use strict';
 var $ = function (id) { return document.getElementById(id); };
 var LS = window.localStorage;
-var base = '', token = '', titles = {}, curItem = null, editField = '';
+var base = '';                        // 电脑地址（共享用）
+var titles = {};                      // 电脑端列题
+var curItem = null;                   // 正在编辑的本地记录
+var invView = 'loc';                  // loc=手机库存 pc=电脑库存
 
+/* ================= 本地数据库 ================= */
+function blankDB() {
+  return { items: [], sales: [], seq: 1, prefix: 'APP',
+           share: { base: '', code: '', token: '', auto: 0, last: '' } };
+}
+var DB = blankDB();
+function loadDB() {
+  try {
+    var raw = LS.getItem('cgm_db');
+    if (raw) DB = JSON.parse(raw);
+  } catch (e) { DB = blankDB(); }
+  if (!DB.share) DB.share = blankDB().share;
+}
+function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
+function itemByLid(lid) {
+  for (var i = 0; i < DB.items.length; i += 1)
+    if (DB.items[i].lid === lid) return DB.items[i];
+  return null;
+}
+function nextCode() {
+  var p = (DB.prefix || 'APP').replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '') || 'APP';
+  var c = p + '-' + ('00000' + DB.seq).slice(-5);
+  DB.seq += 1;
+  return c;
+}
+function pendingCount() {
+  var n = 0;
+  DB.items.forEach(function (it) { if (it.dirty) n += 1; });
+  DB.sales.forEach(function (s) { if (s.dirty) n += 1; });
+  return n;
+}
+function nowStr() {
+  var d = new Date(), p2 = function (x) { return ('0' + x).slice(-2); };
+  return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) +
+         ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+}
 function toast(msg) {
   var t = $('toast'); t.textContent = msg; t.classList.remove('hide');
   clearTimeout(t._h); t._h = setTimeout(function () { t.classList.add('hide'); }, 2600);
 }
-function showErr(id, msg) {
-  var el = $(id);
-  if (!msg) { el.style.display = 'none'; return; }
-  el.style.display = 'block';
-  el.className = 'errBoxWrap';
-  el.style.cssText = 'display:block;background:#fdecec;color:#c03538;border:1px solid #f5c2c4;border-radius:8px;padding:9px 11px;font-size:13px;margin-bottom:10px;line-height:1.5';
-  el.textContent = msg;
+
+/* ================= 确认弹层 ================= */
+var confirmCb = null;
+function askConfirm(msg, okText, cb) {
+  $('shTitle').textContent = '请确认';
+  var b = $('shBody');
+  b.innerHTML = '';
+  var p = document.createElement('div');
+  p.style.cssText = 'font-size:14px;line-height:1.7;color:#44506a';
+  p.textContent = msg;
+  b.appendChild(p);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var no = document.createElement('button'); no.className = 'gray'; no.textContent = '取消';
+  var yes = document.createElement('button'); yes.className = 'danger'; yes.textContent = okText || '确定';
+  no.onclick = function () { $('mask').classList.add('hide'); confirmCb = null; };
+  yes.onclick = function () { $('mask').classList.add('hide'); if (confirmCb) confirmCb(); confirmCb = null; };
+  confirmCb = cb;
+  row.appendChild(no); row.appendChild(yes); b.appendChild(row);
+  $('mask').classList.remove('hide');
 }
-/* ---------------- API（XHR：本地 file:// 页面向电脑跨源请求最稳的方式） ---------------- */
+
+/* ================= 电脑接口（XHR + X-MToken） ================= */
 function api(method, path, body) {
   return new Promise(function (resolve, reject) {
     var x = new XMLHttpRequest();
     x.open(method, base + path, true);
-    x.setRequestHeader('X-MToken', token);
+    x.setRequestHeader('X-MToken', DB.share.token || '');
     x.onreadystatechange = function () {
       if (x.readyState !== 4) return;
       var j = {};
       try { j = JSON.parse(x.responseText); } catch (e2) {}
-      if (x.status === 401 && j.need_login) { logoutLocal(); reject(new Error('登录已过期，请重新登录')); return; }
+      if (x.status === 401 && j.need_login) { dropShare('连接已失效，请重新连接电脑'); reject(new Error('need_login')); return; }
       if (x.status === 0) { reject(new Error('连不上电脑（检查共享是否开启、同一 WiFi）')); return; }
       if (x.status >= 400 || j.ok === false) { reject(new Error(j.error || ('请求失败 ' + x.status))); return; }
       resolve(j);
@@ -244,7 +278,11 @@ function api(method, path, body) {
     else { x.setRequestHeader('Content-Type', 'application/json'); x.send(JSON.stringify(body)); }
   });
 }
-/* ---------------- 登录 ---------------- */
+function dropShare(msg) {
+  DB.share.token = '';
+  saveDB(); refreshHead();
+  if (msg) toast(msg);
+}
 function normBase(v) {
   v = (v || '').trim();
   if (!v) return '';
@@ -253,286 +291,442 @@ function normBase(v) {
   v = v.replace(/\/m(\/)?$/, '');
   return v;
 }
-function logoutLocal() {
-  token = ''; LS.removeItem('cgm_token');
-  $('vMain').classList.add('hide');
-  $('vLogin').classList.remove('hide');
+function refreshHead() {
+  var conn = !!DB.share.token;
+  $('hPerm').textContent = conn ? (shareWritable() ? '已连接电脑 · 可录入' : '已连接电脑') : '本地模式';
+  $('hPerm').className = 'badge' + (conn && shareWritable() ? ' rw' : '');
+  $('btnReq').classList.toggle('hide', !(conn && !shareWritable()));
 }
-$('btnLogin').onclick = function () {
-  var b = normBase($('inBase').value), code = $('inCode').value.trim();
-  $('loginErr').textContent = '';
-  if (!b) { $('loginErr').textContent = '请填写电脑地址'; return; }
-  if (!code) { $('loginErr').textContent = '请填写连接码'; return; }
-  base = b; LS.setItem('cgm_base', b);
-  $('btnLogin').disabled = true;
+function shareWritable() { return !!shareWritableFlag; }
+var shareWritableFlag = false;
+
+/* 连接电脑 */
+$('btnShareConn').onclick = function () {
+  var b = normBase($('shBase').value), code = $('shCode').value.trim();
+  if (!b) { toast('请填写电脑地址'); return; }
+  if (!code) { toast('请填写连接码'); return; }
+  base = b;
+  $('btnShareConn').disabled = true;
   var x = new XMLHttpRequest();
   x.open('POST', b + '/m/login', true);
   x.setRequestHeader('Content-Type', 'application/json');
   x.onreadystatechange = function () {
     if (x.readyState !== 4) return;
-    $('btnLogin').disabled = false;
+    $('btnShareConn').disabled = false;
     var j = {};
     try { j = JSON.parse(x.responseText); } catch (e2) {}
-    if (x.status === 0) { $('loginErr').textContent = '连不上电脑（检查是否已开启共享、同一 WiFi）'; return; }
-    if (!j.ok) { $('loginErr').textContent = j.error || '登录失败'; return; }
-    token = j.token || '';
-    if (!token) { $('loginErr').textContent = '电脑端版本过旧，请先升级电脑端'; return; }
-    LS.setItem('cgm_token', token);
-    enterMain();
+    if (x.status === 0) { toast('连不上电脑（检查是否已开启共享、同一 WiFi）'); return; }
+    if (!j.ok) { toast(j.error || '连接失败'); return; }
+    DB.share.base = b; DB.share.code = code; DB.share.token = j.token || '';
+    saveDB();
+    if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
+    $('shBase').value = b;
+    toast('已连接电脑');
+    api('GET', '/m/api/whoami').then(function (w) {
+      shareWritableFlag = !!w.can_write;
+      refreshHead(); renderShare(); renderSync();
+      toast('已连接：' + (w.warehouse || '电脑端'));
+    }).catch(function () { refreshHead(); renderShare(); renderSync(); });
   };
   x.send(JSON.stringify({ code: code, app: 1 }));
 };
-$('inCode').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('btnLogin').click(); });
-
-/* ---------------- 主界面 ---------------- */
-function enterMain() {
-  $('vLogin').classList.add('hide');
-  $('vMain').classList.remove('hide');
-  loadTitles().then(loadWho).then(function () { tab('inv'); });
-}
-function loadWho() {
-  return api('GET', '/m/api/whoami').then(function (j) {
-    $('hWh').textContent = j.warehouse || '仓管家';
-    var rw = !!j.can_write;
-    $('hPerm').textContent = rw ? '可录入' : '只读';
-    $('hPerm').className = 'badge' + (rw ? ' rw' : '');
-    $('btnReq').style.display = rw ? 'none' : '';
-  });
-}
+$('btnShareOff').onclick = function () {
+  if (DB.share.token) api('POST', '/m/logout').catch(function () {});
+  DB.share.token = ''; shareWritableFlag = false;
+  saveDB(); refreshHead(); renderShare(); renderSync();
+  toast('已断开（手机数据不受影响）');
+};
 $('btnReq').onclick = function () {
   api('POST', '/m/api/request_write').then(function () {
     toast('已向电脑发送申请，请在电脑上确认弹窗');
     var n = 0;
     var h = setInterval(function () {
       n += 1;
-      loadWho().then(function () {
-        if ($('hPerm').textContent === '可录入') { toast('已授权，可以录入了'); clearInterval(h); }
+      api('GET', '/m/api/whoami').then(function (w) {
+        shareWritableFlag = !!w.can_write; refreshHead();
+        if (shareWritableFlag) { toast('已授权，可以同步到电脑了'); clearInterval(h); renderShare(); }
       }).catch(function () { clearInterval(h); });
       if (n >= 20) clearInterval(h);
     }, 3000);
   }).catch(function (e) { toast(e.message || e); });
 };
-$('btnOut').onclick = function () {
-  api('POST', '/m/logout').catch(function () {}).then(logoutLocal);
-};
-$('btnChange').onclick = function () {
-  if (window.App && App.changeAddress) App.changeAddress();
-  else logoutLocal();
-};
-$('btnReconn').onclick = logoutLocal;
 
-/* 页签 */
-var loadedTabs = {};
-function tab(name) {
+/* ================= 同步到电脑 ================= */
+function findPcId(pcCode) {
+  return api('GET', '/m/api/items?kw=' + encodeURIComponent(pcCode)).then(function (j) {
+    var hit = null;
+    (j.items || []).forEach(function (r) { if (r.code === pcCode) hit = r; });
+    return hit ? hit.id : 0;
+  });
+}
+function pushItem(it) {
+  var unsold = 0;
+  DB.sales.forEach(function (s) { if (s.dirty && s.lidRef === it.lid) unsold += s.qty; });
+  var fields = {
+    brand: it.brand || '', category: it.category || '', model: it.model || '',
+    condition: it.condition || '', price: it.price || 0, shelf: it.shelf || '',
+    listed: it.listed === 0 ? 0 : 1, remark: it.remark || ''
+  };
+  if (!it.pc_code) {
+    // 首次上传：数量 = 当前库存 + 未同步的出售量（电脑端再按出售逐笔扣减）
+    fields.qty = it.qty + unsold;
+    return api('POST', '/m/api/add', fields).then(function (j) {
+      it.pc_code = j.code || '';
+      if (!unsold) it.dirty = 0;
+      saveDB();
+    });
+  }
+  // 已在电脑上：更新资料。有未同步出售时不动数量（电脑端按出售扣）。
+  return findPcId(it.pc_code).then(function (id) {
+    if (!id) { it.pc_code = ''; saveDB(); return pushItem(it); }   // 电脑上已被删 → 当新记录重传
+    fields.id = id;
+    if (unsold) delete fields.qty;
+    else fields.qty = it.qty;
+    return api('POST', '/m/api/update_all', fields).then(function () {
+      if (!unsold) it.dirty = 0;
+      saveDB();
+    });
+  });
+}
+function pushSale(s) {
+  var it = itemByLid(s.lidRef);
+  var pre = Promise.resolve();
+  if (it && it.dirty) pre = pushItem(it);          // 先把商品传上去拿电脑编号
+  return pre.then(function () {
+    var pc = (it && it.pc_code) || s.pc_code;
+    if (!pc) { s.dirty = 0; saveDB(); return Promise.resolve(); }  // 商品已删，记录本地留档
+    return api('POST', '/m/api/sell',
+               { code: pc, qty: s.qty, price: s.price, buyer: s.buyer || '', remark: s.remark || '' })
+      .then(function () { s.pc_code = pc; s.dirty = 0; saveDB(); });
+  });
+}
+function syncAll(manual) {
+  if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
+  if (!pendingCount()) { if (manual) toast('没有待同步的数据'); renderSync(); return Promise.resolve(); }
+  return api('GET', '/m/api/whoami').then(function (w) {
+    shareWritableFlag = !!w.can_write; refreshHead();
+    if (!w.can_write) {
+      api('POST', '/m/api/request_write').catch(function () {});
+      throw new Error('电脑端未授权录入：已发出申请，请在电脑上确认弹窗后重试');
+    }
+    var p = Promise.resolve();
+    DB.items.forEach(function (it) {
+      if (it.dirty) p = p.then(function () { return pushItem(it); });
+    });
+    DB.sales.forEach(function (s) {
+      if (s.dirty) p = p.then(function () { return pushSale(s); });
+    });
+    return p;
+  }).then(function () {
+    DB.share.last = nowStr();
+    saveDB(); renderSync(); refreshHead();
+    if (manual) toast('同步完成：待同步 0 条');
+  }).catch(function (e) {
+    renderSync();
+    if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
+  });
+}
+$('btnSync').onclick = function () { syncAll(true); };
+$('btnAuto').onclick = function () {
+  DB.share.auto = DB.share.auto ? 0 : 1;
+  saveDB(); renderShare(); renderSync();
+  toast(DB.share.auto ? '已开启自动同步（每次改动后自动上传）' : '已关闭自动同步');
+};
+function autoSync() {
+  if (DB.share.auto && DB.share.token && pendingCount()) syncAll(false);
+}
+function renderShare() {
+  $('shBase').value = DB.share.base || $('shBase').value;
+  $('btnAuto').textContent = '自动同步：' + (DB.share.auto ? '开' : '关');
+  $('btnAuto').className = DB.share.auto ? '' : 'gray';
+  $('shareStat').innerHTML = '';
+  var line = $('shareStat');
+  line.textContent = DB.share.token
+    ? '已连接：' + (DB.share.base || '') + (shareWritable() ? '（已授权录入）' : '（只读，可申请录入）')
+    : '未连接。连接后手机数据可同步到电脑。';
+}
+function renderSync() {
+  var n = pendingCount();
+  $('syncStat').textContent = '待同步 ' + n + ' 条' +
+    (DB.share.last ? ' · 上次同步 ' + DB.share.last : '') +
+    (n && !DB.share.token ? '（连接电脑后同步）' : '');
+  $('btnSync').disabled = !DB.share.token || !n;
+}
+
+/* ================= 库存 ================= */
+var LOC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
+var PC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
+$('btnKw').onclick = function () { invView === 'loc' ? loadLoc($('inKw').value) : loadPc($('inKw').value); };
+$('inKw').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') $('btnKw').click();
+});
+$('segLoc').onclick = function () { invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = ''; loadLoc($('inKw').value); };
+$('segPc').onclick = function () {
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  invView = 'pc'; $('segPc').className = 'on'; $('segLoc').className = '';
+  loadPc($('inKw').value);
+};
+function mkHead(tbl, cols) {
+  var thead = tbl.tHead; thead.innerHTML = '';
+  var tr = document.createElement('tr');
+  cols.forEach(function (f) {
+    var th = document.createElement('th');
+    th.textContent = titles[f] || CT_DEFS[f] || f;
+    tr.appendChild(th);
+  });
+  thead.appendChild(tr);
+}
+function loadLoc(kw) {
+  kw = (kw || '').toLowerCase();
+  mkHead($('tInv'), LOC_COLS);
+  var tb = $('tInv').tBodies[0]; tb.innerHTML = '';
+  var rows = DB.items.filter(function (it) {
+    if (!kw) return true;
+    return LOC_COLS.concat(['category', 'remark']).some(function (f) {
+      return String(it[f] || '').toLowerCase().indexOf(kw) >= 0;
+    });
+  });
+  rows.sort(function (a, b) { return a.lid - b.lid; });
+  $('invStat').textContent = '手机库存 ' + DB.items.length + ' 条（点行可修改；数据存在手机）';
+  if (!rows.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">还没有记录，去「录入」添加</td></tr>'; return; }
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    if (r.sold_out) tr.className = 'sold';
+    LOC_COLS.forEach(function (f) {
+      var td = document.createElement('td');
+      td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
+      tr.appendChild(td);
+    });
+    tr.onclick = function () { openEdit(r); };
+    tb.appendChild(tr);
+  });
+}
+function loadPc(kw) {
+  mkHead($('tInv'), PC_COLS);
+  var tb = $('tInv').tBodies[0];
+  tb.innerHTML = '<tr><td colspan="6" class="empty">读取电脑库存…</td></tr>';
+  api('GET', '/m/api/items?kw=' + encodeURIComponent(kw || '')).then(function (j) {
+    tb.innerHTML = '';
+    $('invStat').textContent = '电脑库存 ' + j.total + ' 条（只读；修改请在电脑端或手机录入后同步）';
+    if (!(j.items || []).length) { tb.innerHTML = '<tr><td colspan="6" class="empty">没有找到记录</td></tr>'; return; }
+    j.items.forEach(function (r) {
+      var tr = document.createElement('tr');
+      if (r.sold_out) tr.className = 'sold';
+      PC_COLS.forEach(function (f) {
+        var td = document.createElement('td');
+        td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+  }).catch(function (e) {
+    tb.innerHTML = '<tr><td colspan="6" class="empty">' + (e.message || e) + '</td></tr>';
+  });
+}
+/* 编辑本地商品 */
+function openEdit(r) {
+  curItem = r;
+  $('shTitle').textContent = '修改 ' + r.code;
+  var b = $('shBody'); b.innerHTML = '';
+  function field(label, id, val, extra) {
+    var w = document.createElement('div'); w.className = 'fcol';
+    var l = document.createElement('label'); l.textContent = label;
+    var inp = document.createElement('input'); inp.id = id; inp.value = val || '';
+    if (extra) inp.setAttribute('inputmode', extra);
+    w.appendChild(l); w.appendChild(inp);
+    return w;
+  }
+  function two(a, c) {
+    var w = document.createElement('div'); w.className = 'frow';
+    w.appendChild(a); w.appendChild(c); b.appendChild(w);
+  }
+  var fBrand = field('品牌', 'eBrand', r.brand);
+  var fCate = field('品类', 'eCate', r.category);
+  var fModel = field('型号', 'eModel', r.model);
+  var fCond = field('成色', 'eCond', r.condition);
+  var fPrice = field('单价', 'ePrice', r.price, 'decimal');
+  var fQty = field('数量', 'eQty', r.qty, 'numeric');
+  var fShelf = field('货架', 'eShelf', r.shelf);
+  two(fBrand, fCate); two(fModel, fCond); two(fPrice, fQty);
+  b.appendChild(fShelf);
+  var rowBtn = document.createElement('div'); rowBtn.className = 'btnrow';
+  var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除';
+  var bSave = document.createElement('button'); bSave.textContent = '保存';
+  rowBtn.appendChild(bDel); rowBtn.appendChild(bSave); b.appendChild(rowBtn);
+  bSave.onclick = function () {
+    r.brand = document.getElementById('eBrand').value;
+    r.category = document.getElementById('eCate').value;
+    r.model = document.getElementById('eModel').value;
+    r.condition = document.getElementById('eCond').value;
+    r.price = parseFloat(document.getElementById('ePrice').value) || 0;
+    r.qty = parseInt(document.getElementById('eQty').value, 10) || 0;
+    r.shelf = document.getElementById('eShelf').value;
+    r.sold_out = r.qty <= 0 ? 1 : 0; r.dirty = 1;
+    saveDB(); $('mask').classList.add('hide');
+    toast('已保存到手机' + (DB.share.auto ? '，正在同步…' : ''));
+    loadLoc($('inKw').value); renderSync(); renderData(); autoSync();
+  };
+  bDel.onclick = function () {
+    $('mask').classList.add('hide');
+    askConfirm('删除手机上的 ' + r.code + ' ？\n已同步到电脑的记录不会被删除。', '删除', function () {
+      DB.items = DB.items.filter(function (x) { return x.lid !== r.lid; });
+      saveDB(); loadLoc($('inKw').value); renderSync(); renderData();
+      toast('已删除（本地）');
+    });
+  };
+  $('mask').classList.remove('hide');
+}
+$('shClose').onclick = function () { $('mask').classList.add('hide'); };
+
+/* ================= 录入 ================= */
+$('btnAdd').onclick = function () {
+  var it = {
+    lid: Date.now(),
+    code: nextCode(),
+    brand: $('aBrand').value.trim(), category: $('aCate').value.trim(),
+    model: $('aModel').value.trim(), condition: $('aCond').value.trim(),
+    price: parseFloat($('aPrice').value) || 0,
+    qty: parseInt($('aQty').value, 10) || 1,
+    shelf: $('aShelf').value.trim(), listed: 1,
+    remark: $('aRemark').value.trim(), sold_out: 0, pc_code: '', dirty: 1
+  };
+  if (!it.brand && !it.category && !it.model) { toast('品牌 / 品类 / 型号 至少填一项'); return; }
+  DB.items.push(it);
+  saveDB();
+  toast('已入库：' + it.code + (DB.share.auto ? '，正在同步…' : '（待同步）'));
+  $('aModel').value = ''; $('aRemark').value = '';
+  renderSync(); renderData(); autoSync();
+};
+
+/* ================= 出售 ================= */
+$('btnSell').onclick = function () {
+  var code = $('sCode').value.trim();
+  var it = null;
+  DB.items.forEach(function (x) { if (x.code.toLowerCase() === code.toLowerCase()) it = x; });
+  if (!it) { toast('没有找到编号 ' + (code || '（请填写）')); return; }
+  if (it.sold_out || it.qty <= 0) { toast(it.code + ' 已售完'); return; }
+  var qty = parseInt($('sQty').value, 10) || 1;
+  if (qty > it.qty) { toast('库存只有 ' + it.qty + ' 个'); return; }
+  var price = $('sPrice').value === '' ? it.price : (parseFloat($('sPrice').value) || 0);
+  var s = {
+    lid: Date.now(), lidRef: it.lid, code: it.code, pc_code: it.pc_code || '',
+    brand: it.brand, model: it.model, qty: qty, price: price,
+    total: Math.round(qty * price * 100) / 100,
+    buyer: $('sBuyer').value.trim(), sale_date: nowStr(),
+    out_type: '出售', remark: $('sRemark').value.trim(), dirty: 1
+  };
+  DB.sales.push(s);
+  it.qty -= qty;
+  if (it.qty <= 0) { it.qty = 0; it.sold_out = 1; }
+  it.dirty = 1;
+  saveDB();
+  $('sellMsg').textContent = '已售出 ' + it.code + ' × ' + qty + '，合计 ¥' + s.total +
+    '，剩余 ' + it.qty;
+  toast('已登记出售' + (DB.share.auto ? '，正在同步…' : '（待同步）'));
+  $('sCode').value = '';
+  renderSync(); renderData(); autoSync();
+};
+
+/* ================= 记录 ================= */
+var REC_COLS = ['sale_date', 'code', 'brand', 'model', 'qty', 'total', 'buyer'];
+function loadRec() {
+  var tb = $('tRec').tBodies[0]; tb.innerHTML = '';
+  mkHead($('tRec'), REC_COLS);
+  if (!DB.sales.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">暂无出售记录</td></tr>'; return; }
+  var rows = DB.sales.slice().reverse();
+  rows.forEach(function (s) {
+    var tr = document.createElement('tr');
+    REC_COLS.forEach(function (f) {
+      var td = document.createElement('td');
+      td.textContent = (s[f] === null || s[f] === undefined) ? '' : s[f];
+      tr.appendChild(td);
+    });
+    var tdS = document.createElement('td');
+    var tag = document.createElement('span');
+    tag.className = 'tag ' + (s.dirty ? 'wait' : 'ok');
+    tag.textContent = s.dirty ? '待同步' : '已同步';
+    tdS.appendChild(tag);
+    tr.appendChild(tdS);
+    tb.appendChild(tr);
+  });
+}
+
+/* ================= 设置 ================= */
+$('btnPrefix').onclick = function () {
+  var v = $('inPrefix').value.trim().replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '');
+  DB.prefix = v || 'APP';
+  saveDB();
+  $('prefixStat').textContent = '新编号将形如 ' + DB.prefix + '-00001（已生成的不变）';
+  toast('前缀已保存：' + DB.prefix);
+};
+$('btnWipe').onclick = function () {
+  askConfirm('确定清空手机上的全部库存和出售记录？\n已同步到电脑的数据不受影响，但未同步的会丢失。', '全部清空', function () {
+    var keep = { seq: DB.seq, prefix: DB.prefix, share: DB.share };
+    DB = blankDB(); DB.seq = keep.seq; DB.prefix = keep.prefix; DB.share = keep.share;
+    saveDB();
+    loadLoc(''); loadRec(); renderSync(); renderData();
+    toast('已清空手机数据');
+  });
+};
+function renderData() {
+  $('dataStat').textContent = '手机库存 ' + DB.items.length + ' 条 · 出售记录 ' +
+    DB.sales.length + ' 条 · 待同步 ' + pendingCount() + ' 条';
+}
+
+/* ================= 页签 ================= */
+function tab2(name) {
   var tabs = document.querySelectorAll('nav div');
   for (var i = 0; i < tabs.length; i += 1)
     tabs[i].className = (tabs[i].getAttribute('data-t') === name) ? 'on' : '';
-  ['inv', 'add', 'sell', 'rec', 'set'].forEach(function (p) {
-    $('p' + p.charAt(0).toUpperCase() + p.slice(1)).classList.add('hide');
-  });
   var map = { inv: 'Inv', add: 'Add', sell: 'Sell', rec: 'Rec', set: 'Set' };
+  ['Inv', 'Add', 'Sell', 'Rec', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
   $('p' + map[name]).classList.remove('hide');
-  if (name === 'inv') loadItems($('inKw').value);
-  if (name === 'rec') loadSales($('inSkw').value);
-  if (name === 'set') renderCt();
-  if (name === 'sell' || name === 'add') loadWho();
+  if (name === 'inv') (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
+  if (name === 'rec') loadRec();
+  if (name === 'set') { renderShare(); renderSync(); renderData(); }
 }
 (function () {
   var tabs = document.querySelectorAll('nav div');
   for (var i = 0; i < tabs.length; i += 1)
-    tabs[i].onclick = function () { tab(this.getAttribute('data-t')); };
+    tabs[i].onclick = function () { tab2(this.getAttribute('data-t')); };
 })();
 
-/* ---------------- 库存 ---------------- */
-var INV_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
-$('btnKw').onclick = function () { loadItems($('inKw').value); };
-$('inKw').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadItems(this.value); });
-function loadItems(kw) {
-  return api('GET', '/m/api/items?kw=' + encodeURIComponent(kw || ''))
-    .then(function (j) {
-      var thead = $('tInv').tHead, tb = $('tInv').tBodies[0];
-      var tr = document.createElement('tr');
-      INV_COLS.forEach(function (f) {
-        var th = document.createElement('th');
-        th.textContent = titles[f] || f;
-        th.className = 'edit';
-        th.title = '点按修改列题';
-        th.onclick = function () { gotoColTitle(f); };
-        tr.appendChild(th);
-      });
-      thead.innerHTML = ''; thead.appendChild(tr);
-      tb.innerHTML = '';
-      $('invStat').textContent = '共 ' + j.total + ' 条（点行可修改）';
-      if (!j.items.length) {
-        tb.innerHTML = '<tr><td colspan="6" class="empty">没有找到记录</td></tr>';
-        return;
-      }
-      j.items.forEach(function (r) {
-        var row = document.createElement('tr');
-        if (r.sold_out) row.className = 'sold';
-        INV_COLS.forEach(function (f) {
-          var td = document.createElement('td');
-          td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
-          row.appendChild(td);
-        });
-        row.onclick = function () { openEdit(r); };
-        tb.appendChild(row);
-      });
-    })
-    .catch(function (e) { toast(e.message || e); });
-}
-/* ---------------- 修改商品 ---------------- */
-function openEdit(r) {
-  curItem = r;
-  $('shTitle').textContent = '修改 ' + (titles.code || '编号') + ' ' + r.code;
-  $('eBrand').value = r.brand || ''; $('eCate').value = r.category || '';
-  $('eModel').value = r.model || ''; $('eCond').value = r.condition || '';
-  $('ePrice').value = r.price || ''; $('eQty').value = r.qty || 0;
-  $('eShelf').value = r.shelf || ''; $('eListed').value = String(r.listed === 0 ? 0 : 1);
-  $('eRemark').value = r.remark || '';
-  $('mask').classList.remove('hide');
-}
-$('shClose').onclick = function () { $('mask').classList.add('hide'); };
-$('btnESave').onclick = function () {
-  if (!curItem) return;
-  var body = {
-    id: curItem.id,
-    brand: $('eBrand').value, category: $('eCate').value, model: $('eModel').value,
-    condition: $('eCond').value, price: parseFloat($('ePrice').value) || 0,
-    qty: parseInt($('eQty').value, 10) || 0, shelf: $('eShelf').value,
-    listed: $('eListed').value === '1' ? 1 : 0, remark: $('eRemark').value
-  };
-  $('btnESave').disabled = true;
-  api('POST', '/m/api/update_all', body).then(function (j) {
-    $('btnESave').disabled = false;
-    $('mask').classList.add('hide');
-    toast(j.message || '已保存');
-    loadItems($('inKw').value);
-  }).catch(function (e) {
-    $('btnESave').disabled = false;
-    toast(e.message || e);
-  });
-};
-/* ---------------- 录入 ---------------- */
-$('btnAdd').onclick = function () {
-  var body = {
-    brand: $('aBrand').value, category: $('aCate').value, model: $('aModel').value,
-    condition: $('aCond').value, price: parseFloat($('aPrice').value) || 0,
-    qty: parseInt($('aQty').value, 10) || 1, shelf: $('aShelf').value,
-    listed: 1, remark: $('aRemark').value
-  };
-  if (!body.brand && !body.category && !body.model) { toast('品牌 / 品类 / 型号 至少填一项'); return; }
-  $('btnAdd').disabled = true;
-  api('POST', '/m/api/add', body).then(function (j) {
-    $('btnAdd').disabled = false;
-    toast('已入库，编号 ' + (j.code || ''));
-    $('aModel').value = ''; $('aRemark').value = '';
-  }).catch(function (e) { $('btnAdd').disabled = false; toast(e.message || e); });
-};
-/* ---------------- 出售 ---------------- */
-$('btnSell').onclick = function () {
-  var body = {
-    code: $('sCode').value.trim(), qty: parseInt($('sQty').value, 10) || 1,
-    price: $('sPrice').value === '' ? null : parseFloat($('sPrice').value),
-    buyer: $('sBuyer').value, remark: $('sRemark').value
-  };
-  $('btnSell').disabled = true;
-  api('POST', '/m/api/sell', body).then(function (j) {
-    $('btnSell').disabled = false;
-    $('sellMsg').textContent = j.message || '';
-    toast(j.message || '已登记');
-    $('sCode').value = '';
-  }).catch(function (e) { $('btnSell').disabled = false; toast(e.message || e); });
-};
-/* ---------------- 记录 ---------------- */
-var REC_COLS = ['sale_date', 'code', 'brand', 'model', 'qty', 'total', 'buyer'];
-$('btnSkw').onclick = function () { loadSales($('inSkw').value); };
-$('inSkw').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadSales(this.value); });
-function loadSales(kw) {
-  api('GET', '/m/api/sales?kw=' + encodeURIComponent(kw || '')).then(function (j) {
-    var thead = $('tRec').tHead, tb = $('tRec').tBodies[0];
-    var tr = document.createElement('tr');
-    REC_COLS.forEach(function (f) {
-      var th = document.createElement('th');
-      th.textContent = titles[f === 'total' ? 'total' : f] || (f === 'total' ? '合计' : f);
-      tr.appendChild(th);
-    });
-    thead.innerHTML = ''; thead.appendChild(tr);
-    tb.innerHTML = '';
-    if (!j.sales.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">暂无出售记录</td></tr>'; return; }
-    j.sales.forEach(function (r) {
-      var row = document.createElement('tr');
-      REC_COLS.forEach(function (f) {
-        var td = document.createElement('td');
-        td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
-        row.appendChild(td);
-      });
-      tb.appendChild(row);
-    });
-  }).catch(function (e) { toast(e.message || e); });
-}
-/* ---------------- 列题设置 ---------------- */
-var CT_FIELDS = ['code', 'brand', 'category', 'model', 'condition', 'price',
-                 'qty', 'shelf', 'listed', 'remark'];
+/* ================= 列题（电脑端共享设置，用于电脑库存表头） ================= */
 var CT_DEFS = { code: '编号', brand: '品牌', category: '品类', model: '型号',
                 condition: '成色', price: '单价', qty: '数量', shelf: '货架',
                 listed: '上架', remark: '备注', total: '合计', sale_date: '日期' };
 function loadTitles() {
+  if (!DB.share.token) { titles = {}; return Promise.resolve(); }
   return api('GET', '/m/api/coltitles').then(function (j) {
     titles = j.titles || {};
   }).catch(function () { titles = {}; });
 }
-function renderCt() {
-  $('setBase').textContent = '电脑地址：' + base;
-  var box = $('ctList'); box.innerHTML = '';
-  CT_FIELDS.forEach(function (f) {
-    var row = document.createElement('div'); row.className = 'ctrow';
-    var def = document.createElement('span'); def.className = 'def';
-    def.textContent = CT_DEFS[f] || f;
-    var inp = document.createElement('input');
-    inp.value = titles[f] === (CT_DEFS[f] || f) ? '' : (titles[f] || '');
-    inp.placeholder = '留空恢复默认';
-    if (inp.value) inp.className = 'custom';
-    inp.setAttribute('data-f', f);
-    row.appendChild(def); row.appendChild(inp); box.appendChild(row);
-  });
-}
-function gotoColTitle(field) { tab('set'); setTimeout(function () {
-  var el = document.querySelector('#ctList input[data-f="' + field + '"]');
-  if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
-}, 120); }
-$('btnCtSave').onclick = function () {
-  var body = { titles: {} };
-  var inputs = document.querySelectorAll('#ctList input');
-  for (var i = 0; i < inputs.length; i += 1)
-    body.titles[inputs[i].getAttribute('data-f')] = inputs[i].value.trim();
-  $('btnCtSave').disabled = true;
-  api('POST', '/m/api/coltitles', body).then(function (j) {
-    $('btnCtSave').disabled = false;
-    titles = j.titles || {};
-    $('ctStat').textContent = '已保存 · 电脑端表头同步生效';
-    toast(j.message || '列题已保存');
-    renderCt();
-  }).catch(function (e) { $('btnCtSave').disabled = false; toast(e.message || e); });
-};
-$('btnCtReset').onclick = function () {
-  var body = { titles: {} };
-  var inputs = document.querySelectorAll('#ctList input');
-  for (var i = 0; i < inputs.length; i += 1) { inputs[i].value = ''; inputs[i].className = ''; }
-  $('btnCtSave').click();
-};
-/* ---------------- 启动 ---------------- */
+
+/* ================= 启动 ================= */
+loadDB();
+$('inPrefix').value = DB.prefix || 'APP';
+refreshHead();
+renderSync(); renderData();
 (function () {
   var m = (location.hash || '').match(/base=([^&]+)/);
   if (m) {
-    try { base = decodeURIComponent(m[1]); LS.setItem('cgm_base', base); } catch (e2) { base = ''; }
+    try {
+      var b = decodeURIComponent(m[1]);
+      if (b && !DB.share.base) { DB.share.base = b; saveDB(); }
+    } catch (e2) {}
   }
-  if (!base) base = LS.getItem('cgm_base') || '';
-  token = LS.getItem('cgm_token') || '';
-  $('inBase').value = base;
-  if (base && token) {
-    api('GET', '/m/api/whoami').then(enterMain).catch(function () { logoutLocal(); });
+  base = DB.share.base || '';
+  $('shBase').value = base;
+  if (base && DB.share.token) {
+    api('GET', '/m/api/whoami').then(function (w) {
+      shareWritableFlag = !!w.can_write;
+      refreshHead(); renderShare();
+      loadTitles().then(function () { if (invView === 'pc') loadPc($('inKw').value); });
+    }).catch(function () {});
+  } else {
+    renderShare();
   }
+  loadLoc(''); loadRec();
 })();
 </script>
 </body>
