@@ -778,6 +778,15 @@ try:
           and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
     check("中文识别模型随 App 打包（chi_sim）",
           os.path.isfile(os.path.join(_android_dir, "assets", "tessdata", "chi_sim.traineddata")))
+    # v1.20.1 修黑屏：必须等 surface 就绪再 setPreviewDisplay，且有无帧看门狗
+    check("相机等 surface 就绪再开预览（防黑屏）",
+          "surfaceReady()" in _sj and "getSurface().isValid()" in _sj
+          and "surfaceCreated(SurfaceHolder holder)" in _sj
+          and "startPreview()" in _sj and "watchdog" in _sj
+          and "Surface is not valid" in _sj)
+    check("相机打不开/预览失败有提示与自动重试",
+          "正在重试" in _sj and "相机打不开" in _sj
+          and "releaseCamera();" in _sj and "startCamera();" in _sj)
 except Exception as _e:
     check("扫一扫原生代码可检查", False, str(_e)[:100])
 # 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）

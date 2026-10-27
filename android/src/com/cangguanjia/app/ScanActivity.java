@@ -49,6 +49,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * 交互：把型号对准中间的框 → 框下方实时出现识别候选 → 点一下就填回仓管家。
  * 识别完全在手机上跑，不需要电脑、不需要网络。
+ *
+ * 相机时序要点（v1.20.1 修黑屏）：
+ *   必须等 SurfaceView 的 surface 真正创建后再 setPreviewDisplay + startPreview，
+ *   否则会抛 "Surface is not valid" 且相机对象残留在半开状态，之后再也不出画面。
  */
 public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
@@ -70,6 +74,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private Camera camera;
     private Camera.Size previewSize;
     private int rotateDeg = 90;
+    private int camIdx = 0;
+    private volatile boolean previewRunning = false;
+    private long lastFrameAt = 0L;
+    private volatile int restartCount = 0;      // 重启次数：真收到画面帧才清零，防死循环
 
     private TextView status;
     private TextView hintBig;
@@ -91,9 +99,8 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_PERM);
-        } else {
-            startCamera();
         }
+        // 相机不在这里开：等 surfaceCreated / 权限回调，避免 surface 未就绪导致黑屏
         prepareEngine();
     }
 
@@ -157,10 +164,19 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         bottom.setBackgroundColor(Color.argb(170, 0, 0, 0));
 
         status = new TextView(this);
-        status.setText("把型号对准框内…");
+        status.setText("正在打开相机…");
         status.setTextColor(Color.parseColor("#d7e2f5"));
         status.setTextSize(13);
         status.setGravity(Gravity.CENTER);
+        status.setOnClickListener(new View.OnClickListener() {   // 点一下可重试
+            @Override
+            public void onClick(View v) {
+                restartCount = 0;
+                status.setText("正在重新打开相机…");
+                releaseCamera();
+                startCamera();
+            }
+        });
 
         hintBig = new TextView(this);
         hintBig.setText("");
@@ -248,83 +264,187 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             startCamera();
         } else {
             toast("没有相机权限，无法扫一扫（可在系统设置里允许）");
+            setResult(RESULT_CANCELED);
             finish();
         }
     }
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        if (camera == null && checkSelfPermission(Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED) {
-            startCamera();
-        }
+        startCamera();
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int fmt, int w, int h) {
-        if (camera != null) {
-            try {
-                camera.stopPreview();
-                camera.startPreview();
-            } catch (Exception ignored) {
-            }
+        if (camera == null) return;
+        try {
+            camera.stopPreview();
+        } catch (Throwable ignored) {
         }
+        previewRunning = false;
+        openPreview();
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        previewRunning = false;
         releaseCamera();
     }
 
-    private void startCamera() {
-        if (camera != null) return;
-        try {
-            camera = Camera.open(0);
-        } catch (Exception e) {
-            camera = null;
-            status.setText("相机打不开：可能被其它应用占用");
-            toast("相机打不开，请关掉其它拍照应用后重试");
-            return;
+    /** 打不开相机的兜底态：返回是否成功拿到了 Camera 对象。 */
+    private boolean startCamera() {
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            return false;                      // 等权限回调
         }
+        if (camera != null) {
+            openPreview();
+            return true;
+        }
+        if (!surfaceReady()) {                 // surface 还没建好，等 surfaceCreated 回调
+            status.setText("正在打开相机…");
+            return false;
+        }
+
+        Camera c = null;
         try {
-            Camera.Parameters p = camera.getParameters();
+            c = openBackCamera();
+        } catch (Throwable ignored) {
+            c = null;
+        }
+        if (c == null) {
+            status.setText("相机打不开（可能被其它应用占用），点这里重试");
+            toast("相机打不开，请关掉其它拍照应用后重试");
+            return false;
+        }
+        camera = c;
+
+        try {
+            Camera.Parameters p = c.getParameters();
             p.setPreviewFormat(ImageFormat.NV21);
-            previewSize = pickSize(p.getSupportedPreviewSizes());
-            if (previewSize != null) {
-                p.setPreviewSize(previewSize.width, previewSize.height);
+            Camera.Size best = pickSize(p.getSupportedPreviewSizes());
+            if (best != null) {
+                p.setPreviewSize(best.width, best.height);
             }
             try {
                 p.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
-            camera.setParameters(p);
+            c.setParameters(p);
+
+            Camera.Size real = c.getParameters().getPreviewSize();   // 以实际生效为准
+            if (real != null) previewSize = real;
 
             Camera.CameraInfo info = new Camera.CameraInfo();
-            Camera.getCameraInfo(0, info);
-            rotateDeg = info.orientation;
-            camera.setDisplayOrientation(rotateDeg);
+            Camera.getCameraInfo(camIdx, info);
+            rotateDeg = info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT
+                    ? (360 - info.orientation) % 360 : info.orientation;
+            c.setDisplayOrientation(rotateDeg);
 
-            camera.setPreviewDisplay(preview.getHolder());
-            camera.startPreview();
-
-            try {
-                camera.setPreviewCallbackWithBuffer(new Camera.PreviewCallback() {
+            // 帧回调必须在 startPreview 之前挂上，否则部分机型不出帧
+            if (previewSize != null) {
+                int bits = ImageFormat.getBitsPerPixel(ImageFormat.NV21);
+                int need = previewSize.width * previewSize.height * bits / 8;
+                if (need > 0 && (frameBuffer == null || frameBuffer.length != need)) {
+                    frameBuffer = new byte[need];
+                }
+                c.setPreviewCallbackWithBuffer(new Camera.PreviewCallback() {
                     @Override
                     public void onPreviewFrame(byte[] data, Camera cam) {
-                        if (data != null) grab(data, cam);
-                        if (frameBuffer != null) cam.addCallbackBuffer(frameBuffer);
+                        lastFrameAt = System.currentTimeMillis();
+                        restartCount = 0;          // 真的出画面了才算恢复正常
+                        if (data != null) {
+                            try {
+                                grab(data, cam);
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                        if (frameBuffer != null) {
+                            try {
+                                cam.addCallbackBuffer(frameBuffer);
+                            } catch (Throwable ignored) {
+                            }
+                        }
                     }
                 });
-                Camera.Size ps = previewSize != null ? previewSize
-                        : camera.getParameters().getPreviewSize();
-                int bits = ImageFormat.getBitsPerPixel(ImageFormat.NV21);
-                frameBuffer = new byte[ps.width * ps.height * bits / 8];
-                camera.addCallbackBuffer(frameBuffer);
-            } catch (Exception ignored) {
+                c.addCallbackBuffer(frameBuffer);
             }
-        } catch (Exception e) {
-            status.setText("相机初始化失败：" + e.getClass().getSimpleName());
+        } catch (Throwable e) {
+            releaseCamera();
+            status.setText("相机初始化失败：" + e.getClass().getSimpleName() + "，点这里重试");
+            return false;
         }
+
+        openPreview();
+        return true;
+    }
+
+    /** 真正把预览挂到 SurfaceView 上并开流；surface 没准备好就安静返回，等回调再来。 */
+    private void openPreview() {
+        Camera c = camera;
+        if (c == null) return;
+        SurfaceHolder h = preview.getHolder();
+        if (h == null || h.getSurface() == null || !h.getSurface().isValid()) {
+            status.setText("正在打开相机…");
+            return;
+        }
+        try {
+            c.setPreviewDisplay(h);
+            c.startPreview();
+            previewRunning = true;
+            lastFrameAt = System.currentTimeMillis();
+            String size = previewSize == null ? "" : (" " + previewSize.width + "×" + previewSize.height);
+            status.setText("把型号对准框内…" + size);
+            startWatchdog();
+        } catch (Throwable e) {
+            previewRunning = false;
+            releaseCamera();
+            if (restartCount < 3) {
+                restartCount += 1;
+                status.setText("预览启动失败：" + e.getClass().getSimpleName() + "，正在重试…");
+                ui.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        startCamera();
+                    }
+                }, 700);
+            } else {
+                status.setText("预览启动失败，点这里重试");
+            }
+        }
+    }
+
+    /** 后摄优先（扫铭牌用后摄最清楚）。 */
+    private Camera openBackCamera() {
+        int n = 0;
+        try {
+            n = Camera.getNumberOfCameras();
+        } catch (Throwable ignored) {
+        }
+        int back = -1;
+        for (int i = 0; i < n; i++) {
+            Camera.CameraInfo ci = new Camera.CameraInfo();
+            try {
+                Camera.getCameraInfo(i, ci);
+            } catch (Throwable ignored) {
+                continue;
+            }
+            if (ci.facing == Camera.CameraInfo.CAMERA_FACING_BACK) {
+                back = i;
+                break;
+            }
+        }
+        if (back < 0) back = 0;
+        camIdx = back;
+        try {
+            return Camera.open(back);
+        } catch (Throwable e) {
+            return Camera.open();               // 再退一步
+        }
+    }
+
+    private boolean surfaceReady() {
+        SurfaceHolder h = preview == null ? null : preview.getHolder();
+        return h != null && h.getSurface() != null && h.getSurface().isValid();
     }
 
     private Camera.Size pickSize(List<Camera.Size> sizes) {
@@ -340,20 +460,49 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private void releaseCamera() {
         Camera c = camera;
         camera = null;
+        previewRunning = false;
+        frameBuffer = null;
         if (c != null) {
             try {
                 c.setPreviewCallbackWithBuffer(null);
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
             try {
                 c.stopPreview();
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
             try {
                 c.release();
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
             }
         }
+    }
+
+    // ------------------------------------------------------------- 看门狗
+    private final Runnable watchdog = new Runnable() {
+        @Override
+        public void run() {
+            if (isFinishing()) return;
+            long now = System.currentTimeMillis();
+            if (previewRunning && now - lastFrameAt > 4000) {
+                // 预览"在跑"却收不到画面帧：重建一次（最多 3 次）
+                if (restartCount < 3) {
+                    restartCount += 1;
+                    releaseCamera();
+                    startCamera();
+                    ui.postDelayed(this, 3000);
+                    return;
+                }
+                status.setText("相机没有画面，点这里重试");
+                return;
+            }
+            ui.postDelayed(this, 2000);
+        }
+    };
+
+    private void startWatchdog() {
+        ui.removeCallbacks(watchdog);
+        ui.postDelayed(watchdog, 4000);
     }
 
     // ------------------------------------------------------------- 抓帧 + 识别
@@ -363,12 +512,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         if (!busy.compareAndSet(false, true)) return;
         lastAt = now;
 
-        int w, h;
-        try {
-            Camera.Size ps = cam.getParameters().getPreviewSize();
-            w = ps.width;
-            h = ps.height;
-        } catch (Exception e) {
+        int w = previewSize != null ? previewSize.width : 0;
+        int h = previewSize != null ? previewSize.height : 0;
+        if (w <= 0 || h <= 0) {
             busy.set(false);
             return;
         }
@@ -531,7 +677,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     // ------------------------------------------------------------- 识别引擎
     private void prepareEngine() {
-        if (sApi != null) return;
+        if (sApi != null) {
+            if (lastShown.length() == 0) status.setText("把型号对准框内…");
+            return;
+        }
         if (!INITING.compareAndSet(false, true)) return;
         status.setText("正在准备识别引擎（首次约 2 秒）…");
         worker.execute(new Runnable() {
@@ -567,7 +716,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         if (!ok) {
                             status.setText("识别引擎初始化失败，请重装 App 试试");
                         } else if (lastShown.length() == 0) {
-                            status.setText("把型号对准框内…");
+                            status.setText(previewRunning ? "把型号对准框内…" : "正在打开相机…");
                         }
                     }
                 });
@@ -600,10 +749,26 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        ui.removeCallbacks(watchdog);
+        releaseCamera();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                && surfaceReady()) {
+            startCamera();
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        ui.removeCallbacksAndMessages(null);
         releaseCamera();
         worker.shutdownNow();
-        ui.removeCallbacksAndMessages(null);
     }
 }
