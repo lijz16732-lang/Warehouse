@@ -62,8 +62,12 @@ class MobileService(object):
             return 0.0
         return rest
 
-    def login(self, ip, code, code_ok):
-        """登录：返回 (http_code, body, extra_headers)。code_ok 是连接码校验函数。"""
+    def login(self, ip, code, code_ok, app_mode=False):
+        """登录：返回 (http_code, body, extra_headers)。code_ok 是连接码校验函数。
+
+        app_mode=True（APK 自带页面）时在响应体里附带令牌 —— 本地页面向主机
+        发跨源请求带不了 Cookie，App 把令牌存本地、用 X-MToken 头携带。
+        """
         with self._lock:
             rest = self._locked_rest(ip)
             if rest > 0:
@@ -85,7 +89,10 @@ class MobileService(object):
             self._fails.pop(ip, None)
             token = secrets.token_urlsafe(32)
             self._sessions[token] = {"ip": ip, "expires": time.time() + SESSION_TTL}
-        return 200, {"ok": True}, [_cookie(token)] + NO_STORE
+        body = {"ok": True}
+        if app_mode:
+            body["token"] = token
+        return 200, body, [_cookie(token)] + NO_STORE
 
     def check(self, token, ip):
         """会话是否有效（顺带滑动续期）。"""
@@ -163,6 +170,22 @@ def _token_of(cookies):
     return ""
 
 
+MTOKEN_HEADER = "X-MToken"
+
+
+def _token_from(headers):
+    """从请求里取会话令牌：优先 X-MToken 头（App 自带页面用，浏览器页面用 Cookie）。
+
+    App 的界面打包在 APK 本地（file://），向主机发跨源请求时浏览器 SameSite
+    策略不会带 Cookie，所以 App 登录后把令牌存在本地、放在这个头里传来。
+    令牌本身仍是主机签发的随机会话令牌，安全模型不变。
+    """
+    t = (headers.get(MTOKEN_HEADER) or "").strip()
+    if t:
+        return t
+    return _token_of(headers.get("Cookie") or "")
+
+
 def _fmt_price(v):
     try:
         f = float(v or 0)
@@ -232,6 +255,37 @@ def handle_sales(srv, ip, token, query):
         d["remark"] = _trim(d["remark"], 60)
         out.append(d)
     return 200, {"ok": True, "sales": out}, NO_STORE
+
+
+def handle_coltitles(srv, ip, token, payload=None):
+    """GET/POST /m/api/coltitles —— 表格列题自定义（电脑端与手机端共享一份）。
+
+    GET  → {"ok":True, "titles": {字段: 当前标题}}（含默认标题，App 直接用）
+    POST → {"titles": {字段: 新标题}} 保存；值为空 = 恢复默认。
+    保存属于写操作（电脑端表头同步变化），需主机「允许录入」授权。
+    """
+    if not srv.mobile.check(token, ip):
+        return 401, {"ok": False, "need_login": True, "error": "请先登录"}, NO_STORE
+    from .constants import FIELD_LABEL
+    store = srv.get_store()
+    if payload is None:                       # GET
+        custom = store.col_titles()
+        titles = {f: custom.get(f) or FIELD_LABEL[f] for f in FIELD_LABEL}
+        return 200, {"ok": True, "titles": titles, "custom": custom}, NO_STORE
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], dict(gate[1], readonly=True), NO_STORE
+    titles = (payload or {}).get("titles")
+    if not isinstance(titles, dict):
+        return 400, {"ok": False, "error": "参数不正确（titles 必须是对象）"}, NO_STORE
+    try:
+        store.set_col_titles(titles)
+    except Exception as e:
+        return 500, {"ok": False, "error": "保存列题失败：%s" % e}, NO_STORE
+    custom = store.col_titles()
+    all_titles = {f: custom.get(f) or FIELD_LABEL[f] for f in FIELD_LABEL}
+    return 200, {"ok": True, "message": "列题已保存，电脑端同步生效",
+                 "titles": all_titles, "custom": custom}, NO_STORE
 
 
 def _need_write(srv, ip, token):

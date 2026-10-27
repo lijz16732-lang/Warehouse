@@ -1257,13 +1257,14 @@ class App(object):
         cols = self._cols()
         if list(self.tree["columns"]) != cols:
             self.tree["columns"] = cols
+        titles = self.store.col_titles()      # 手机端/电脑端共享的自定义列题
         for c in cols:
             arrow = ""
             if self.sort_key == c:
                 arrow = " ▼" if self.sort_desc else " ▲"
             elif self.sort_key is None and c == "code":
                 arrow = " ▲"      # 默认按编号升序
-            self.tree.heading(c, text=FIELD_LABEL[c] + arrow,
+            self.tree.heading(c, text=(titles.get(c) or FIELD_LABEL[c]) + arrow,
                               command=lambda cc=c: self.sort_column(cc))
             self.tree.column(c, width=int(FIELD_WIDTH[c] * self.ui_scale),
                              minwidth=int(60 * self.ui_scale),

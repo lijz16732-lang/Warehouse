@@ -20,10 +20,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .constants import APP_NAME, APP_VERSION
-from .mobile import (MobileService, _token_of, handle_add, handle_logout,
-                     handle_page, handle_request_write, handle_sales,
-                     handle_sell, handle_update_all, handle_whoami,
-                     handle_items)
+from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
+                     handle_logout, handle_page, handle_request_write,
+                     handle_sales, handle_sell, handle_update_all,
+                     handle_whoami, handle_items)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -333,7 +333,7 @@ def _make_handler(srv):
                 return self._send_full(*handle_page())
             if path.startswith("/m/api/"):
                 # 手机端：会话 Cookie 鉴权（黑名单已在上面 _gate 拦过）
-                token = _token_of(self.headers.get("Cookie") or "")
+                token = _token_from(self.headers)
                 q = self._query()
                 if path.startswith("/m/api/whoami"):
                     return self._send_full(*handle_whoami(srv, ip, token))
@@ -341,6 +341,8 @@ def _make_handler(srv):
                     return self._send_full(*handle_items(srv, ip, token, q))
                 if path.startswith("/m/api/sales"):
                     return self._send_full(*handle_sales(srv, ip, token, q))
+                if path.startswith("/m/api/coltitles"):
+                    return self._send_full(*handle_coltitles(srv, ip, token))
                 return self._send(404, {"ok": False, "error": "not found"})
             # /ping（电脑客户端 4 秒轮询）
             q = self._query()
@@ -371,13 +373,14 @@ def _make_handler(srv):
                 return self._send(*gate)
             if path == "/m/login":
                 code, body, hdrs = srv.mobile.login(
-                    ip, str((payload or {}).get("code") or ""), srv._code_ok)
+                    ip, str((payload or {}).get("code") or ""), srv._code_ok,
+                    app_mode=bool((payload or {}).get("app")))
                 return self._send_full(code, body, hdrs)
             if path == "/m/logout":
-                token = _token_of(self.headers.get("Cookie") or "")
+                token = _token_from(self.headers)
                 return self._send_full(*handle_logout(srv, ip, token))
             if path.startswith("/m/api/"):
-                token = _token_of(self.headers.get("Cookie") or "")
+                token = _token_from(self.headers)
                 if path.startswith("/m/api/sell"):
                     return self._send_full(*handle_sell(srv, ip, token, payload))
                 if path.startswith("/m/api/add"):
@@ -386,6 +389,8 @@ def _make_handler(srv):
                     return self._send_full(*handle_update_all(srv, ip, token, payload))
                 if path.startswith("/m/api/request_write"):
                     return self._send_full(*handle_request_write(srv, ip, token))
+                if path.startswith("/m/api/coltitles"):
+                    return self._send_full(*handle_coltitles(srv, ip, token, payload))
                 return self._send(404, {"ok": False, "error": "not found"})
             if path.startswith("/request_write"):
                 if not srv._code_ok(str(payload.get("code") or "")):

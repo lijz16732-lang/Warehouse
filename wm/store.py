@@ -270,6 +270,44 @@ class Store(object):
         self._execute("INSERT INTO meta (k, v) VALUES (?, ?) "
                       "ON CONFLICT(k) DO UPDATE SET v = excluded.v", (key, str(value)))
 
+    # ---------------------------------------------------------- 列题自定义
+    # 存 meta["col_titles"]（JSON）：{字段名: 自定义标题}，电脑端表头与手机端
+    # 表格共用这一份设置 —— 手机上改了，电脑端表头跟着变，反之亦然。
+    COL_TITLES_KEY = "col_titles"
+    COL_TITLE_MAX = 12             # 标题最长 12 字（表格列宽有限）
+
+    def col_titles(self):
+        """返回 {字段名: 自定义标题}（只含有效自定义；无自定义返回空 dict）。"""
+        import json as _json
+        try:
+            raw = _json.loads(self.get_meta(self.COL_TITLES_KEY, "") or "{}")
+        except (ValueError, TypeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            return {}
+        out = {}
+        for k, v in raw.items():
+            t = str(v).strip()
+            if k in FIELD_KEYS and t and len(t) <= self.COL_TITLE_MAX:
+                out[k] = t
+        return out
+
+    def set_col_titles(self, mapping):
+        """保存列题自定义：值为空/超长 → 恢复该列默认标题；非法字段名忽略。"""
+        import json as _json
+        cur = self.col_titles()
+        for k, v in (mapping or {}).items():
+            if k not in FIELD_KEYS:
+                continue
+            t = str(v if v is not None else "").strip()
+            if t and len(t) <= self.COL_TITLE_MAX:
+                cur[k] = t
+            else:
+                cur.pop(k, None)
+        self.set_meta(self.COL_TITLES_KEY,
+                      _json.dumps(cur, ensure_ascii=False) if cur else "")
+        return cur
+
     # ---------------------------------------------------------------- 查询
     def all_records(self):
         # 默认升序：最早入库/编号最小的在最前（列表默认升序展示）

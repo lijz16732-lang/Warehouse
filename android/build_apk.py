@@ -4,7 +4,8 @@
 用法: .venv310/Scripts/python.exe android/build_apk.py
 依赖: JDK 17 + Android SDK build-tools/platforms（默认在 D:\android-build、D:\android-sdk，
       可用环境变量 CGM_JDK / CGM_SDK 覆盖）
-产物: dist/仓管家手机版.apk（WebView 壳，界面来自电脑端局域网共享的 /m 页面）
+产物: dist/仓管家手机版.apk（界面自带：assets/index.html 打包在 APK 内，离线可开；
+      数据经电脑端局域网共享接口实时读写）
 签名: 首次运行自动生成 android/cgm-release.keystore（密码 cgm12345，请妥善保存：
       以后升级 App 必须用同一把钥匙签名，否则手机上无法覆盖安装）
 """
@@ -100,11 +101,15 @@ def main():
     # 1. 编译资源
     res_zip = os.path.join(work, "res.zip")
     run(env, [aapt2, "compile", "--dir", os.path.join(HERE, "res"), "-o", res_zip])
-    # 2. 链接资源 + 清单 → 未装代码的 apk
+    # 2. 链接资源 + 清单 + assets（App 自带界面）→ 未装代码的 apk
     base = os.path.join(work, "base.apk")
-    run(env, [aapt2, "link", "-o", base, "-I", PLATFORM,
-              "--manifest", os.path.join(HERE, "AndroidManifest.xml"),
-              "-R", res_zip, "--auto-add-overlay"])
+    assets_dir = os.path.join(HERE, "assets")
+    link_cmd = [aapt2, "link", "-o", base, "-I", PLATFORM,
+                "--manifest", os.path.join(HERE, "AndroidManifest.xml"),
+                "-R", res_zip, "--auto-add-overlay"]
+    if os.path.isdir(assets_dir):
+        link_cmd += ["-A", assets_dir]
+    run(env, link_cmd)
     # 3. 编译 Java → class → dex
     srcs = []
     for dirpath, _, names in os.walk(os.path.join(HERE, "src")):
@@ -128,7 +133,7 @@ def main():
     print("\n=== APK 构建完成 ===")
     print("输出: %s (%.2f MB)" % (out, os.path.getsize(out) / 1048576.0))
     print("装到手机：把 apk 传到手机（微信文件传输/数据线均可）→ 安装 →")
-    print("打开 App 填电脑上「局域网共享 → 手机访问」的地址即可。")
+    print("打开 App 填电脑上「局域网共享 → 手机访问」的地址和连接码即可。")
 
 
 if __name__ == "__main__":

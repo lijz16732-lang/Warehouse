@@ -677,6 +677,71 @@ _lan_srv.allow("127.0.0.1", False)
 _msc, _mb, _ = _mreq("/m/api/add", {"brand": "x"}, opener=_mb_op)
 check("只读时手机新增被拒（403）", _msc == 403 and _mb.get("readonly"), (_msc, _mb))
 _lan_srv.allow("127.0.0.1", True)
+# ---- 列题自定义（v1.16.0）：手机改列题，电脑端表头同步 ----
+_msc, _mb, _ = _mreq("/m/api/coltitles", opener=_mb_op)
+check("列题 GET 返回全部默认标题",
+      _msc == 200 and _mb.get("ok") and _mb.get("titles", {}).get("brand") == "品牌"
+      and _mb.get("titles", {}).get("code") == "编号", (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/coltitles",
+                     {"titles": {"brand": "名称", "qty": "件数", "nocol": "x",
+                                 "code": "  ", "price": "一" * 13}},
+                     opener=_mb_op)
+check("列题 POST 保存成功（合法字段生效）",
+      _msc == 200 and _mb.get("ok") and _mb.get("custom", {}).get("brand") == "名称",
+      (_msc, _mb))
+check("列题保存只认白名单字段/空恢复默认/超长拒绝",
+      ss.col_titles().get("brand") == "名称" and ss.col_titles().get("qty") == "件数"
+      and "code" not in ss.col_titles() and "price" not in ss.col_titles()
+      and "nocol" not in ss.col_titles(), ss.col_titles())
+check("电脑端列题取值：自定义优先", ss.col_titles().get("brand") == "名称")
+_msc, _mb, _ = _mreq("/m/api/coltitles", opener=_mb_op)
+check("列题 GET 反映自定义后的标题",
+      _mb.get("titles", {}).get("brand") == "名称"
+      and _mb.get("titles", {}).get("model") == "型号", _mb.get("titles"))
+_msc, _mb, _ = _mreq("/m/api/coltitles", {"titles": {"brand": ""}}, opener=_mb_op)
+check("列题置空恢复默认", _msc == 200 and "brand" not in ss.col_titles(),
+      ss.col_titles())
+_lan_srv.allow("127.0.0.1", False)
+_msc, _mb, _ = _mreq("/m/api/coltitles", {"titles": {"brand": "x"}}, opener=_mb_op)
+check("只读时改列题被拒（403，列题改动会同步电脑端）",
+      _msc == 403 and _mb.get("readonly"), (_msc, _mb))
+_lan_srv.allow("127.0.0.1", True)
+# ---- App 自带界面（v1.16.0）：本地页面 + X-MToken 头鉴权 ----
+_msca, _mba, _ = _mreq("/m/login", {"code": "987654", "app": 1})
+check("app:1 登录在响应体返回令牌（本地页跨源带不了 Cookie）",
+      _msca == 200 and isinstance(_mba.get("token"), str)
+      and len(_mba["token"]) >= 40, (_msca, _mba.get("token", "")[:8]))
+_app_tok = _mba.get("token")
+_q = _ureq.Request("http://127.0.0.1:%d/m/api/whoami" % _lan_port,
+                   headers={"X-MToken": _app_tok})
+with _ureq.build_opener().open(_q, timeout=6) as _r:
+    _jw = json.loads(_r.read())
+check("X-MToken 头鉴权可用（App 本地页面方式）",
+      _jw.get("ok") and _jw.get("warehouse") == "测试仓", _jw)
+_q = _ureq.Request("http://127.0.0.1:%d/m/api/items?kw=" % _lan_port)
+try:
+    with _ureq.build_opener().open(_q, timeout=6) as _r:
+        _jn = json.loads(_r.read())
+except _uerr.HTTPError as _e:
+    _jn = json.loads(_e.read())
+check("不带令牌/Cookie 仍被拒（头鉴权不放宽安全）", _jn.get("need_login"), _jn)
+_app_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "android", "assets", "index.html")
+check("APK 自带界面文件存在", os.path.isfile(_app_path), _app_path)
+try:
+    import esprima  # noqa: E402
+    with open(_app_path, encoding="utf-8") as _f:
+        _app_html = _f.read()
+    _ajs = _app_html.split("<script>")[1].split("</" + "script>")[0]
+    esprima.parseScript(_ajs)
+    check("App 自带页面 JS 语法可解析（esprima）", True)
+    check("App 自带页面调用列题/库存/录入接口",
+          all(x in _ajs for x in ("/m/api/coltitles", "/m/api/items", "/m/api/add",
+                                  "X-MToken", "update_all")))
+except ImportError:
+    check("App 自带页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
+except Exception as _e:
+    check("App 自带页面 JS 语法可解析（esprima）", False, str(_e)[:100])
 # 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）
 try:
     import esprima  # noqa: E402

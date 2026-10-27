@@ -3,15 +3,14 @@ package com.cangguanjia.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -22,21 +21,20 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * 仓管家手机端壳：WebView 加载电脑端「局域网共享」提供的手机页面（http://电脑IP:端口/m）。
- * 数据全部实时来自电脑，手机上不存副本；安全（连接码/会话/授权）由电脑端负责。
+ * 仓管家手机端：界面打包在 APK 里（assets/index.html，本地加载、离线可用），
+ * 数据通过电脑端「局域网共享」的接口实时读写；安全（连接码/会话/授权）由电脑端负责。
  */
 public class MainActivity extends Activity {
 
     private static final String PREFS = "cgm";
     private static final String KEY_URL = "server_url";
+    private static final String LOCAL_PAGE = "file:///android_asset/index.html";
 
     private WebView web;
-    private LinearLayout setup;      // 首次使用：填电脑地址
-    private LinearLayout failed;     // 加载失败：重试
-    private TextView errText;
-    private String pendingUrl = "";
+    private LinearLayout setup;      // 首次使用 / 更换地址
+    private String pendingBase = "";
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -48,17 +46,13 @@ public class MainActivity extends Activity {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(false);
-        s.setAllowContentAccess(false);
+        // 界面文件在 APK 本地（file://），要向电脑发跨源请求（拿数据）：
+        s.setAllowFileAccess(true);                        // API 30+ 默认 false，必须打开
+        s.setAllowUniversalAccessFromFileURLs(true);       // 本地页 → http 接口跨源
         s.setMediaPlaybackRequiresUserGesture(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest req,
-                                        WebResourceError err) {
-                if (req != null && req.isForMainFrame()) showFailed();
-            }
-        });
+        web.setWebViewClient(new WebViewClient());         // 页面内部自行处理加载失败
+        web.addJavascriptInterface(new Bridge(), "App");   // 页面可唤起「更换地址」原生界面
 
         setContentView(buildRoot());
         String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_URL, "");
@@ -69,6 +63,16 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 暴露给页面 JS 的最小桥：只提供「更换电脑地址」一个动作。 */
+    private class Bridge {
+        @JavascriptInterface
+        public void changeAddress() {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { showSetup(); }
+            });
+        }
+    }
+
     /* ---------------- 根布局：三层叠放 ---------------- */
     private ViewGroup buildRoot() {
         LinearLayout root = new LinearLayout(this);
@@ -76,7 +80,6 @@ public class MainActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(buildSetup());
-        root.addView(buildFailed());
         return root;
     }
 
@@ -109,7 +112,7 @@ public class MainActivity extends Activity {
         setup.addView(tip, vp(-2, dp(60)));
 
         final EditText input = new EditText(this);
-        input.setHint("例如 http://192.168.1.5:8765/m");
+        input.setHint("例如 192.168.1.5:8765");
         input.setTextSize(15);
         input.setSingleLine(true);
         input.setBackgroundColor(Color.WHITE);
@@ -127,8 +130,11 @@ public class MainActivity extends Activity {
                 if (!u.startsWith("http://") && !u.startsWith("https://")) {
                     u = "http://" + u;
                 }
-                if (!u.contains("/m")) {
-                    u = u.replaceAll("/+$", "") + "/m";
+                u = u.replaceAll("/+$", "");
+                u = u.replaceAll("/m$", "");          // 只留协议://IP:端口，页面自己拼接口
+                if (u.length() <= 7) {
+                    Toast.makeText(MainActivity.this, "请填写电脑地址", Toast.LENGTH_SHORT).show();
+                    return;
                 }
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_URL, u).apply();
                 load(u);
@@ -145,77 +151,24 @@ public class MainActivity extends Activity {
         return setup;
     }
 
-    /* ---------------- 加载失败界面 ---------------- */
-    private View buildFailed() {
-        failed = new LinearLayout(this);
-        failed.setOrientation(LinearLayout.VERTICAL);
-        failed.setBackgroundColor(Color.parseColor("#f4f6fa"));
-        failed.setPadding(dp(28), dp(80), dp(28), dp(28));
-        failed.setGravity(Gravity.CENTER_HORIZONTAL);
-
-        TextView t = new TextView(this);
-        t.setText("连接不上电脑");
-        t.setTextSize(20);
-        t.setTextColor(Color.parseColor("#1c2333"));
-        failed.addView(t, vp(-2, dp(40)));
-
-        errText = new TextView(this);
-        errText.setText("请检查：电脑仓管家是否已「开启共享」；手机和电脑是否连着同一个 WiFi。");
-        errText.setTextSize(14);
-        errText.setTextColor(Color.parseColor("#8a94a6"));
-        failed.addView(errText, vp(-2, dp(56)));
-
-        Button retry = new Button(this);
-        retry.setText("重 试");
-        retry.setTextColor(Color.WHITE);
-        retry.setBackgroundColor(Color.parseColor("#1f6feb"));
-        retry.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { load(pendingUrl); }
-        });
-        failed.addView(retry, vp(-1, dp(48)));
-
-        Button change = new Button(this);
-        change.setText("更换电脑地址");
-        change.setTextColor(Color.parseColor("#1f6feb"));
-        change.setBackgroundColor(Color.WHITE);
-        change.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showSetup(); }
-        });
-        failed.addView(change, vp(-1, dp(48)));
-        return failed;
-    }
-
     /* ---------------- 流程控制 ---------------- */
-    private void load(String url) {
-        pendingUrl = url;
+    private void load(String base) {
+        pendingBase = base;
         setup.setVisibility(View.GONE);
-        failed.setVisibility(View.GONE);
         web.setVisibility(View.VISIBLE);
-        web.loadUrl(url);
+        // 电脑地址经 hash 传给本地页面；连不上电脑时页面内部会提示
+        web.loadUrl(LOCAL_PAGE + "#base=" + Uri.encode(base));
     }
 
     private void showSetup() {
         web.setVisibility(View.GONE);
-        failed.setVisibility(View.GONE);
         setup.setVisibility(View.VISIBLE);
-    }
-
-    private void showFailed() {
-        web.setVisibility(View.GONE);
-        setup.setVisibility(View.GONE);
-        errText.setText("地址：" + pendingUrl + "\n请检查：电脑仓管家是否已「开启共享」；"
-                + "手机和电脑是否连着同一个 WiFi。");
-        failed.setVisibility(View.VISIBLE);
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (setup.getVisibility() == View.VISIBLE) {
-                moveTaskToBack(true);
-                return true;
-            }
-            if (failed.getVisibility() == View.VISIBLE) {
                 moveTaskToBack(true);
                 return true;
             }
