@@ -32,10 +32,11 @@ header b { font-size:16px; flex:1; overflow:hidden; text-overflow:ellipsis; whit
 header .badge { font-size:11px; background:rgba(255,255,255,.22); border-radius:10px; padding:3px 8px; flex:none; }
 header .badge.rw { background:#2fb344; }
 header button { padding:6px 10px; font-size:12px; background:rgba(255,255,255,.18); flex:none; }
-nav { display:flex; background:var(--card); border-bottom:1px solid var(--line); flex:none; }
-nav div { flex:1; text-align:center; padding:10px 0; color:var(--soft); font-size:14px;
-          border-bottom:2px solid transparent; }
-nav div.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:700; }
+nav { display:flex; background:var(--card); border-top:1px solid var(--line); flex:none;
+      padding-bottom:env(safe-area-inset-bottom); }
+nav div { flex:1; text-align:center; padding:12px 0 10px; color:var(--soft); font-size:14px;
+          border-top:2px solid transparent; }
+nav div.on { color:var(--accent); border-top-color:var(--accent); font-weight:700; }
 main { flex:1; overflow:auto; padding:12px; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
 .card h3 { font-size:15px; margin-bottom:10px; }
@@ -101,14 +102,6 @@ tr:active { background:var(--active); }
   <b>仓管家</b>
   <span class="badge" id="hPerm">本地模式</span>
 </header>
-
-<nav>
-  <div data-t="inv" class="on">库存</div>
-  <div data-t="add">录入</div>
-  <div data-t="sell">出售</div>
-  <div data-t="rec">记录</div>
-  <div data-t="set">设置</div>
-</nav>
 
 <main id="main">
   <!-- 库存 -->
@@ -220,6 +213,14 @@ tr:active { background:var(--active); }
     </div>
   </div>
 </main>
+
+<nav>
+  <div data-t="inv" class="on">库存</div>
+  <div data-t="add">录入</div>
+  <div data-t="sell">出售</div>
+  <div data-t="rec">记录</div>
+  <div data-t="set">设置</div>
+</nav>
 
 <!-- 编辑商品 -->
 <div id="mask" class="hide">
