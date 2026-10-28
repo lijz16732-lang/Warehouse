@@ -24,7 +24,7 @@ SESSION_TTL = 12 * 3600          # 会话 12 小时滑动过期
 MAX_FAILS = 5                    # 登录失败次数上限
 FAIL_WINDOW = 600.0              # 失败计数窗口（秒）
 LOCKOUT = 600.0                  # 锁定时长（秒）
-PAGE_LIMIT = 200                 # 列表接口单次最多返回条数
+PAGE_LIMIT = 500                 # 列表接口单次最多返回条数
 COOKIE_NAME = "cgm_session"
 
 ITEM_FIELDS = ("id", "code", "brand", "category", "model", "condition",
@@ -239,13 +239,24 @@ def handle_items(srv, ip, token, query):
                        for f in ("code", "brand", "category", "model", "shelf", "remark"))
         rows = [r for r in rows if hit(r)]
     rows.sort(key=lambda r: (int(r.get("sold_out") or 0), str(r.get("code") or "")))
+    try:
+        offset = max(0, int(query.get("offset") or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(query.get("limit") or PAGE_LIMIT)
+    except (TypeError, ValueError):
+        limit = PAGE_LIMIT
+    limit = max(1, min(limit, PAGE_LIMIT))
+    page = rows[offset:offset + limit]
     out = []
-    for r in rows[:PAGE_LIMIT]:
+    for r in page:
         d = {k: r.get(k) for k in ITEM_FIELDS}
         d["remark"] = _trim(d["remark"], 60)
         d["price"] = _fmt_price(d["price"])
         out.append(d)
-    return 200, {"ok": True, "total": len(rows), "items": out}, NO_STORE
+    return 200, {"ok": True, "total": len(rows), "offset": offset,
+                 "has_more": offset + limit < len(rows), "items": out}, NO_STORE
 
 
 def handle_sales(srv, ip, token, query):

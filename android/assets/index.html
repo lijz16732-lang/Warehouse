@@ -635,28 +635,78 @@ function loadLoc(kw) {
     tb.appendChild(tr);
   });
 }
+var PC_PAGE = { kw: '', offset: 0, total: 0, hasMore: false, loading: false };
+function pcRow(r, cols) {
+  var tr = document.createElement('tr');
+  if (r.sold_out) tr.className = 'sold';
+  cols.forEach(function (f) {
+    var td = document.createElement('td');
+    td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
+    tr.appendChild(td);
+  });
+  return tr;
+}
+function pcMoreRow(cols) {
+  var tr = document.createElement('tr');
+  tr.className = 'more';
+  var td = document.createElement('td');
+  td.colSpan = cols.length;
+  td.className = 'empty';
+  td.textContent = '上拉加载更多…（已显示 ' + PC_PAGE.offset + ' / ' + PC_PAGE.total + '）';
+  tr.appendChild(td);
+  return tr;
+}
+function pcNearBottom() {
+  var m = $('main');
+  return m.scrollTop + m.clientHeight >= m.scrollHeight - 120;
+}
+function pcMaybeLoad() {
+  if (invView === 'pc' && PC_PAGE.hasMore && !PC_PAGE.loading && pcNearBottom()) pcLoadMore();
+}
+$('main').addEventListener('scroll', pcMaybeLoad);
+function pcLoadMore() {
+  if (PC_PAGE.loading || !PC_PAGE.hasMore) return;
+  PC_PAGE.loading = true;
+  var cols = curCols();
+  var tb = $('tInv').tBodies[0];
+  var more = tb.querySelector('tr.more');
+  if (more) more.remove();
+  api('GET', '/m/api/items?kw=' + encodeURIComponent(PC_PAGE.kw || '') +
+      '&offset=' + PC_PAGE.offset).then(function (j) {
+    PC_PAGE.loading = false;
+    (j.items || []).forEach(function (r) { tb.appendChild(pcRow(r, cols)); });
+    PC_PAGE.offset += (j.items || []).length;
+    PC_PAGE.hasMore = !!j.has_more;
+    $('invStat').textContent = '电脑库存 ' + PC_PAGE.total + ' 条（已显示 ' +
+      PC_PAGE.offset + '；只读）';
+    if (PC_PAGE.hasMore) tb.appendChild(pcMoreRow(cols));
+    setTimeout(pcMaybeLoad, 50);          // 一屏装得下时继续补
+  }).catch(function (e) {
+    PC_PAGE.loading = false;
+    toast(e.message || String(e));
+  });
+}
 function loadPc(kw) {
   var cols = curCols();
+  PC_PAGE = { kw: kw || '', offset: 0, total: 0, hasMore: false, loading: false };
   mkHead($('tInv'), cols);
   var tb = $('tInv').tBodies[0];
   tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">读取电脑库存…</td></tr>';
-  api('GET', '/m/api/items?kw=' + encodeURIComponent(kw || '')).then(function (j) {
+  api('GET', '/m/api/items?kw=' + encodeURIComponent(PC_PAGE.kw) +
+      '&offset=0').then(function (j) {
     tb.innerHTML = '';
-    $('invStat').textContent = '电脑库存 ' + j.total + ' 条（只读；修改请在电脑端或手机录入后同步）';
+    PC_PAGE.total = j.total || 0;
+    PC_PAGE.offset = (j.items || []).length;
+    PC_PAGE.hasMore = !!j.has_more;
+    $('invStat').textContent = '电脑库存 ' + j.total + ' 条（已显示 ' + PC_PAGE.offset +
+      '；只读；修改请在电脑端或手机录入后同步）';
     if (!(j.items || []).length) {
       tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">没有找到记录</td></tr>';
       return;
     }
-    (j.items || []).forEach(function (r) {
-      var tr = document.createElement('tr');
-      if (r.sold_out) tr.className = 'sold';
-      cols.forEach(function (f) {
-        var td = document.createElement('td');
-        td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
-        tr.appendChild(td);
-      });
-      tb.appendChild(tr);
-    });
+    (j.items || []).forEach(function (r) { tb.appendChild(pcRow(r, cols)); });
+    if (PC_PAGE.hasMore) tb.appendChild(pcMoreRow(cols));
+    setTimeout(pcMaybeLoad, 50);          // 首屏未满时自动续载
   }).catch(function (e) {
     tb.innerHTML = '<tr><td colspan="' + cols.length + '" class="empty">' +
       (e.message || e) + '</td></tr>';

@@ -623,6 +623,14 @@ _msc, _mb, _ = _mreq("/m/api/items?kw=", opener=_mb_op)
 check("手机端能读到库存",
       _msc == 200 and _mb.get("ok") and len(_mb.get("items") or []) == ss.count(),
       "items=%d" % len(_mb.get("items") or []))
+_msc, _p1, _ = _mreq("/m/api/items?kw=&limit=1&offset=0", opener=_mb_op)
+_msc2, _p2, _ = _mreq("/m/api/items?kw=&limit=1&offset=1", opener=_mb_op)
+check("电脑库存接口支持翻页（offset/limit/has_more）",
+      _msc == 200 and _msc2 == 200 and _p1.get("total") == ss.count()
+      and len(_p1.get("items") or []) == 1
+      and _p1.get("has_more") == (ss.count() > 1)
+      and _p2.get("items") and _p2["items"][0] != _p1["items"][0],
+      (_p1.get("total"), _p1.get("has_more")))
 _msc, _mb, _ = _mreq("/m/api/sales?kw=", opener=_mb_op)
 check("手机端能读到出售记录", _msc == 200 and _mb.get("ok") and "sales" in _mb, _msc)
 _msc, _mb, _ = _mreq("/m/api/sell", {"code": "WL-MOB", "qty": 1, "price": 9.9},
