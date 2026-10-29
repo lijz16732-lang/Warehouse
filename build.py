@@ -18,8 +18,8 @@ OUT_NAME = "仓管家-仓库管理系统"
 VERSION_TEMPLATE = '''# -*- coding: utf-8 -*-
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 23, 1, 0),
-    prodvers=(1, 23, 1, 0),
+    filevers=(1, 23, 2, 0),
+    prodvers=(1, 23, 2, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -32,12 +32,12 @@ VSVersionInfo(
       StringTable('080404b0', [
         StringStruct('CompanyName', '仓管家'),
         StringStruct('FileDescription', '仓管家 · 仓库管理系统'),
-        StringStruct('FileVersion', '1.23.1.0'),
+        StringStruct('FileVersion', '1.23.2.0'),
         StringStruct('InternalName', 'WarehouseManager'),
         StringStruct('LegalCopyright', 'Copyright (C) 2026'),
         StringStruct('OriginalFilename', '%(out)s.exe'),
         StringStruct('ProductName', '仓管家 · 仓库管理系统'),
-        StringStruct('ProductVersion', '1.23.1.0')
+        StringStruct('ProductVersion', '1.23.2.0')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

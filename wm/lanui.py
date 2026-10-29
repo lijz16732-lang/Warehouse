@@ -518,7 +518,7 @@ class LanDialog(tk.Toplevel):
                 text="开启共享后，地址和二维码才会生效。", fg=CLR_MUTED)
         self._render_qr(self._phone_qr_text(st) if hosting else "")
 
-    def _psel_changed(self):
+    def _psel_changed(self, _event=None):
         """手机列表选中状态 → 下线/拉黑按钮（只切按钮状态，防事件风暴）。"""
         if getattr(self, "_in_refresh", False):
             return
