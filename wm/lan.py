@@ -259,7 +259,11 @@ class LanServer(object):
             return 400, {"ok": False, "error": "参数格式不正确"}
         try:
             store = self.get_store()
-            result = getattr(store, method)(*args, **kwargs)
+            with self._lock:
+                cname = (self.clients.get(ip) or {}).get("name") or ""
+            src = ("电脑·%s" % cname) if cname else ("电脑(%s)" % ip)
+            with store.as_source(src):
+                result = getattr(store, method)(*args, **kwargs)
         except TypeError as e:
             return 400, {"ok": False, "error": "参数不匹配：%s" % e}
         except Exception as e:
@@ -384,20 +388,22 @@ def _make_handler(srv):
                 return self._send_full(*handle_logout(srv, ip, token))
             if path.startswith("/m/api/"):
                 token = _token_from(self.headers)
-                if path.startswith("/m/api/sell"):
-                    return self._send_full(*handle_sell(srv, ip, token, payload))
-                if path.startswith("/m/api/add"):
-                    return self._send_full(*handle_add(srv, ip, token, payload))
-                if path.startswith("/m/api/update_all"):
-                    return self._send_full(*handle_update_all(srv, ip, token, payload))
-                if path.startswith("/m/api/request_write"):
-                    return self._send_full(*handle_request_write(srv, ip, token))
-                if path.startswith("/m/api/m_item"):
-                    return self._send_full(*handle_m_item(srv, ip, token, payload))
-                if path.startswith("/m/api/m_sale"):
-                    return self._send_full(*handle_m_sale(srv, ip, token, payload))
-                if path.startswith("/m/api/coltitles"):
-                    return self._send_full(*handle_coltitles(srv, ip, token, payload))
+                st_ = srv.get_store()
+                with st_.as_source("手机(%s)" % ip):
+                    if path.startswith("/m/api/sell"):
+                        return self._send_full(*handle_sell(srv, ip, token, payload))
+                    if path.startswith("/m/api/add"):
+                        return self._send_full(*handle_add(srv, ip, token, payload))
+                    if path.startswith("/m/api/update_all"):
+                        return self._send_full(*handle_update_all(srv, ip, token, payload))
+                    if path.startswith("/m/api/request_write"):
+                        return self._send_full(*handle_request_write(srv, ip, token))
+                    if path.startswith("/m/api/m_item"):
+                        return self._send_full(*handle_m_item(srv, ip, token, payload))
+                    if path.startswith("/m/api/m_sale"):
+                        return self._send_full(*handle_m_sale(srv, ip, token, payload))
+                    if path.startswith("/m/api/coltitles"):
+                        return self._send_full(*handle_coltitles(srv, ip, token, payload))
                 return self._send(404, {"ok": False, "error": "not found"})
             if path.startswith("/request_write"):
                 if not srv._code_ok(str(payload.get("code") or "")):

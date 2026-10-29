@@ -18,8 +18,9 @@ from tkinter import filedialog, messagebox, ttk
 
 from .charts import HBarChart, ProgressStat, VBarChart
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN, OUT_TYPE_HINT,
-                        OUT_TYPE_SALE, OUT_TYPES, apply_window_icon, center_window)
+                        CLR_LOW_BG, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TEXT,
+                        CLR_WARN, OUT_TYPE_HINT, OUT_TYPE_SALE, OUT_TYPES,
+                        apply_window_icon, center_window)
 from .theme import RowHover, dot_check
 
 TARGET_KEY = "monthly_target"        # 月度销售目标（存库 meta，随仓库独立）
@@ -982,8 +983,8 @@ class SalesTab(ttk.Frame):
         self.tree.pack(side="left", fill="both", expand=True)
         # tag 优先级 = 创建先后（先创建的先胜）：鼠标划过 > 非销售黄底 > 斑马纹
         self.hover = RowHover(self.tree, self.app.root)
-        self.tree.tag_configure("other", background="#FFF7E6")   # 非销售出库：淡黄底
-        self.tree.tag_configure("odd", background="#F7FAFD")     # 斑马纹优先级最低
+        self.tree.tag_configure("other", background=CLR_LOW_BG)   # 非销售出库：淡黄底
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)     # 斑马纹优先级最低
         self.tree.bind("<Double-1>", lambda e: self.undo_selected())
         # 复制：拖选区块 / Ctrl+C / 右键菜单（与库存页一致的用法）
         self._drag_anchor = None      # (行 iid, 列下标)

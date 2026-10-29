@@ -8,6 +8,7 @@ import queue
 import random
 import socket
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -22,11 +23,13 @@ from .phone import PhoneTab
 from .sales import SalesTab, ask_sale
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
-                        CLR_HOVER_EDGE, CLR_MUTED,
-                        CLR_OK, CLR_TEXT, CLR_WARN, FIELD_ANCHOR, FIELD_KEYS,
-                        FIELD_LABEL, FIELD_TYPE, FIELD_WIDTH, LISTED_TEXT,
-                        MULTI_SEP, apply_window_icon, center_window,
-                        is_blank_model)
+                        CLR_ACCENT_LT, CLR_HEAD_FG, CLR_HOVER_EDGE, CLR_INPUT, CLR_LOW_BG,
+                        CLR_LOW_FG, CLR_MUTED, CLR_OK, CLR_ROW_ALT,
+                        CLR_UNLISTED_BG, CLR_UNLISTED_FG, CLR_TEXT, CLR_WARN,
+                        FIELD_ANCHOR, FIELD_KEYS, FIELD_LABEL, FIELD_TYPE,
+                        FIELD_WIDTH, FONT_SCALES, LISTED_TEXT, MULTI_SEP,
+                        apply_window_icon, app_dir, center_window,
+                        is_blank_model, resolve_data_dir)
 from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
@@ -43,28 +46,6 @@ PAGE_SIZES = ["100", "200", "500", "1000", "全部"]
 def shelf_parts(value):
     """把货架值按多货架分隔符拆成单个货架位列表（无分隔符时返回原值单元素）。"""
     return [p.strip() for p in str(value or "").split(MULTI_SEP) if p.strip()]
-
-
-def app_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def resolve_data_dir():
-    base = app_dir()
-    for cand in (os.path.join(base, "data"),
-                 os.path.join(os.environ.get("APPDATA", base), "WarehouseManager")):
-        try:
-            os.makedirs(cand, exist_ok=True)
-            probe = os.path.join(cand, ".wtest")
-            with open(probe, "w") as f:
-                f.write("1")
-            os.remove(probe)
-            return cand
-        except Exception:
-            continue
-    return base
 
 
 class App(object):
@@ -95,8 +76,11 @@ class App(object):
         # 屏幕自适应（笔记本 / 台式机、Win10 / Win11、高 DPI 全覆盖）
         self.screen_metrics = screen.screen_metrics(root)
         self.ui_scale = screen.ui_scale(self.screen_metrics)
-        screen.apply_tk_scaling(root, self.ui_scale)
-        self.fam = apply_theme(root, scale=self.ui_scale)
+        # 字体大小档位（settings.json font_scale）乘在缩放系数上：
+        # 点字号随 tk scaling 放大，行高/内边距随 apply_theme 的像素缩放放大
+        self.font_scale = float(self.settings.get("font_scale", 1.0) or 1.0)
+        screen.apply_tk_scaling(root, self.ui_scale * self.font_scale)
+        self.fam = apply_theme(root, scale=self.ui_scale * self.font_scale)
         self._set_icon()
 
         # 全局：所有下拉框选完即清除文字选中底色（筛选/编辑/导入映射等）。
@@ -631,7 +615,7 @@ class App(object):
         foot.pack(fill="x", padx=16, pady=(0, 12))
         tk.Label(foot, text="切换也可用顶部工具栏「仓库」下拉；移除只从列表去掉，\n"
                             "数据文件保留在数据目录，可随时手动找回。",
-                 bg=CLR_BG, fg="#9AA7BA", font=(self.fam, 8),
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8),
                  justify="left").pack(side="left")
         ttk.Button(foot, text="关闭", command=dlg.destroy).pack(side="right")
         # 居中显示（跟随主窗口）
@@ -698,6 +682,8 @@ class App(object):
         m.add_cascade(label="编辑", menu=em)
 
         vm = tk.Menu(m, tearoff=0)
+        vm.add_command(label="外观与快捷键设置…", command=self.open_appearance)
+        vm.add_separator()
         self.var_show_detail = tk.BooleanVar(value=bool(self.settings.get("show_detail", True)))
         vm.add_checkbutton(label="显示详情面板", variable=self.var_show_detail,
                            command=self._toggle_detail)
@@ -761,16 +747,19 @@ class App(object):
         self.tab_sales = SalesTab(self.nb, self, self.fam)
         self.tab_out = SalesTab(self.nb, self, self.fam, mode="out")
         self.tab_phone = PhoneTab(self.nb, self, self.fam)
-        # 顺序：库存管理 | 出售记录 | 出库记录 | 数据分析 | 手机数据
+        self.tab_log = ttk.Frame(self.nb)
+        # 顺序：库存管理 | 出售记录 | 出库记录 | 数据分析 | 手机数据 | 操作日志
         self.nb.add(self.tab_inv, text="  库存管理  ")
         self.nb.add(self.tab_sales, text="  出售记录  ")
         self.nb.add(self.tab_out, text="  出库记录  ")
         self.nb.add(self.tab_ana, text="  数据分析  ")
         self.nb.add(self.tab_phone, text="  手机数据  ")
+        self.nb.add(self.tab_log, text="  操作日志  ")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_toolbar()
         self._build_body()
+        self._build_log_tab()
         self._build_statusbar()
 
     def _sep(self, parent):
@@ -864,7 +853,7 @@ class App(object):
         labels = {"brand": "品牌", "category": "品类", "condition": "成色",
                   "shelf": "货架", "listed": "上架状态"}
         for key in ("brand", "category", "condition", "shelf", "listed"):
-            tk.Label(side, text=labels[key], bg=CLR_CARD, fg="#41506B",
+            tk.Label(side, text=labels[key], bg=CLR_CARD, fg=CLR_HEAD_FG,
                      font=(self.fam, 9)).pack(anchor="w", padx=16, pady=(6, 2))
             var = tk.StringVar(value="全部")
             # 品牌/品类/成色/货架允许手动输入（输入即筛，包含匹配）；
@@ -899,7 +888,7 @@ class App(object):
                   command=self.toggle_unlisted_hl, bg=CLR_CARD,
                   fam=self.fam, size=9).pack(anchor="w", padx=16, pady=(2, 0))
 
-        tk.Label(side, text="价格区间（元）", bg=CLR_CARD, fg="#41506B",
+        tk.Label(side, text="价格区间（元）", bg=CLR_CARD, fg=CLR_HEAD_FG,
                  font=(self.fam, 9)).pack(anchor="w", padx=16, pady=(12, 2))
         pf = tk.Frame(side, bg=CLR_CARD)
         pf.pack(fill="x", padx=16)
@@ -940,7 +929,7 @@ class App(object):
                                         font=(self.fam, 10, "bold"))
         self.lbl_table_title.pack(side="left")
         self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · 鼠标划过高亮整行 · 拖选单元格即选中 · 右键可复制或「区域上色」",
-                                 bg=CLR_CARD, fg="#9AA7BA", font=(self.fam, 8))
+                                 bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8))
         self.lbl_hint.pack(side="right")
         dot_check(tbar, "拖选即复制", self.var_drag_copy,
                   command=self._save_drag_copy, bg=CLR_CARD,
@@ -967,12 +956,12 @@ class App(object):
         self.hover = RowHover(self.tree, self.root)
         self.hover.on_change = self._on_hover_change
         # 下架（未上架）：淡灰底 + 灰字，与已上架一眼区分
-        self.tree.tag_configure("unlisted", background="#F1F3F7", foreground="#667085")
-        self.tree.tag_configure("low", background="#FFF3E2", foreground="#B54708")
-        self.tree.tag_configure("oos", foreground="#B54708")
-        self.tree.tag_configure("sold", foreground="#98A2B3")
+        self.tree.tag_configure("unlisted", background=CLR_UNLISTED_BG, foreground=CLR_UNLISTED_FG)
+        self.tree.tag_configure("low", background=CLR_LOW_BG, foreground=CLR_LOW_FG)
+        self.tree.tag_configure("oos", foreground=CLR_LOW_FG)
+        self.tree.tag_configure("sold", foreground=CLR_MUTED)
         # 斑马纹放最后：优先级最低，不会压住上面的底色
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
 
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         self.tree.bind("<Double-1>", self.on_double)
@@ -1050,7 +1039,7 @@ class App(object):
                                             "55c", "65c", "75c"))
         except tk.TclError:
             pass
-        self.detail_txt.tag_configure("k", foreground="#6B7A8F")
+        self.detail_txt.tag_configure("k", foreground=CLR_MUTED)
         self.detail_txt.tag_configure("v", foreground=CLR_TEXT)
         self.detail_txt.bind("<Key>", self._readonly_key)
         dm = tk.Menu(self.detail_txt, tearoff=0)
@@ -1074,7 +1063,7 @@ class App(object):
         self.lbl_status.pack(side="left")
         self.pbar = ttk.Progressbar(inner, mode="indeterminate", length=140)
         self.lbl_db = tk.Label(inner, text="数据文件：%s" % self.db_path, bg=CLR_CARD,
-                               fg="#9AA7BA", font=(self.fam, 8))
+                               fg=CLR_MUTED, font=(self.fam, 8))
         self.lbl_db.pack(side="right", padx=(0, 16))
 
     # ============================================================ 数据
@@ -1746,7 +1735,7 @@ class App(object):
             tlabel = "选中 %d 行（整行）" % n if n else "请先框选或选中行"
         pm = tk.Menu(m, tearoff=0)
         for name, colr in self.PAINT_COLORS:
-            pm.add_command(label="■ %s" % name, background=colr, foreground="#33404F",
+            pm.add_command(label="■ %s" % name, background=colr, foreground=CLR_TEXT,
                            command=lambda c=colr: self.paint_cells(c))
         pm.add_separator()
         pm.add_command(label="自定义颜色…", command=self.pick_cell_color,
@@ -1821,7 +1810,7 @@ class App(object):
     def _on_tab_changed(self, _e=None):
         try:
             idx = self.nb.index(self.nb.select())
-            # 标签顺序：0 库存管理 / 1 出售记录 / 2 出库记录 / 3 数据分析 / 4 手机数据
+            # 标签顺序：0 库存 / 1 出售 / 2 出库 / 3 分析 / 4 手机 / 5 日志
             if idx == 1:
                 self.tab_sales.refresh_tab()
             elif idx == 2:
@@ -1830,6 +1819,8 @@ class App(object):
                 self.tab_ana.refresh()
             elif idx == 4:
                 self.tab_phone.refresh_tab()
+            elif idx == 5:
+                self._load_log()
         except Exception:
             pass
 
@@ -2792,20 +2783,363 @@ class App(object):
         except Exception as e:
             messagebox.showerror("打开失败", str(e), parent=self.root)
 
+    # 快捷键定义：(设置键, 说明, 默认按键, 目标)。目标为方法名 / 页签序号 / 可调用。
+    SC_DEFS = [
+        ("sc_import",   "导入 XLSX",     "Ctrl+I", "do_import"),
+        ("sc_export",   "导出 XLSX",     "Ctrl+S", "do_export"),
+        ("sc_new",      "新增记录",       "Ctrl+N", "add_record"),
+        ("sc_edit",     "编辑选中",       "Ctrl+E", "edit_selected"),
+        ("sc_sell",     "登记出售",       "Ctrl+D", "sell_selected"),
+        ("sc_out",      "登记出库",       "Ctrl+U", "out_stock_selected"),
+        ("sc_purchase", "采购入库",       "Ctrl+P", "purchase_in"),
+        ("sc_batch",    "批量修改字段",   "Ctrl+B", "batch_edit"),
+        ("sc_search",   "搜索框聚焦",     "Ctrl+F", "_focus_search"),
+        ("sc_refresh",  "刷新数据",       "F5",     "load_data"),
+        ("sc_copy",     "复制选中行",     "Ctrl+C", "_copy_shortcut"),
+        ("sc_tab1",     "切到库存管理",   "Ctrl+1", 0),
+        ("sc_tab2",     "切到出售记录",   "Ctrl+2", 1),
+        ("sc_tab3",     "切到出库记录",   "Ctrl+3", 2),
+        ("sc_tab4",     "切到数据分析",   "Ctrl+4", 3),
+        ("sc_tab5",     "切到手机数据",   "Ctrl+5", 4),
+        ("sc_tab6",     "切到操作日志",   "Ctrl+6", 5),
+    ]
+
     def _bind_shortcuts(self):
-        b = self.root.bind
-        b("<Control-i>", lambda e: self.do_import())
-        b("<Control-s>", lambda e: self.do_export())
-        b("<Control-n>", lambda e: self.add_record())
-        b("<Control-e>", lambda e: self.edit_selected())
-        b("<Control-d>", lambda e: self.sell_selected())
-        b("<Control-u>", lambda e: self.out_stock_selected())
-        b("<Control-b>", lambda e: self.batch_edit())
-        b("<Control-p>", lambda e: self.purchase_in())
-        # Ctrl+C：库存页/出售页/出库页都复制表格内容（输入框里仍是普通文本复制）
-        b("<Control-c>", self._copy_shortcut)
-        b("<Control-f>", lambda e: self.entry_search.focus_set())
-        b("<F5>", lambda e: self.load_data())
+        """按 settings.json 的 shortcuts 注册全局快捷键（无自定义用默认值）。"""
+        self._sc_bound = []
+        sc = self.settings.get("shortcuts") or {}
+        for sid, label, dflt, target in self.SC_DEFS:
+            key = str(sc.get(sid, dflt) or "").strip()
+            if not key:
+                continue
+            try:
+                self.root.bind("<%s>" % key, lambda e, t=target: self._sc_run(t))
+                self._sc_bound.append(("<%s>" % key, target))
+            except Exception:
+                pass
+
+    def _sc_run(self, target):
+        if self._stopped:
+            return "break"
+        try:
+            if callable(target):
+                target()
+            elif isinstance(target, int):
+                self.nb.select(target)
+            else:
+                fn = getattr(self, str(target), None)
+                if fn:
+                    fn(_event=None) if target == "_copy_shortcut" else fn()
+        except Exception:
+            pass
+        return "break"
+
+    def _rebind_shortcuts(self):
+        """自定义快捷键后重绑：先解掉旧序列再按新设置注册。"""
+        for seq, _t in getattr(self, "_sc_bound", []):
+            try:
+                self.root.unbind(seq)
+            except Exception:
+                pass
+        self._bind_shortcuts()
+
+    def _focus_search(self):
+        try:
+            self.entry_search.focus_set()
+            self.entry_search.select_range(0, "end")
+        except Exception:
+            pass
+
+    def open_appearance(self):
+        """外观与快捷键设置：主题（重启生效）/ 字体大小（重启生效）/ 快捷键（即时生效）。"""
+        from .constants import UI_THEME
+        win = tk.Toplevel(self.root)
+        win.title("外观与快捷键设置")
+        win.configure(bg=CLR_CARD)
+        win.transient(self.root)
+        win.resizable(False, False)
+        apply_window_icon(win)
+        win.grab_set()
+        fam = self.fam
+
+        # ---- 主题 ----
+        tk.Label(win, text="界面主题", bg=CLR_CARD, fg=CLR_HEAD_FG,
+                 font=(fam, 10, "bold")).pack(anchor="w", padx=18, pady=(14, 2))
+        var_theme = tk.StringVar(value=str(self.settings.get("ui_theme") or UI_THEME))
+        rowt = tk.Frame(win, bg=CLR_CARD)
+        rowt.pack(anchor="w", padx=18)
+        for val, txt in (("light", "浅色"), ("dark", "深色")):
+            tk.Radiobutton(rowt, text=txt, value=val, variable=var_theme,
+                           bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                           activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
+                                                                           padx=(0, 16))
+        tk.Label(win, text="切换主题需重启程序生效", bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(fam, 8)).pack(anchor="w", padx=18)
+
+        # ---- 字体大小 ----
+        tk.Label(win, text="字体大小", bg=CLR_CARD, fg=CLR_HEAD_FG,
+                 font=(fam, 10, "bold")).pack(anchor="w", padx=18, pady=(10, 2))
+        var_font = tk.StringVar(value=str(float(self.settings.get("font_scale", 1.0) or 1.0)))
+        rowf = tk.Frame(win, bg=CLR_CARD)
+        rowf.pack(anchor="w", padx=18)
+        for txt, val in FONT_SCALES:
+            tk.Radiobutton(rowf, text=txt, value=str(val), variable=var_font,
+                           bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                           activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
+                                                                           padx=(0, 16))
+        tk.Label(win, text="字体大小同样重启后生效（整窗等比放大 / 缩小）", bg=CLR_CARD,
+                 fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w", padx=18)
+
+        def apply_look():
+            self.settings["ui_theme"] = var_theme.get()
+            try:
+                self.settings["font_scale"] = float(var_font.get())
+            except (TypeError, ValueError):
+                self.settings["font_scale"] = 1.0
+            self._save_settings()
+            if messagebox.askyesno("应用外观", "外观设置已保存。\n立即重启程序使其生效吗？",
+                                   parent=win):
+                self._restart_app()
+
+        ttk.Button(win, text="保存外观并重启", style="Accent.TButton",
+                   command=apply_look).pack(anchor="w", padx=18, pady=(8, 0))
+
+        # ---- 快捷键 ----
+        tk.Label(win, text="快捷键（即时生效，输入框里打字不受影响）", bg=CLR_CARD,
+                 fg=CLR_HEAD_FG, font=(fam, 10, "bold")).pack(
+            anchor="w", padx=18, pady=(14, 2))
+        cols = ("act", "key")
+        tv = ttk.Treeview(win, columns=cols, show="headings", height=10)
+        for key, title, w in (("act", "功能", 160), ("key", "快捷键", 110)):
+            tv.heading(key, text=title)
+            tv.column(key, width=w, anchor="center")
+        tv.pack(fill="x", padx=18)
+
+        sc_cfg = dict(self.settings.get("shortcuts") or {})
+
+        def fill_sc():
+            tv.delete(*tv.get_children())
+            for sid, label, dflt, _t in self.SC_DEFS:
+                tv.insert("", "end", iid=sid,
+                          values=(label, str(sc_cfg.get(sid, dflt) or "（禁用）")))
+
+        fill_sc()
+
+        def capture_key():
+            sel = tv.selection()
+            if not sel:
+                messagebox.showinfo("修改快捷键", "请先在列表里选中一个功能。", parent=win)
+                return
+            sid = sel[0]
+            cw = tk.Toplevel(win)
+            cw.title("按下快捷键")
+            cw.configure(bg=CLR_CARD)
+            cw.transient(win)
+            cw.grab_set()
+            cw.geometry("280x100")
+            center_window(cw, win, size=(280, 100), force=True)
+            tk.Label(cw, text="请按下新的快捷键\n（按 Esc 取消）", bg=CLR_CARD, fg=CLR_TEXT,
+                     font=(fam, 10), justify="center").pack(expand=True)
+
+            def on_key(e):
+                ks = e.keysym
+                if ks in ("Control_L", "Control_R", "Shift_L", "Shift_R",
+                          "Alt_L", "Alt_R", "Meta_L", "Meta_R"):
+                    return
+                if ks == "Escape":
+                    cw.destroy()
+                    return
+                parts = []
+                if e.state & 0x0004:
+                    parts.append("Ctrl")
+                if e.state & 0x0001:
+                    parts.append("Shift")
+                if e.state & 0x20000:
+                    parts.append("Alt")
+                name = ks[:1].upper() + ks[1:] if len(ks) == 1 else ks
+                newkey = "+".join(parts + [name])
+                # 冲突检查：同一按键不能绑两个功能
+                for osid, _l, odflt, _t in self.SC_DEFS:
+                    if osid != sid and str(sc_cfg.get(osid, odflt)) == newkey:
+                        messagebox.showwarning("快捷键冲突",
+                                               "%s 已被其他功能使用，请换一个。"
+                                               % newkey, parent=cw)
+                        return "break"
+                sc_cfg[sid] = newkey
+                self.settings["shortcuts"] = dict(sc_cfg)
+                self._save_settings()
+                self._rebind_shortcuts()
+                fill_sc()
+                cw.destroy()
+                return "break"
+
+            cw.bind("<Key>", on_key)
+            cw.focus_set()
+
+        def reset_sc():
+            if messagebox.askyesno("恢复默认", "把所有快捷键恢复为默认设置？", parent=win):
+                sc_cfg.clear()
+                self.settings.pop("shortcuts", None)
+                self._save_settings()
+                self._rebind_shortcuts()
+                fill_sc()
+
+        rowb = tk.Frame(win, bg=CLR_CARD)
+        rowb.pack(fill="x", padx=18, pady=(6, 14))
+        ttk.Button(rowb, text="修改选中项的快捷键", command=capture_key).pack(side="left")
+        ttk.Button(rowb, text="恢复默认", style="Ghost.TButton",
+                   command=reset_sc).pack(side="left", padx=(8, 0))
+        win.bind("<Escape>", lambda e: win.destroy())
+        center_window(win, self.root, size=(360, 520), force=True)
+
+    def _restart_app(self):
+        """重启程序（主题 / 字体大小需要重建界面才能生效）。"""
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable],
+                                 cwd=os.path.dirname(os.path.abspath(sys.executable)),
+                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+            else:
+                subprocess.Popen([sys.executable,
+                                  os.path.join(app_dir(), "main.py")],
+                                 cwd=app_dir(),
+                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        except Exception as e:
+            messagebox.showerror("重启失败", str(e), parent=self.root)
+            return
+        self.on_close()
+
+    # ---------------------------------------------------------- 操作日志页
+    LOG_ACTS = ["新增", "导入", "修改", "批量修改", "上架", "下架", "删除", "恢复",
+                "彻底删除", "清空回收站", "出售", "出库", "撤销出售", "修改出售",
+                "手动补录出售", "采购入库", "清空全部", "重置编号", "手机上传商品",
+                "手机上传出售", "手机删除商品", "手机删除出售", "清空手机数据",
+                "转入库存"]
+
+    def _build_log_tab(self):
+        tab = self.tab_log
+        bar = tk.Frame(tab, bg=CLR_CARD)
+        bar.pack(fill="x", padx=10, pady=(8, 4))
+
+        def lbl(text):
+            return tk.Label(bar, text=text, bg=CLR_CARD, fg=CLR_MUTED,
+                            font=(self.fam, 9))
+
+        lbl("来源").pack(side="left")
+        self.var_log_src = tk.StringVar(value="全部")
+        self.cb_log_src = ttk.Combobox(bar, textvariable=self.var_log_src,
+                                       state="readonly", width=16, font=(self.fam, 9))
+        self.cb_log_src.pack(side="left", padx=(4, 10))
+        lbl("操作").pack(side="left")
+        self.var_log_act = tk.StringVar(value="全部")
+        ttk.Combobox(bar, textvariable=self.var_log_act, state="readonly",
+                     width=12, font=(self.fam, 9),
+                     values=["全部"] + self.LOG_ACTS).pack(side="left", padx=(4, 10))
+        lbl("范围").pack(side="left")
+        self.var_log_days = tk.StringVar(value="近30天")
+        ttk.Combobox(bar, textvariable=self.var_log_days, state="readonly",
+                     width=8, font=(self.fam, 9),
+                     values=["今天", "近7天", "近30天", "全部"]).pack(side="left",
+                                                                    padx=(4, 10))
+        lbl("关键字").pack(side="left")
+        self.var_log_kw = tk.StringVar()
+        ttk.Entry(bar, textvariable=self.var_log_kw, width=18,
+                  font=(self.fam, 9)).pack(side="left", fill="x", expand=True,
+                                           padx=(4, 10))
+        ttk.Button(bar, text="查询", style="Accent.TButton", width=6,
+                   command=self._load_log).pack(side="left")
+        ttk.Button(bar, text="导出 CSV", style="Ghost.TButton", width=9,
+                   command=self._export_log).pack(side="left", padx=(6, 0))
+        ttk.Button(bar, text="清空日志", style="Ghost.TButton", width=8,
+                   command=self._clear_log).pack(side="left", padx=(6, 0))
+
+        self.lbl_log_stat = tk.Label(tab, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                                     font=(self.fam, 8), anchor="w")
+        self.lbl_log_stat.pack(fill="x", padx=12)
+
+        wrap = tk.Frame(tab, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        wrap.pack(fill="both", expand=True, padx=10, pady=(2, 8))
+        cols = ("time", "src", "act", "code", "detail")
+        self.tree_log = ttk.Treeview(wrap, columns=cols, show="headings")
+        for key, title, w, anch in (("time", "时间", 130, "center"),
+                                    ("src", "来源", 130, "center"),
+                                    ("act", "操作", 90, "center"),
+                                    ("code", "编号", 130, "center"),
+                                    ("detail", "明细", 480, "w")):
+            self.tree_log.heading(key, text=title)
+            self.tree_log.column(key, width=w, anchor=anch)
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=self.tree_log.yview)
+        self.tree_log.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        self.tree_log.pack(fill="both", expand=True)
+        self.tree_log.tag_configure("odd", background=CLR_ROW_ALT)
+        self._log_first = True
+
+    def _load_log(self):
+        if getattr(self, "_log_loading", False):
+            return
+        self._log_loading = True
+        try:
+            days_map = {"今天": 1, "近7天": 7, "近30天": 30, "全部": 0}
+            src = self.var_log_src.get()
+            rows = self.store.oplog_list(
+                src="" if src == "全部" else src,
+                kw=(self.var_log_kw.get() or "").strip(),
+                days=days_map.get(self.var_log_days.get(), 0))
+            act = self.var_log_act.get()
+            if act and act != "全部":
+                rows = [r for r in rows if r.get("act") == act]
+            self.cb_log_src.configure(values=["全部"] + self.store.oplog_srcs())
+            tv = self.tree_log
+            tv.delete(*tv.get_children())
+            from datetime import datetime as _dt
+            for i, r in enumerate(rows):
+                t = _dt.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M:%S")
+                tv.insert("", "end", values=(
+                    t, r.get("src") or "", r.get("act") or "",
+                    r.get("code") or "", r.get("detail") or ""),
+                    tags=("odd",) if i % 2 else ())
+            self.lbl_log_stat.configure(
+                text="共 %d 条（最多显示最近 2000 条；日志保留 180 天自动清理）" % len(rows))
+        except Exception as e:
+            self.lbl_log_stat.configure(text="读取日志失败：%s" % e)
+        finally:
+            self._log_loading = False
+        self._log_first = False
+
+    def _export_log(self):
+        try:
+            items = self.tree_log.get_children()
+            if not items:
+                messagebox.showinfo("导出日志", "当前没有可导出的日志。", parent=self.root)
+                return
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(
+                parent=self.root, title="导出操作日志",
+                defaultextension=".csv",
+                initialfile="操作日志_%s.csv" % datetime.now().strftime("%Y%m%d_%H%M"),
+                filetypes=[("CSV 文件", "*.csv")])
+            if not path:
+                return
+            import csv
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow(["时间", "来源", "操作", "编号", "明细"])
+                for iid in items:
+                    w.writerow(self.tree_log.item(iid, "values"))
+            self._status("已导出操作日志：%s" % path)
+        except Exception as e:
+            messagebox.showerror("导出失败", str(e), parent=self.root)
+
+    def _clear_log(self):
+        if not messagebox.askyesno(
+                "清空日志", "确定清空本仓库的全部操作日志吗？\n清空后不可恢复。",
+                parent=self.root, icon="warning"):
+            return
+        self.store.oplog_clear()
+        self.store.log_op("清空日志", "", "操作日志已清空")
+        self._load_log()
 
     def show_help(self):
         """使用说明：独立窗口（左目录 + 可滚动正文 + 搜索），避免 messagebox 截断。"""
@@ -2844,9 +3178,9 @@ class App(object):
     # ------------------------------------------------------------ 顶部状态条
     def _lan_bar_widgets(self):
         if getattr(self, "lan_bar", None) is None:
-            bar = tk.Frame(self.root, bg="#FFF4E5",
+            bar = tk.Frame(self.root, bg=CLR_LOW_BG,
                            highlightbackground=CLR_BORDER, highlightthickness=1)
-            lbl = tk.Label(bar, text="", bg="#FFF4E5", fg="#B54708",
+            lbl = tk.Label(bar, text="", bg=CLR_LOW_BG, fg=CLR_LOW_FG,
                            font=(self.fam, 9), anchor="w")
             lbl.pack(side="left", padx=12, pady=5)
             btn_set = ttk.Button(bar, text="局域网设置", style="Ghost.TButton",
@@ -2871,9 +3205,9 @@ class App(object):
             return
         if kind == "auto":
             kind = "ok" if self.can_write else "readonly"
-        colors = {"ok": ("#E8F7EE", "#067647"),
-                  "readonly": ("#FFF4E5", "#B54708"),
-                  "lost": ("#FDECEC", "#B42318")}
+        colors = {"ok": (CLR_ACCENT_LT, CLR_OK),
+                  "readonly": (CLR_LOW_BG, CLR_LOW_FG),
+                  "lost": (CLR_LOW_BG, CLR_DANGER)}
         bg, fg = colors.get(kind, colors["readonly"])
         host = self.lan_cfg.get("host") or ""
         if kind == "lost":

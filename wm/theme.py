@@ -5,10 +5,8 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
 
-from .constants import (CLR_ACCENT, CLR_ACCENT_DK, CLR_BG, CLR_BORDER, CLR_CARD,
-                        CLR_DANGER, CLR_HEADER, CLR_HOVER_BG, CLR_HOVER_EDGE,
-                        CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_SEL, CLR_TEXT, CLR_WARN,
-                        FONT_FALLBACK)
+from .constants import *          # noqa: F401,F403 —— CLR_* 全量（随调色板切换）
+from .constants import FONT_FALLBACK
 
 
 class RowHover:
@@ -181,9 +179,9 @@ def apply_theme(root, scale=1.0):
 
     # ---- 按钮 ----
     cfg("TButton", padding=(s(12), s(6)), font=(fam, 10), relief="flat",
-        background="#FFFFFF", foreground=CLR_TEXT, borderwidth=1)
+        background=CLR_CARD, foreground=CLR_TEXT, borderwidth=1)
     style.map("TButton",
-              background=[("pressed", "#E4EAF3"), ("active", "#F2F5FA")],
+              background=[("pressed", CLR_HEADER_HV), ("active", CLR_TAB_HV)],
               bordercolor=[("!disabled", CLR_BORDER)])
 
     cfg("Accent.TButton", padding=(s(14), s(6)), font=(fam, 10, "bold"),
@@ -196,100 +194,100 @@ def apply_theme(root, scale=1.0):
     cfg("Ghost.TButton", padding=(s(10), s(6)), font=(fam, 10),
         background=CLR_CARD, foreground=CLR_ACCENT, borderwidth=0)
     style.map("Ghost.TButton",
-              background=[("pressed", "#E8F0FE"), ("active", "#EFF5FF")],
+              background=[("pressed", CLR_ACCENT_LT), ("active", CLR_ACCENT_LT)],
               foreground=[("disabled", "#9DB5E8")])
 
     cfg("Danger.TButton", padding=(s(12), s(6)), font=(fam, 10),
-        background="#FFFFFF", foreground=CLR_DANGER, borderwidth=1)
+        background=CLR_CARD, foreground=CLR_DANGER, borderwidth=1)
     style.map("Danger.TButton",
-              background=[("pressed", "#FDE8E8"), ("active", "#FEF2F2")],
-              bordercolor=[("!disabled", "#F5C2C2")])
+              background=[("pressed", CLR_HOVER_BG), ("active", CLR_ROW_ALT)],
+              bordercolor=[("!disabled", CLR_DANGER)])
 
     cfg("Ok.TButton", padding=(s(12), s(6)), font=(fam, 10),
-        background="#FFFFFF", foreground=CLR_OK, borderwidth=1)
+        background=CLR_CARD, foreground=CLR_OK, borderwidth=1)
     style.map("Ok.TButton",
-              background=[("pressed", "#DEF7EC"), ("active", "#F0FDF7")],
-              bordercolor=[("!disabled", "#B5E3CE")])
+              background=[("pressed", CLR_HOVER_BG), ("active", CLR_ROW_ALT)],
+              bordercolor=[("!disabled", CLR_OK)])
 
     cfg("Link.TButton", padding=(s(4), s(2)), font=(fam, 9), background=CLR_CARD,
         foreground=CLR_ACCENT, borderwidth=0)
-    style.map("Link.TButton", background=[("active", "#EFF5FF")])
+    style.map("Link.TButton", background=[("active", CLR_ACCENT_LT)])
 
     # ---- 输入控件 ----
-    cfg("TEntry", padding=s(5), fieldbackground="#FFFFFF", foreground=CLR_TEXT,
+    cfg("TEntry", padding=s(5), fieldbackground=CLR_INPUT, foreground=CLR_TEXT,
         bordercolor=CLR_BORDER, lightcolor=CLR_BORDER, darkcolor=CLR_BORDER,
         insertcolor=CLR_ACCENT)
     style.map("TEntry", bordercolor=[("focus", CLR_ACCENT)])
 
-    cfg("TCombobox", padding=s(4), fieldbackground="#FFFFFF", background="#FFFFFF",
+    cfg("TCombobox", padding=s(4), fieldbackground=CLR_INPUT, background=CLR_INPUT,
         foreground=CLR_TEXT, arrowcolor=CLR_MUTED, bordercolor=CLR_BORDER,
         lightcolor=CLR_BORDER, darkcolor=CLR_BORDER)
     style.map("TCombobox",
-              fieldbackground=[("readonly", "#FFFFFF"), ("disabled", "#F1F4F9")],
-              bordercolor=[("focus", CLR_ACCENT), ("hover", "#B9C6DA")])
+              fieldbackground=[("readonly", CLR_INPUT), ("disabled", CLR_BORDER_LT)],
+              bordercolor=[("focus", CLR_ACCENT), ("hover", CLR_SB)])
     root.option_add("*TCombobox*Listbox.font", (fam, 10))
-    root.option_add("*TCombobox*Listbox.background", "#FFFFFF")
+    root.option_add("*TCombobox*Listbox.background", CLR_INPUT)
     root.option_add("*TCombobox*Listbox.foreground", CLR_TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", CLR_ACCENT)
     root.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
 
     cfg("TCheckbutton", background=CLR_BG, foreground=CLR_TEXT, font=(fam, 10))
     style.map("TCheckbutton", background=[("active", CLR_BG)],
-              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", "#FFFFFF")])
+              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", CLR_CARD)])
     cfg("Card.TCheckbutton", background=CLR_CARD, foreground=CLR_TEXT, font=(fam, 10))
     style.map("Card.TCheckbutton", background=[("active", CLR_CARD)],
-              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", "#FFFFFF")])
+              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", CLR_CARD)])
     cfg("Card.TRadiobutton", background=CLR_CARD, foreground=CLR_TEXT, font=(fam, 10))
     style.map("Card.TRadiobutton", background=[("active", CLR_CARD)],
-              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", "#FFFFFF")])
+              indicatorcolor=[("selected", CLR_ACCENT), ("!selected", CLR_CARD)])
 
     cfg("TNotebook", background=CLR_BG, borderwidth=0, tabmargins=(0, 4, 0, 0))
-    cfg("TNotebook.Tab", padding=(s(22), s(9)), font=(fam, 10), background="#E3E9F2",
+    cfg("TNotebook.Tab", padding=(s(22), s(9)), font=(fam, 10), background=CLR_HEADER,
         foreground=CLR_MUTED, borderwidth=0)
     style.map("TNotebook.Tab",
-              background=[("selected", CLR_CARD), ("active", "#EDF1F8")],
+              background=[("selected", CLR_CARD), ("active", CLR_TAB_HV)],
               foreground=[("selected", CLR_ACCENT), ("active", CLR_TEXT)],
               expand=[("selected", (0, 0, 0, 0))])
 
     # ---- 表格 ----
-    cfg("Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=CLR_TEXT,
+    cfg("Treeview", background=CLR_INPUT, fieldbackground=CLR_INPUT, foreground=CLR_TEXT,
         rowheight=s(30), font=(fam, 10), borderwidth=0)
-    cfg("Treeview.Heading", background=CLR_HEADER, foreground="#41506B",
+    cfg("Treeview.Heading", background=CLR_HEADER, foreground=CLR_HEAD_FG,
         font=(fam, 10, "bold"), relief="flat", padding=(s(6), s(8)), borderwidth=0)
     style.map("Treeview.Heading",
-              background=[("active", "#E7EDF7")], relief=[("active", "flat")])
+              background=[("active", CLR_HEADER_HV)], relief=[("active", "flat")])
     style.map("Treeview",
               background=[("selected", CLR_SEL)],
               foreground=[("selected", CLR_TEXT)])
     style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
 
     cfg("TSeparator", background=CLR_BORDER)
-    cfg("TProgressbar", background=CLR_ACCENT, troughcolor="#E6ECF5",
-        bordercolor="#E6ECF5", lightcolor=CLR_ACCENT, darkcolor=CLR_ACCENT, thickness=6)
+    cfg("TProgressbar", background=CLR_ACCENT, troughcolor=CLR_TROUGH,
+        bordercolor=CLR_TROUGH, lightcolor=CLR_ACCENT, darkcolor=CLR_ACCENT, thickness=6)
 
     cfg("TPanedwindow", background=CLR_BG)
     cfg("Sash", sashthickness=6, gripcount=0, background=CLR_BG)
 
     # 滚动条
     for orient in ("Vertical", "Horizontal"):
-        cfg("%s.TScrollbar" % orient, background="#C6D0DE", troughcolor="#F4F7FB",
-            bordercolor="#F4F7FB", arrowcolor=CLR_MUTED, relief="flat", borderwidth=0)
+        cfg("%s.TScrollbar" % orient, background=CLR_SB, troughcolor=CLR_SB_TR,
+            bordercolor=CLR_SB_TR, arrowcolor=CLR_MUTED, relief="flat", borderwidth=0)
         style.map("%s.TScrollbar" % orient,
-                  background=[("active", "#ADBACC"), ("pressed", "#96A6BC")])
+                  background=[("active", CLR_SB_HV), ("pressed", CLR_SB_PR)])
 
-    cfg("TSpinbox", padding=s(4), fieldbackground="#FFFFFF", bordercolor=CLR_BORDER,
+    cfg("TSpinbox", padding=s(4), fieldbackground=CLR_INPUT, bordercolor=CLR_BORDER,
         arrowcolor=CLR_MUTED)
 
     root.option_add("*Font", (fam, 10))
     root.option_add("*Menu.font", (fam, 10))
-    root.option_add("*Menu.background", "#FFFFFF")
+    root.option_add("*Menu.background", CLR_MENU_BG)
     root.option_add("*Menu.foreground", CLR_TEXT)
     root.option_add("*Menu.activeBackground", CLR_ACCENT)
     root.option_add("*Menu.activeForeground", "#FFFFFF")
     root.option_add("*Menu.borderWidth", 0)
     root.option_add("*Menu.relief", "solid")
     root.option_add("*Menu.activeBorderWidth", 0)
-    root.option_add("*Menu.selectColor", "#FFFFFF")
+    root.option_add("*Menu.selectColor", CLR_INPUT)
     return fam
 
 

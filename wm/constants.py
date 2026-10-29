@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.23.3"
+APP_VERSION = "1.24.0"
 
 
 def app_icon_path():
@@ -201,33 +201,123 @@ def is_blank_model(value):
     return norm_model(value) in MODEL_BLANK
 
 # --------------------------------------------------------------------------
-# 配色
+# 配色（浅色/深色两套调色板，启动时按 settings.json 的 ui_theme 应用；
+# 切换主题需重启程序 —— Tk 控件颜色在构建时写死，热切换需重建全部界面）
 # --------------------------------------------------------------------------
-CLR_BG        = "#EFF3F9"
-CLR_CARD      = "#FFFFFF"
-CLR_BORDER    = "#DCE3ED"
-CLR_BORDER_LT = "#E9EEF5"
-CLR_TEXT      = "#1F2A37"
-CLR_MUTED     = "#6B7A8F"
-CLR_ACCENT    = "#2563EB"
-CLR_ACCENT_DK = "#1D4ED8"
-CLR_ACCENT_LT = "#E8F0FE"
-CLR_OK        = "#0E9F6E"
-CLR_WARN      = "#F59E0B"
-CLR_DANGER    = "#E02424"
-CLR_PURPLE    = "#8B5CF6"
-CLR_CYAN      = "#0891B2"
+_PALETTE_LIGHT = {
+    "CLR_BG":        "#EFF3F9",
+    "CLR_CARD":      "#FFFFFF",
+    "CLR_BORDER":    "#DCE3ED",
+    "CLR_BORDER_LT": "#E9EEF5",
+    "CLR_TEXT":      "#1F2A37",
+    "CLR_MUTED":     "#6B7A8F",
+    "CLR_HEAD_FG":   "#41506B",
+    "CLR_ACCENT":    "#2563EB",
+    "CLR_ACCENT_DK": "#1D4ED8",
+    "CLR_ACCENT_LT": "#E8F0FE",
+    "CLR_OK":        "#0E9F6E",
+    "CLR_WARN":      "#F59E0B",
+    "CLR_DANGER":    "#E02424",
+    "CLR_PURPLE":    "#8B5CF6",
+    "CLR_CYAN":      "#0891B2",
+    "CLR_ROW_ALT":   "#F7FAFD",
+    "CLR_SEL":       "#D8E6FE",
+    "CLR_HEADER":    "#F3F6FB",
+    "CLR_HEADER_HV": "#E7EDF7",
+    "CLR_INPUT":     "#FFFFFF",
+    "CLR_MENU_BG":   "#FFFFFF",
+    "CLR_TAB_HV":    "#EDF1F8",
+    "CLR_TROUGH":    "#E6ECF5",
+    "CLR_SB":        "#C6D0DE",
+    "CLR_SB_TR":     "#F4F7FB",
+    "CLR_SB_HV":     "#ADBACC",
+    "CLR_SB_PR":     "#96A6BC",
+    "CLR_UNLISTED_BG": "#F1F3F7",
+    "CLR_UNLISTED_FG": "#667085",
+    "CLR_LOW_BG":    "#FFF3E2",
+    "CLR_LOW_FG":    "#B54708",
+    # 鼠标划过整行高亮（比选中色浅，避免与系统选中混淆）
+    "CLR_HOVER_BG":  "#E9F1FF",
+    "CLR_HOVER_EDGE": "#9CC0FF",
+}
 
-CLR_ROW_ALT   = "#F7FAFD"
-CLR_SEL       = "#D8E6FE"
-CLR_HEADER    = "#F3F6FB"
-# 鼠标划过整行高亮（比选中色浅，避免与系统选中混淆）
-CLR_HOVER_BG  = "#E9F1FF"
-CLR_HOVER_EDGE = "#9CC0FF"
+_PALETTE_DARK = {
+    "CLR_BG":        "#141822",
+    "CLR_CARD":      "#1B202B",
+    "CLR_BORDER":    "#2A3140",
+    "CLR_BORDER_LT": "#242B38",
+    "CLR_TEXT":      "#E8ECF4",
+    "CLR_MUTED":     "#7D8798",
+    "CLR_HEAD_FG":   "#AAB3C5",
+    "CLR_ACCENT":    "#3B82F6",
+    "CLR_ACCENT_DK": "#2563EB",
+    "CLR_ACCENT_LT": "#22304A",
+    "CLR_OK":        "#2FB344",
+    "CLR_WARN":      "#F0A132",
+    "CLR_DANGER":    "#E5484D",
+    "CLR_PURPLE":    "#A78BFA",
+    "CLR_CYAN":      "#22D3EE",
+    "CLR_ROW_ALT":   "#171C26",
+    "CLR_SEL":       "#22304A",
+    "CLR_HEADER":    "#1F2530",
+    "CLR_HEADER_HV": "#242B38",
+    "CLR_INPUT":     "#161B25",
+    "CLR_MENU_BG":   "#1B202B",
+    "CLR_TAB_HV":    "#242B38",
+    "CLR_TROUGH":    "#242B38",
+    "CLR_SB":        "#39435A",
+    "CLR_SB_TR":     "#1B202B",
+    "CLR_SB_HV":     "#4A5670",
+    "CLR_SB_PR":     "#5A688A",
+    "CLR_UNLISTED_BG": "#1F2530",
+    "CLR_UNLISTED_FG": "#7D8798",
+    "CLR_LOW_BG":    "#3A2C12",
+    "CLR_LOW_FG":    "#F0A132",
+    "CLR_HOVER_BG":  "#22304A",
+    "CLR_HOVER_EDGE": "#3B6BC7",
+}
+
+def apply_palette(theme):
+    """把调色板写入模块全局（light / dark）。返回实际应用的主题名。"""
+    p = _PALETTE_DARK if str(theme) == "dark" else _PALETTE_LIGHT
+    for k, v in p.items():
+        globals()[k] = v
+    globals()["UI_THEME"] = "dark" if str(theme) == "dark" else "light"
+    return globals()["UI_THEME"]
+
+
+apply_palette("light")
 
 PALETTE = ["#2563EB", "#0E9F6E", "#F59E0B", "#8B5CF6", "#EC4899",
            "#0891B2", "#F97316", "#64748B", "#84CC16", "#EF4444",
            "#14B8A6", "#A855F7"]
+
+# 字体大小档位（settings.json font_scale，重启生效；乘在 UI 缩放系数上）
+FONT_SCALES = [("小", 0.85), ("标准", 1.0), ("大", 1.15), ("特大", 1.3)]
+
+
+def app_dir():
+    """程序所在目录（PyInstaller 打包后 = exe 目录；源码运行 = 项目根）。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def resolve_data_dir():
+    """数据目录：优先 程序目录/data（便携），不可写退回 APPDATA。"""
+    base = app_dir()
+    for cand in (os.path.join(base, "data"),
+                 os.path.join(os.environ.get("APPDATA", base), "WarehouseManager")):
+        try:
+            os.makedirs(cand, exist_ok=True)
+            probe = os.path.join(cand, ".wtest")
+            with open(probe, "w") as f:
+                f.write("1")
+            os.remove(probe)
+            return cand
+        except Exception:
+            continue
+    return base
 
 # --------------------------------------------------------------------------
 # 字体

@@ -786,6 +786,46 @@ try:
     check("App 有搜索历史与快捷筛选（待同步/在售/已售完）",
           all(x in _app_html for x in ("id=\"kwHist\"", "renderFlts",
                                        "pushKwHist", "curFlt")))
+
+    # ---- v1.24.0 操作日志 + 电脑端深色模式/字体/快捷键 ----
+    _C = sys.modules["wm.constants"]
+    _wm_dir = os.path.dirname(wapp.__file__)
+    import wm.store as _wstore
+    _st = _wstore.Store(":memory:")
+    _rid = _st.insert(blank_record() | {"code": "OP-1", "model": "OPM"})
+    _st.update_field(_rid, "qty", 7)
+    _st.add_sale(_rid, 1, 5.0)
+    _st.delete_ids([_rid], soft=True)
+    with _st.as_source("手机(10.0.0.9)"):
+        _st.log_op("手机上传商品", "APP-1", "App 同步新增")
+    _rows = _st.oplog_list()
+    check("操作日志：增改删售自动埋点（含旧值→新值）",
+          any(r["act"] == "新增" and r["code"] == "OP-1" for r in _rows)
+          and any("qty" in (r["detail"] or "") and "→ 7" in (r["detail"] or "")
+                  for r in _rows)
+          and any(r["act"] == "出售" for r in _rows)
+          and any(r["act"] == "删除" for r in _rows), len(_rows))
+    check("操作日志：来源上下文（as_source）与筛选",
+          any(r["src"] == "手机(10.0.0.9)" for r in _rows)
+          and _st.oplog_list(src="主机") and not _st.oplog_list(src="不存在来源")
+          and set(_st.oplog_srcs()) >= {"主机", "手机(10.0.0.9)"})
+    check("操作日志：天数范围过滤 + 清空",
+          _st.oplog_list(days=1) and _st.oplog_list(days=0)
+          and not _st.oplog_list(days=0, limit=0))
+    check("电脑端深浅调色板可切换（apply_palette 双主题）",
+          all(k in _C.__dict__ for k in
+              ("CLR_INPUT", "CLR_HEAD_FG", "CLR_SB", "CLR_LOW_BG"))
+          and _C.CLR_BG != "#000000")
+    _app_src = open(os.path.join(_wm_dir, "app.py"),
+                    encoding="utf-8").read()
+    check("电脑端外观设置：主题/字体/快捷键可配置（重启生效+即时重绑）",
+          all(x in _app_src for x in
+              ("open_appearance", "ui_theme", "font_scale",
+               "_rebind_shortcuts", "_restart_app", "SC_DEFS", "_restart_app")))
+    check("电脑端操作日志页签（筛选/导出/清空）",
+          all(x in _app_src for x in
+              ("操作日志", "_build_log_tab", "_load_log", "_export_log",
+               "oplog_list", "oplog_clear")))
     # v1.20.0 扫一扫识别型号（手机本地离线 OCR）
     check("型号框有「扫一扫」按钮",
           'id="btnScanModel"' in _app_html and "扫一扫" in _app_html)

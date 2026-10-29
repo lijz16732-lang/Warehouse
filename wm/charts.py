@@ -4,8 +4,9 @@
 import tkinter as tk
 from tkinter import ttk
 
-from .constants import (CLR_ACCENT, CLR_BORDER, CLR_CARD, CLR_MUTED, CLR_OK,
-                        CLR_TEXT, PALETTE)
+from .constants import (CLR_ACCENT, CLR_BORDER, CLR_BORDER_LT, CLR_CARD,
+                        CLR_HEAD_FG, CLR_HEADER, CLR_MUTED, CLR_OK, CLR_TEXT,
+                        PALETTE)
 
 
 def _rounded(canvas, x1, y1, x2, y2, r, fill):
@@ -47,7 +48,7 @@ class _ChartBase(tk.Canvas):
         if self._subtitle:
             self.create_text(16 + self._text_w(self._title, (f, 11, "bold")) + 10, 16,
                              anchor="w", text=self._subtitle, fill=CLR_MUTED, font=(f, 9))
-        self.create_line(16, 34, w - 16, 34, fill="#EDF1F7")
+        self.create_line(16, 34, w - 16, 34, fill=CLR_BORDER_LT)
         return 48
 
     def _text_w(self, text, font):
@@ -64,7 +65,7 @@ class _ChartBase(tk.Canvas):
             return
         top = self._draw_header(w)
         if not self._data:
-            self.create_text(w / 2, (top + h) / 2, text="暂无数据", fill="#B3BFD0",
+            self.create_text(w / 2, (top + h) / 2, text="暂无数据", fill=CLR_MUTED,
                              font=(self._font_family, 10))
             return
         self._draw(w, h, top)
@@ -100,10 +101,10 @@ class HBarChart(_ChartBase):
             # 标签
             lab = label if len(label) <= 9 else label[:8] + "…"
             self.create_text(area_x - 12, cy, anchor="e", text=lab,
-                             fill="#48566E", font=(f, 9))
+                             fill=CLR_HEAD_FG, font=(f, 9))
             # 轨道
             _rounded(self, area_x, cy - bar_h / 2 + 1, area_r, cy + bar_h / 2 - 1,
-                     bar_h / 2 - 1, "#EEF2F8")
+                     bar_h / 2 - 1, CLR_HEADER)
             # 条
             bw = max(5.0, (area_r - area_x) * value / float(vmax))
             _rounded(self, area_x, cy - bar_h / 2, area_x + bw, cy + bar_h / 2,
@@ -113,7 +114,7 @@ class HBarChart(_ChartBase):
             if self.show_pct:
                 txt = "%s  %.1f%%" % (value, value / float(total) * 100)
             self.create_text(area_r + 12, cy, anchor="w", text=txt,
-                             fill="#2B3A50", font=(f, 9, "bold"))
+                             fill=CLR_TEXT, font=(f, 9, "bold"))
 
 
 class VBarChart(_ChartBase):
@@ -132,10 +133,10 @@ class VBarChart(_ChartBase):
         # 网格线
         for i in range(5):
             y = top + ch * i / 4.0
-            self.create_line(pad_l, y, pad_l + cw, y, fill="#F0F4FA")
+            self.create_line(pad_l, y, pad_l + cw, y, fill=CLR_BORDER_LT)
             self.create_text(pad_l - 8, y, anchor="e",
                              text="%d" % round(vmax * (4 - i) / 4.0),
-                             fill="#9AA7BA", font=(f, 8))
+                             fill=CLR_MUTED, font=(f, 8))
 
         slot = cw / len(items)
         bw = min(46.0, slot * 0.56)
@@ -147,9 +148,9 @@ class VBarChart(_ChartBase):
             _rounded(self, cx - bw / 2, top + ch - bh, cx + bw / 2, top + ch,
                      min(6, bw / 3), color)
             self.create_text(cx, top + ch - bh - 11, text=str(value),
-                             fill="#2B3A50", font=(f, 9, "bold"))
+                             fill=CLR_TEXT, font=(f, 9, "bold"))
             lab = label if len(label) <= 8 else label[:7] + "…"
-            self.create_text(cx, top + ch + 14, text=lab, fill="#6B7A8F", font=(f, 9))
+            self.create_text(cx, top + ch + 14, text=lab, fill=CLR_MUTED, font=(f, 9))
 
 
 class DonutChart(_ChartBase):
@@ -199,10 +200,10 @@ class DonutChart(_ChartBase):
             color = PALETTE[i % len(PALETTE)]
             _rounded(self, lx, y - 4, lx + 9, y + 5, 3, color)
             lab = label if len(label) <= 8 else label[:7] + "…"
-            self.create_text(lx + 15, y, anchor="w", text=lab, fill="#48566E", font=(f, 9))
+            self.create_text(lx + 15, y, anchor="w", text=lab, fill=CLR_HEAD_FG, font=(f, 9))
             self.create_text(w - 16, y, anchor="e",
                              text="%d  %.1f%%" % (value, value / float(total) * 100),
-                             fill="#2B3A50", font=(f, 9, "bold"))
+                             fill=CLR_TEXT, font=(f, 9, "bold"))
 
 
 class ProgressStat(tk.Canvas):
@@ -234,7 +235,8 @@ class KpiCard(tk.Frame):
     """指标卡：左侧色条 + 标题 + 大数值 + 副标题（可带进度条）。"""
 
     def __init__(self, master, title, value="—", sub="", color=CLR_ACCENT,
-                 bg="#FFFFFF", show_bar=False):
+                 bg=None, show_bar=False):
+        bg = bg or CLR_CARD
         super().__init__(master, bg=bg, highlightbackground=CLR_BORDER,
                          highlightthickness=1, bd=0)
         self._color = color
@@ -288,7 +290,8 @@ class KpiCard(tk.Frame):
 class ScrollFrame(ttk.Frame):
     """可滚动容器：把内容放进 .body。"""
 
-    def __init__(self, master, bg="#EFF3F9", **kw):
+    def __init__(self, master, bg=None, **kw):
+        bg = bg or CLR_BG
         super().__init__(master, **kw)
         self._bg = bg
         self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)

@@ -5,6 +5,8 @@ import os
 import re
 import sqlite3
 import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime
 
 from .constants import (FIELD_KEYS, FIELD_TYPE, LISTED_TEXT, MODEL_BLANK,
@@ -236,6 +238,7 @@ class Store(object):
         self.path = path
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         self._lock = threading.RLock()
+        self._src_l = threading.local()     # 操作日志来源（每线程独立栈）
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=15)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -272,6 +275,15 @@ class Store(object):
                     self.conn.execute(
                         "ALTER TABLE sales ADD COLUMN \"address\" TEXT")
                     changed = True
+                # v1.24.0 操作日志（独立表，不参与同步触发器）
+                self.conn.execute(
+                    "CREATE TABLE IF NOT EXISTS oplog ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, src TEXT,"
+                    " act TEXT, code TEXT, detail TEXT)")
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_oplog_ts ON oplog(\"ts\")")
+                self._oplog_prune()
+                changed = True
                 if changed:
                     self.conn.commit()
             except Exception:
@@ -291,6 +303,97 @@ class Store(object):
             cur = self.conn.execute(sql, params)
             self.conn.commit()
             return cur
+
+    # ---------------------------------------------------------- 操作日志
+    @property
+    def _srcs(self):
+        lst = getattr(self._src_l, "s", None)
+        if lst is None:
+            lst = []
+            self._src_l.s = lst
+        return lst
+
+    @property
+    def log_src(self):
+        """当前线程的操作来源（as_source 栈顶；主机界面默认「主机」）。"""
+        lst = self._srcs
+        return lst[-1] if lst else "主机"
+
+    @contextmanager
+    def as_source(self, src):
+        """来源上下文：with store.as_source("手机(192.168.1.5)"): ..."""
+        self._srcs.append(str(src))
+        try:
+            yield
+        finally:
+            self._srcs.pop()
+
+    def log_op(self, act, code="", detail=""):
+        """记一条操作日志（失败静默，绝不能影响业务）。"""
+        try:
+            self._execute(
+                "INSERT INTO oplog (ts, src, act, code, detail) VALUES (?,?,?,?,?)",
+                (time.time(), self.log_src, str(act)[:20], str(code)[:80],
+                 str(detail)[:400]))
+        except Exception:
+            pass
+
+    def _codes_of(self, ids):
+        """按 id 查编号（删除前先取，删完就查不到了）。"""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return []
+        ph = ", ".join(["?"] * len(ids))
+        try:
+            with self._lock:
+                rows = self.conn.execute(
+                    "SELECT id, code FROM items WHERE id IN (%s)" % ph,
+                    tuple(ids)).fetchall()
+            d = {r["id"]: (r["code"] or "#%d" % r["id"]) for r in rows}
+            return [d.get(int(i), "#%d" % int(i)) for i in ids]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _sv(v, n=24):
+        return "" if v is None else str(v)[:n]
+
+    def _oplog_prune(self):
+        """清掉超过保留期的日志（meta.oplog_days，默认 180 天）。"""
+        try:
+            days = int(float(self.get_meta("oplog_days", 180) or 180))
+        except (TypeError, ValueError):
+            days = 180
+        self._execute("DELETE FROM oplog WHERE ts < ?",
+                      (time.time() - days * 86400,))
+
+    def oplog_list(self, src="", kw="", days=0, limit=2000):
+        sql = "SELECT * FROM oplog WHERE 1 = 1"
+        args = []
+        if src:
+            sql += " AND src = ?"
+            args.append(src)
+        if kw:
+            sql += " AND (code LIKE ? OR detail LIKE ? OR act LIKE ?)"
+            like = "%" + kw + "%"
+            args += [like, like, like]
+        if days:
+            sql += " AND ts >= ?"
+            args.append(time.time() - int(days) * 86400)
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+        args.append(int(limit))
+        with self._lock:
+            rows = self.conn.execute(sql, tuple(args)).fetchall()
+        return [dict(r) for r in rows]
+
+    def oplog_srcs(self):
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT DISTINCT src FROM oplog ORDER BY src").fetchall()
+        return [r["src"] for r in rows]
+
+    def oplog_clear(self):
+        self._execute("DELETE FROM oplog")
 
     # ---------------------------------------------------------- 元数据 / 设置
     def get_meta(self, key, default=None):
@@ -389,6 +492,8 @@ class Store(object):
                         cols=cols, ph=ph),
                     tuple([lid] + vals) + (so, ts, ts, ts))
         self.conn.commit()
+        self.log_op("手机上传商品", rec.get("code") or rec.get("model") or "",
+                    "App 同步%s" % ("更新" if row else "新增"))
         return lid
 
     def m_upsert_sale(self, rec):
@@ -428,6 +533,8 @@ class Store(object):
                 "out_type=excluded.out_type, remark=excluded.remark, "
                 "synced_at=excluded.synced_at", args)
         self.conn.commit()
+        self.log_op("手机上传出售", _s("code", 40) or _s("model", 40),
+                    "%d 件 × %.2f 元" % (max(1, _i("qty")), _f("price")))
         return lid
 
     def m_items(self, kw=""):
@@ -448,20 +555,29 @@ class Store(object):
 
     def m_del_item(self, lid):
         with self._lock:
+            row = self.conn.execute("SELECT code, model FROM phone_items WHERE lid = ?",
+                                    (int(lid),)).fetchone()
             self.conn.execute("DELETE FROM phone_items WHERE lid = ?", (int(lid),))
         self.conn.commit()
+        d = dict(row) if row else {}
+        self.log_op("手机删除商品", d.get("code") or d.get("model") or "", "手机区商品")
 
     def m_del_sale(self, lid):
         with self._lock:
+            row = self.conn.execute("SELECT code FROM phone_sales WHERE lid = ?",
+                                    (int(lid),)).fetchone()
             self.conn.execute("DELETE FROM phone_sales WHERE lid = ?", (int(lid),))
         self.conn.commit()
+        self.log_op("手机删除出售", dict(row)["code"] if row else "", "手机区出售记录")
 
     def m_clear(self):
         """清空全部手机数据（不影响主库存）。"""
         with self._lock:
+            n = self.conn.execute("SELECT COUNT(*) FROM phone_items").fetchone()[0]
             self.conn.execute("DELETE FROM phone_items")
             self.conn.execute("DELETE FROM phone_sales")
         self.conn.commit()
+        self.log_op("清空手机数据", "", "%d 条手机区记录" % n)
 
     def m_transfer(self, lids):
         """把手机商品转入主库存：生成电脑编号（接着最大号排）、插入 items，
@@ -491,6 +607,9 @@ class Store(object):
             self.conn.commit()
             n += 1
             codes.append(code)
+        if n:
+            self.log_op("转入库存", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                        "手机数据转入 %d 条" % n)
         return n, codes
 
     # ---------------------------------------------------------------- 查询
@@ -613,6 +732,7 @@ class Store(object):
         sql = ('INSERT INTO items ({cols}, created_at, updated_at) VALUES ({ph})'
                .format(cols=SQL_COLS, ph=", ".join(["?"] * (len(FIELD_KEYS) + 2))))
         cur = self._execute(sql, tuple(self._vals(rec)) + (ts, ts))
+        self.log_op("新增", rec.get("code") or "")
         return cur.lastrowid
 
     def insert_many(self, recs, progress=None):
@@ -635,6 +755,7 @@ class Store(object):
                 cur.executemany(sql, batch)
                 n += len(batch)
             self.conn.commit()
+        self.log_op("导入", "", "新增 %d 条" % n)
         return n
 
     def update(self, rid, rec):
@@ -646,11 +767,26 @@ class Store(object):
             qleft = int(float(rec.get("qty") or 0))
         except (TypeError, ValueError):
             qleft = 0
+        with self._lock:
+            old = self.conn.execute("SELECT * FROM items WHERE id = ?", (rid,)).fetchone()
+        oldd = dict(old) if old else {}
         self._execute(sql, tuple(self._vals(rec)) + (qleft, now_str(), rid))
+        if oldd:
+            diffs = ["%s: %s → %s" % (k, self._sv(oldd.get(k)), self._sv(rec.get(k)))
+                     for k in FIELD_KEYS
+                     if str(oldd.get(k) if oldd.get(k) is not None else "") !=
+                     str(rec.get(k) if rec.get(k) is not None else "")]
+            self.log_op("修改", oldd.get("code") or "",
+                        "；".join(diffs) if diffs else "无字段变化")
 
     def update_field(self, rid, field, value):
         if field not in FIELD_KEYS:
             return
+        with self._lock:
+            old = self.conn.execute("SELECT code, \"%s\" v FROM items WHERE id = ?"
+                                    % field, (rid,)).fetchone()
+        oldcode = (dict(old)["code"] if old else "")
+        oldv = (dict(old)["v"] if old else None)
         rec = blank_record()
         rec[field] = value
         if field == "qty":
@@ -662,10 +798,14 @@ class Store(object):
                           'CASE WHEN ? > 0 THEN 0 ELSE "sold_out" END, updated_at = ? '
                           'WHERE id = ?', (self._vals(rec)[FIELD_KEYS.index(field)],
                                            qleft, now_str(), rid))
+            self.log_op("修改", oldcode, "%s: %s → %s" % (field, self._sv(oldv),
+                                                         self._sv(value)))
             return
         v = self._vals(rec)[FIELD_KEYS.index(field)]
         self._execute('UPDATE items SET "{f}" = ?, updated_at = ? WHERE id = ?'
                       .format(f=field), (v, now_str(), rid))
+        self.log_op("修改", oldcode, "%s: %s → %s" % (field, self._sv(oldv),
+                                                     self._sv(value)))
 
     def batch_update(self, ids, updates):
         """批量修改若干字段（只改传入的字段）。数量改回 >0 时自动清除「已售完」。"""
@@ -692,9 +832,15 @@ class Store(object):
         sets.append('"updated_at" = ?')
         vals.append(now_str())
         ph = ", ".join(["?"] * len(ids))
+        codes = self._codes_of(ids)
         cur = self._execute(
             'UPDATE items SET %s WHERE id IN (%s) AND deleted_at IS NULL'
             % (", ".join(sets), ph), tuple(vals) + tuple(ids))
+        self.log_op("批量修改", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                    "%d 条，%s" % (cur.rowcount,
+                                   "；".join("%s → %s" % (k, self._sv(v, 40))
+                                             for k, v in updates.items()
+                                             if k in FIELD_KEYS)))
         return cur.rowcount
 
     def set_listed(self, ids, listed):
@@ -704,6 +850,7 @@ class Store(object):
         ph = ", ".join(["?"] * len(ids))
         cur = self._execute('UPDATE items SET "listed" = ?, updated_at = ? WHERE id IN ({ph})'
                             .format(ph=ph), (1 if listed else 0, now_str()) + tuple(ids))
+        self.log_op("上架" if listed else "下架", "", "%d 条" % cur.rowcount)
         return cur.rowcount
 
     def delete_ids(self, ids, soft=True):
@@ -713,15 +860,20 @@ class Store(object):
             return 0
         ph = ", ".join(["?"] * len(ids))
         ts = now_str()
+        codes = self._codes_of(ids)
         if soft:
             cur = self._execute(
                 'UPDATE items SET "deleted_at" = ?, "updated_at" = ? '
                 'WHERE id IN ({ph}) AND deleted_at IS NULL'.format(ph=ph),
                 (ts, ts) + tuple(ids))
+            self.log_op("删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                        "移入回收站 %d 条" % cur.rowcount)
         else:
             cur = self._execute(
                 "DELETE FROM items WHERE id IN ({ph}) AND deleted_at IS NOT NULL".format(ph=ph),
                 tuple(ids))
+            self.log_op("彻底删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                        "%d 条" % cur.rowcount)
         return cur.rowcount
 
     # ---------------------------------------------------------------- 回收站
@@ -744,10 +896,13 @@ class Store(object):
         if not ids:
             return 0
         ph = ", ".join(["?"] * len(ids))
+        codes = self._codes_of(ids)
         cur = self._execute(
             'UPDATE items SET "deleted_at" = NULL, "updated_at" = ? '
             'WHERE id IN ({ph}) AND deleted_at IS NOT NULL'.format(ph=ph),
             (now_str(),) + tuple(ids))
+        self.log_op("恢复", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                    "从回收站恢复 %d 条" % cur.rowcount)
         return cur.rowcount
 
     def purge_ids(self, ids):
@@ -756,18 +911,23 @@ class Store(object):
         if not ids:
             return 0
         ph = ", ".join(["?"] * len(ids))
+        codes = self._codes_of(ids)
         cur = self._execute(
             "DELETE FROM items WHERE id IN ({ph}) AND deleted_at IS NOT NULL".format(ph=ph),
             tuple(ids))
+        self.log_op("彻底删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
+                    "%d 条（回收站）" % cur.rowcount)
         return cur.rowcount
 
     def purge_all_deleted(self):
         cur = self._execute("DELETE FROM items WHERE deleted_at IS NOT NULL")
+        self.log_op("清空回收站", "", "%d 条" % cur.rowcount)
         return cur.rowcount
 
     def reset_code_seq(self):
         """清除编号计数器，让下一次导入从 WL-00001 重新开始。"""
         self._execute("DELETE FROM meta WHERE k = ?", (CODE_SEQ_KEY,))
+        self.log_op("重置编号", "", "编号计数器归零，下次从 1 开始")
 
     # ---------------------------------------------------------------- 出售
     def add_sale(self, item_id, qty, price, buyer="", sale_date="", remark="",
@@ -825,6 +985,9 @@ class Store(object):
                 (left, 1 if left <= 0 else 0, now, item_id))
             self.conn.commit()
         code = rec.get("code") or ""
+        self.log_op("出售" if is_sale else "出库", code,
+                    "%d 件 × %.2f 元%s" % (qty, price,
+                                           ("，买家 " + buyer) if buyer else ""))
         if is_sale:
             return True, "已登记出售 %s：%d 件，合计 %.2f 元" % (code, qty, price * qty)
         return True, "已登记%s出库 %s：%d 件（不计销售额）" % (out_type, code, qty)
@@ -872,6 +1035,8 @@ class Store(object):
                  OUT_TYPE_SALE, now_str()))
             self.conn.commit()
         name = code or model or brand
+        self.log_op("手动补录出售", code or model or brand,
+                    "%d 件 × %.2f 元，合计 %.2f 元" % (qty, price, total))
         return True, ("已手动登记出售 %s：%d 件，合计 %.2f 元（未扣库存）"
                       % (name, qty, total))
 
@@ -960,6 +1125,9 @@ class Store(object):
                     restored = True
             self.conn.execute("DELETE FROM sales WHERE id = ?", (sale_id,))
             self.conn.commit()
+        self.log_op("撤销出售", s.get("code") or "",
+                    "%d 件%s" % (int(s.get("qty") or 0),
+                                 "，数量已加回库存" if restored else "（手动补录）"))
         if restored:
             return True, "已撤销这笔出库，数量已加回库存"
         return True, "已撤销这笔出售记录（手动补录，不涉及库存）"
@@ -1011,6 +1179,8 @@ class Store(object):
             self.conn.execute("UPDATE sales SET %s WHERE id = ?" % sets, args)
             self.conn.commit()
         code = s.get("code") or ""
+        self.log_op("修改出售", code, "类型改为「%s」%s" % (
+            out_type, ("，%.2f 元/件" % p) if is_sale else "（不计金额）"))
         if is_sale:
             return True, "已把 %s 的 %d 件出库改为「销售」（%.2f 元/件，合计 %.2f 元）" \
                          % (code, qty, p, p * qty)
@@ -1254,6 +1424,10 @@ class Store(object):
                 '"updated_at" = ? WHERE id = ?',
                 (left, cost, left, now, item_id))
             self.conn.commit()
+        self.log_op("采购入库", rec.get("code") or "",
+                    "%d 件 × %.2f 元，成本 %.2f 元%s"
+                    % (qty, unit_cost, cost,
+                       ("，供应商 " + supplier) if supplier else ""))
         return True, ("已入库 %s：%d 件 × %.2f 元，合计 %.2f 元，库存 %d 件，"
                       "成本单价 %.2f 元" % (rec.get("code") or "", qty, unit_cost,
                                             unit_cost * qty, left, cost))
@@ -1327,6 +1501,10 @@ class Store(object):
         if purge_sales:
             self._execute("DELETE FROM sales")
             self._execute("DELETE FROM purchases")
+            self.log_op("清空全部", "", "库存+出售+采购记录全部清空")
+        else:
+            self.log_op("清空全部", "", "库存记录全部清空%s"
+                        % ("（出售流水保留）" if not purge_sales else ""))
         if reset_seq:
             self.reset_code_seq()
 
