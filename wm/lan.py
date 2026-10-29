@@ -376,6 +376,8 @@ def _make_handler(srv):
                 code, body, hdrs = srv.mobile.login(
                     ip, str((payload or {}).get("code") or ""), srv._code_ok,
                     app_mode=bool((payload or {}).get("app")))
+                if code == 200:
+                    srv.on_event("clients", None)   # 手机登录 → 主机弹窗即时刷新在线列表
                 return self._send_full(code, body, hdrs)
             if path == "/m/logout":
                 token = _token_from(self.headers)

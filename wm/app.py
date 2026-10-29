@@ -3093,6 +3093,12 @@ class App(object):
     def _lan_tick(self):
         if self._stopped:
             return
+        if self.lan_mode == "host" and getattr(self, "lan_dlg", None) is not None:
+            try:
+                if self.lan_dlg.winfo_viewable():
+                    self._refresh_lan_dialog()   # 主机模式弹窗也轮询（在线列表/最近活动保鲜）
+            except Exception:
+                pass
         if self.lan_mode == "client" and not self._lan_busy:
             self._lan_busy = True
 

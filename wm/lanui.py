@@ -493,6 +493,7 @@ class LanDialog(tk.Toplevel):
             else "开启共享后手机才能连上")
         self._in_refresh = True
         try:
+            psel_keep = [i for i in self.ptree.selection() if self.ptree.exists(i)]
             self.ptree.delete(*self.ptree.get_children())
         finally:
             self._in_refresh = False
@@ -507,6 +508,14 @@ class LanDialog(tk.Toplevel):
             self.ptree.insert("", "end", iid=it["ip"],
                               values=("手机 App" if it["app"] else "浏览器 /m",
                                       it["ip"], last, left))
+        if psel_keep:                          # 轮询刷新不冲掉用户选中的行
+            self._in_refresh = True
+            try:
+                keep = [i for i in psel_keep if self.ptree.exists(i)]
+                if keep:
+                    self.ptree.selection_set(keep)
+            finally:
+                self._in_refresh = False
         self._psel_changed()
         if hosting:
             self.lbl_phone_msg.configure(
