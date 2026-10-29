@@ -631,6 +631,26 @@ check("电脑库存接口支持翻页（offset/limit/has_more）",
       and _p1.get("has_more") == (ss.count() > 1)
       and _p2.get("items") and _p2["items"][0] != _p1["items"][0],
       (_p1.get("total"), _p1.get("has_more")))
+_si = _lan_srv.mobile.sessions_info()
+check("主机能看到在线手机连接信息（IP/类型/时间）",
+      any(i["ip"] == "127.0.0.1" for i in _si)
+      and all("last" in i and "expires" in i and "app" in i for i in _si), _si)
+_msvc = MobileService()
+_c, _mb2, _ = _msvc.login("10.0.0.9", "x", lambda c: True, app_mode=True)
+_msvc.check(_mb2["token"], "10.0.0.9")
+_si2 = _msvc.sessions_info()
+_ok_info = (len(_si2) == 1 and _si2[0]["app"] and _si2[0]["ip"] == "10.0.0.9"
+            and _si2[0]["last"] > 0)
+_msvc.drop_ip("10.0.0.9")
+check("手机会话可查可单台下线（drop_ip 后立即失效）",
+      _ok_info and _msvc.sessions_info() == []
+      and not _msvc.check(_mb2["token"], "10.0.0.9"))
+_lanui_src = open(os.path.join(os.path.dirname(__file__), "..", "wm", "lanui.py"),
+                  encoding="utf-8").read()
+check("局域网窗口手机区有连接列表与下线/拉黑按钮",
+      all(x in _lanui_src
+          for x in ("self.ptree", "kick_phone", "block_phone", "手机下线",
+                    "选中一行可下线")))
 _msc, _mb, _ = _mreq("/m/api/sales?kw=", opener=_mb_op)
 check("手机端能读到出售记录", _msc == 200 and _mb.get("ok") and "sales" in _mb, _msc)
 _msc, _mb, _ = _mreq("/m/api/sell", {"code": "WL-MOB", "qty": 1, "price": 9.9},

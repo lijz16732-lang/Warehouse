@@ -91,7 +91,7 @@ class MobileService(object):
             self._fails.pop(ip, None)
             token = secrets.token_urlsafe(32)
             self._sessions[token] = {"ip": ip, "expires": time.time() + SESSION_TTL,
-                                     "app": bool(app_mode)}
+                                     "app": bool(app_mode), "last": time.time()}
         body = {"ok": True}
         if app_mode:
             body["token"] = token
@@ -113,6 +113,7 @@ class MobileService(object):
                 del self._sessions[token]
                 return False
             s["expires"] = now + SESSION_TTL
+            s["last"] = now
             return True
 
     def logout(self, token):
@@ -146,6 +147,25 @@ class MobileService(object):
         with self._lock:
             now = time.time()
             return sorted({s["ip"] for s in self._sessions.values() if now < s["expires"]})
+
+    def sessions_info(self):
+        """在线手机列表（按 IP 合并多会话，取最近活动）。
+
+        返回 [{"ip", "app", "expires", "last"}]，按最近活动倒序 —— 供主机
+        局域网窗口显示连接信息、单台下线/拉黑用。
+        """
+        with self._lock:
+            now = time.time()
+            info = {}
+            for s in self._sessions.values():
+                if now >= s["expires"]:
+                    continue
+                cur = info.get(s["ip"])
+                if cur is None or s.get("last", 0) > cur["last"]:
+                    info[s["ip"]] = {"ip": s["ip"], "app": bool(s.get("app")),
+                                     "expires": s["expires"],
+                                     "last": s.get("last", 0)}
+            return sorted(info.values(), key=lambda d: -d["last"])
 
 
 # ================================================================ 接口实现

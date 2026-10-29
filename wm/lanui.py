@@ -174,6 +174,7 @@ class LanDialog(tk.Toplevel):
             "② 连接主机（本机作为客户端）",
             "填主机上显示的地址和连接码；本机不存副本，看到的就是主机当前数据。\n"
             "① 和 ② 选一个用即可：同一台电脑同时只能当其中一种。", parent=self.body)
+        self._cli_card = cli          # 主机模式下整卡收起（给③手机列表腾地方）
         self.cli_badge = cli.badge
         rowc = tk.Frame(cli, bg=CLR_CARD)
         rowc.pack(fill="x", padx=14, pady=(0, 6))
@@ -235,6 +236,7 @@ class LanDialog(tk.Toplevel):
             "③ 手机访问（手机 App 数据互通）",
             "手机安装《仓管家》App 后，首次打开把下面的地址填进去即可；\n"
             "手机和电脑要连同一个 WiFi，App 里输入连接码登录。", parent=self.body)
+        self._ph_card = ph
         self.ph_badge = ph.badge
         rowp = tk.Frame(ph, bg=CLR_CARD)
         rowp.pack(fill="x", padx=14, pady=(0, 6))
@@ -255,12 +257,35 @@ class LanDialog(tk.Toplevel):
         self._qr_img = None
         self._qr_path = None
         rowps = tk.Frame(ph, bg=CLR_CARD)
-        rowps.pack(fill="x", padx=14, pady=(0, 10))
+        rowps.pack(fill="x", padx=14, pady=(0, 8))
         self.lbl_phone_sessions = tk.Label(rowps, text="", bg=CLR_CARD, fg=CLR_MUTED,
                                            font=(self.fam, 8))
         self.lbl_phone_sessions.pack(side="left")
         ttk.Button(rowps, text="手机全部下线", style="Ghost.TButton", width=12,
                    command=self.phones_offline).pack(side="right")
+
+        # 在线手机列表：选中一行可单独下线或拉黑
+        pwrap = tk.Frame(ph, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                         highlightthickness=1)
+        pwrap.pack(fill="x", padx=14, pady=(2, 4))
+        pcols = ("dev", "ip", "last", "left")
+        self.ptree = ttk.Treeview(pwrap, columns=pcols, show="headings", height=3)
+        for key, title, w in (("dev", "设备", 150), ("ip", "地址", 130),
+                              ("last", "最近活动", 120), ("left", "会话剩余", 100)):
+            self.ptree.heading(key, text=title)
+            self.ptree.column(key, width=w, anchor="center")
+        self.ptree.pack(fill="x")
+        self.ptree.bind("<<TreeviewSelect>>", self._psel_changed)
+        rowpb = tk.Frame(ph, bg=CLR_CARD)
+        rowpb.pack(fill="x", padx=14, pady=(0, 10))
+        self.btn_pkick = ttk.Button(rowpb, text="手机下线", style="Ghost.TButton",
+                                    width=9, state="disabled",
+                                    command=self.kick_phone)
+        self.btn_pkick.pack(side="right")
+        self.btn_pblk = ttk.Button(rowpb, text="加入黑名单", style="Ghost.TButton",
+                                   width=11, state="disabled",
+                                   command=self.block_phone)
+        self.btn_pblk.pack(side="right", padx=(0, 6))
 
         # ---- 底部 ----
         self._foot = foot = tk.Frame(self, bg=CLR_BG)
@@ -362,6 +387,14 @@ class LanDialog(tk.Toplevel):
                 if st["running"] else "未开启共享（开启后其他电脑才能连接本机）",
                 fg=CLR_MUTED)
 
+        # 主机模式下收起②连接主机卡片（当主机时它没有用，给③手机列表腾地方）；
+        # 其他模式恢复显示（用 before= 保持卡片原顺序）
+        if mode == "host":
+            self._cli_card.pack_forget()
+        else:
+            self._cli_card.pack(fill="x", padx=12, pady=(8, 0),
+                                before=self._ph_card)
+
         # 客户端区回填
         if mode == "client" and st.get("host"):
             if not self.var_host.get().strip():
@@ -445,18 +478,36 @@ class LanDialog(tk.Toplevel):
         return "%s#c=%s" % (url, code) if code else url
 
     def _refresh_phone(self, st):
-        """③ 手机访问区：地址、二维码、会话数。"""
+        """③ 手机访问区：地址、二维码、会话数、在线手机列表。"""
         url = self._phone_url()
         self.lbl_phone_url.configure(text=url)
         srv = self.app.lan_server
         hosting = st["mode"] == "host" and st["running"]
         try:
+            infos = srv.mobile.sessions_info() if (hosting and srv) else []
             n = srv.mobile.count() if (hosting and srv) else 0
         except Exception:
-            n = 0
+            infos, n = [], 0
         self.lbl_phone_sessions.configure(
-            text=("手机在线：%d 台（会话 12 小时有效）" % n) if hosting
+            text=("手机在线：%d 台（选中一行可下线 / 拉黑）" % n) if hosting
             else "开启共享后手机才能连上")
+        self._in_refresh = True
+        try:
+            self.ptree.delete(*self.ptree.get_children())
+        finally:
+            self._in_refresh = False
+        import time
+        now = time.time()
+        for it in infos:
+            ago = int(max(0, now - it["last"]))
+            last = "%d 秒前" % ago if ago < 60 else (
+                "%d 分钟前" % (ago // 60) if ago < 3600 else "%d 小时前" % (ago // 3600))
+            rest = int(max(0, it["expires"] - now))
+            left = "%d 小时" % (rest // 3600) if rest >= 3600 else "%d 分钟" % max(1, rest // 60)
+            self.ptree.insert("", "end", iid=it["ip"],
+                              values=("手机 App" if it["app"] else "浏览器 /m",
+                                      it["ip"], last, left))
+        self._psel_changed()
         if hosting:
             self.lbl_phone_msg.configure(
                 text="App 里点「扫电脑二维码，自动连接」，对着右边二维码扫一下即可"
@@ -466,6 +517,59 @@ class LanDialog(tk.Toplevel):
             self.lbl_phone_msg.configure(
                 text="开启共享后，地址和二维码才会生效。", fg=CLR_MUTED)
         self._render_qr(self._phone_qr_text(st) if hosting else "")
+
+    def _psel_changed(self):
+        """手机列表选中状态 → 下线/拉黑按钮（只切按钮状态，防事件风暴）。"""
+        if getattr(self, "_in_refresh", False):
+            return
+        hosting = self.app.lan_mode == "host" and self.app.lan_status()["running"]
+        state = "normal" if (hosting and self.ptree.selection()) else "disabled"
+        for b in (self.btn_pkick, self.btn_pblk):
+            if str(b.cget("state")) != state:
+                b.configure(state=state)
+
+    def _sel_phone(self):
+        sel = self.ptree.selection()
+        if not sel:
+            return None
+        ip = sel[0]
+        vals = self.ptree.item(ip, "values")
+        return ip, (vals[0] if vals else "手机")
+
+    def kick_phone(self):
+        """单台手机下线（App 里要重新输连接码）。"""
+        p = self._sel_phone()
+        if not p:
+            return
+        ip, dev = p
+        if not messagebox.askyesno(
+                "手机下线",
+                "让 %s（%s）下线吗？\nApp 里需要重新输入连接码才能登录。"
+                % (dev, ip), parent=self, icon="warning"):
+            return
+        srv = self.app.lan_server
+        if srv:
+            srv.mobile.drop_ip(ip)
+        self.refresh()
+
+    def block_phone(self):
+        """单台手机拉黑：下线并加入黑名单（复用电脑黑名单，/m 接口同样拦截）。"""
+        p = self._sel_phone()
+        if not p:
+            return
+        ip, dev = p
+        if not messagebox.askyesno(
+                "加入黑名单",
+                "确定把 %s（%s）加入黑名单吗？\n\n"
+                "会先让它下线；之后该设备无法再连接本机共享（连接码正确也不行），\n"
+                "直到在「黑名单管理」里移出。" % (dev, ip),
+                parent=self, icon="warning"):
+            return
+        srv = self.app.lan_server
+        if srv:
+            srv.mobile.drop_ip(ip)
+        self.app.lan_block_client(ip, dev)
+        self.refresh()
 
     def _render_qr(self, url):
         """手机扫一扫免手输地址（需要 segno；缺失时跳过）。"""
@@ -634,12 +738,12 @@ class LanDialog(tk.Toplevel):
         win.resizable(False, False)
         apply_window_icon(win)
         win.grab_set()
-        tk.Label(win, text="黑名单里的电脑无法连接本机共享（连接码正确也不行）。",
+        tk.Label(win, text="黑名单里的设备（电脑 / 手机）无法连接本机共享（连接码正确也不行）。",
                  bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 9)).pack(
             anchor="w", padx=16, pady=(14, 6))
         cols = ("ip", "name")
         tv = ttk.Treeview(win, columns=cols, show="headings", height=8)
-        for key, title, w in (("ip", "地址", 150), ("name", "电脑", 180)):
+        for key, title, w in (("ip", "地址", 150), ("name", "设备", 180)):
             tv.heading(key, text=title)
             tv.column(key, width=w, anchor="center")
         tv.pack(fill="both", expand=True, padx=16)
@@ -657,7 +761,7 @@ class LanDialog(tk.Toplevel):
         def remove_sel():
             sel = tv.selection()
             if not sel:
-                messagebox.showinfo("移出黑名单", "请先在列表里选中一台电脑。",
+                messagebox.showinfo("移出黑名单", "请先在列表里选中一台设备。",
                                     parent=win)
                 return
             self.app.lan_unblock(sel[0])
