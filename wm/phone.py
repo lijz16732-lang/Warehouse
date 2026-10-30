@@ -100,20 +100,39 @@ class PhoneTab(ttk.Frame):
         self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS,
                                           is_items=True)
         self.tree_sales = self._make_tree(self.frm_sales, PHONE_SALE_COLS)
-        # 手机区商品照片条（v1.25.0）：选中一行后可查看 / 添加照片
+        # 照片改为点表格 📷 直接弹大图查看窗（v1.26.5）：
+        # 不再在页面底部嵌照片条。PhotoStrip 仅作不显示的操作载体
+        # （view / add_photos 都挂在它上面，不 pack 不占版面）
         self.photo_strip = PhotoStrip(self.frm_items, self.app, kind="phone")
-        self.photo_strip.pack(fill="x", padx=(0, 0), pady=(0, 8))
-        self.tree_items.bind("<<TreeviewSelect>>", self._psel, add="+")
+        self.tree_items.bind("<Button-1>", self._on_items_click, add="+")
 
-    def _psel(self, _event=None):
-        """手机库存表选中变化 → 照片条跟随。"""
+    def _on_items_click(self, ev):
+        """手机库存表：点 📷 指示列 → 直接打开该记录的照片查看窗。"""
+        tree = self.tree_items
         try:
-            mapping = self._maps.get(self.tree_items) or {}
-            sel = self.tree_items.selection()
-            code = mapping[sel[0]].get("code") if len(sel) == 1 else None
-            self.photo_strip.set_code(code or None)
+            if tree.identify_region(ev.x, ev.y) != "cell":
+                return
+            cidx = int(str(tree.identify_column(ev.x)).replace("#", "")) - 1
+        except (TypeError, ValueError):
+            return
+        if cidx != len(PHONE_ITEM_COLS):      # 📷 列在所有数据列之后
+            return
+        row = tree.identify_row(ev.y)
+        rec = (self._maps.get(tree) or {}).get(str(row))
+        code = (rec or {}).get("code")
+        if not code:
+            return
+        try:
+            names = list(self._store().photos_list("phone", code) or [])
         except Exception:
-            pass
+            names = []
+        self.photo_strip.set_code(code)
+        if names:
+            self.photo_strip.view(names[0])
+        else:
+            # 暂无照片：直接进入添加流程（与库存页能力一致）
+            self.app._status("「%s」暂无照片：可直接选择图片添加" % code)
+            self.photo_strip.add_photos()
 
     def _make_tree(self, parent, cols_def, is_items=False):
         wrap = tk.Frame(parent, bg=CLR_CARD, highlightbackground=CLR_BORDER,
@@ -203,10 +222,6 @@ class PhoneTab(ttk.Frame):
         self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS)
         self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
                                    % (len(self.item_rows), len(self.sale_rows)))
-        try:                                 # 行重建后旧选中作废 → 照片条复位
-            self.photo_strip.set_code(None)
-        except Exception:
-            pass
 
     @staticmethod
     def _item_state(r):

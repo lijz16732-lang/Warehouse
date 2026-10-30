@@ -302,6 +302,9 @@ class PhotoStrip(tk.Frame):
                        command=lambda: step(1)).pack(side="left", padx=4)
             ttk.Button(row, text="保存图片", style="Ghost.TButton",
                        command=do_save).pack(side="left", padx=4)
+            if not self.pending:
+                ttk.Button(row, text="添加照片", style="Ghost.TButton",
+                           command=do_add).pack(side="left", padx=4)
 
         def do_save():
             """把当前照片另存为图片文件（原图字节，不重新压缩）。"""
@@ -329,6 +332,11 @@ class PhotoStrip(tk.Frame):
         def step(d):
             state["idx"] = max(0, min(len(names) - 1, state["idx"] + d))
             show()
+
+        def do_add():
+            """查看窗里直接补照片：关掉查看窗再走添加流程。"""
+            win.destroy()
+            self.add_photos()
 
         def do_del():
             n = names[state["idx"]]
