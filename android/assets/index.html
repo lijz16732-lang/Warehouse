@@ -51,11 +51,15 @@ label.lbl-io button { margin-left:auto; padding:3px 10px; font-size:12px; line-h
 .seg { display:flex; background:var(--seg); border-radius:9px; padding:3px; margin-bottom:10px; }
 .seg div { flex:1; text-align:center; padding:7px 0; font-size:13px; color:var(--soft); border-radius:7px; }
 .seg div.on { background:var(--segOn); color:var(--accent); font-weight:700; }
-/* 表格 */
-.tblwrap { overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:12px; }
+/* 表格：容器限高自身滚动，th sticky 才能吸顶
+   （否则滚动发生在 #main 上，sticky 相对 tblwrap 永远不生效）
+   CSS 是兜底值，JS 会按实际空间精调（fitTbls） */
+.tblwrap { overflow:auto; max-height:calc(100vh - 265px); background:var(--card);
+           border:1px solid var(--line); border-radius:12px; }
 table { border-collapse:collapse; min-width:100%; }
 th { background:var(--th); color:var(--thf); font-size:12px; font-weight:600; padding:9px 10px;
-     white-space:nowrap; position:sticky; top:0; text-align:left; border-bottom:1px solid var(--line2); }
+     white-space:nowrap; position:sticky; top:0; z-index:2; text-align:left;
+     border-bottom:1px solid var(--line2); box-shadow:0 1px 0 var(--line2); }
 td { padding:9px 10px; border-bottom:1px solid var(--line3); font-size:13px; white-space:nowrap; }
 tr.sold td { color:var(--sold); }
 tr:active { background:var(--active); }
@@ -227,6 +231,11 @@ tr:active { background:var(--active); }
       <div class="statline" id="dataStat"></div>
       <button id="btnWipe" class="danger" style="width:100%;margin-top:10px">清空手机数据</button>
       <div class="hint">只清手机上的库存和出售记录；已同步到电脑的数据不受影响。操作前请先同步。</div>
+    </div>
+    <div class="card">
+      <h3>隐私政策与用户协议</h3>
+      <button id="btnAgreement" class="gray" style="width:100%">查看《隐私政策》和《用户协议》</button>
+      <div class="hint">首次启动时展示的协议内容，可随时在这里重新阅读。</div>
     </div>
   </div>
 </main>
@@ -794,12 +803,14 @@ $('segLoc').onclick = function () {
   invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = '';
   $('fltRow').classList.remove('hide');
   loadLoc($('inKw').value);
+  setTimeout(fitTbls, 0);
 };
 $('segPc').onclick = function () {
   if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
   invView = 'pc'; $('segPc').className = 'on'; $('segLoc').className = '';
   $('fltRow').classList.add('hide');   // 快捷筛选只对手机库存有意义
   loadPc($('inKw').value);
+  setTimeout(fitTbls, 0);
 };
 function mkHead(tbl, cols, phMark) {
   var thead = tbl.tHead; thead.innerHTML = '';
@@ -876,13 +887,26 @@ function pcMoreRow(cols) {
   return tr;
 }
 function pcNearBottom() {
-  var m = $('main');
-  return m.scrollTop + m.clientHeight >= m.scrollHeight - 120;
+  var m = $('main'), w = $('tInv').parentNode;
+  return (m.scrollTop + m.clientHeight >= m.scrollHeight - 120) ||
+         (w.scrollTop + w.clientHeight >= w.scrollHeight - 120);
 }
 function pcMaybeLoad() {
   if (invView === 'pc' && PC_PAGE.hasMore && !PC_PAGE.loading && pcNearBottom()) pcLoadMore();
 }
 $('main').addEventListener('scroll', pcMaybeLoad);
+/* 容器限高后表格在自己内部滚动，加载更多要听 tblwrap 的滚动 */
+$('tInv').parentNode.addEventListener('scroll', pcMaybeLoad);
+/* 表格容器限高精调：让 th sticky 吸顶且主页面尽量不滚动 */
+function fitTbl(id) {
+  var m = $('main'), w = $(id).parentNode;
+  if (!w.offsetHeight) return;                 // 页签隐藏时跳过
+  var top = w.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop;
+  var h = m.clientHeight - top - 14;
+  if (h > 160) w.style.maxHeight = h + 'px';
+}
+function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); }
+window.addEventListener('resize', fitTbls);
 function pcLoadMore() {
   if (PC_PAGE.loading || !PC_PAGE.hasMore) return;
   PC_PAGE.loading = true;
@@ -1302,6 +1326,14 @@ function renderData() {
   $('dataStat').textContent = '手机库存 ' + DB.items.length + ' 条 · 出售记录 ' +
     DB.sales.length + ' 条 · 待同步 ' + pendingCount() + ' 条';
 }
+/* 隐私政策 / 用户协议：随时重看（原生只读弹窗） */
+$('btnAgreement').onclick = function () {
+  if (window.AndroidInfo && AndroidInfo.showAgreement) {
+    AndroidInfo.showAgreement();
+  } else {
+    toast('请在手机 App 内查看');
+  }
+};
 
 /* ================= 页签 ================= */
 function tab2(name) {
@@ -1315,6 +1347,7 @@ function tab2(name) {
   if (name === 'add') renderAddPh();
   if (name === 'rec') loadRec();
   if (name === 'set') { renderShare(); renderSync(); renderData(); renderColList(); }
+  if (name === 'inv' || name === 'rec') setTimeout(fitTbls, 0);   // 显示后重算限高
 }
 (function () {
   var tabs = document.querySelectorAll('nav div');
@@ -1417,6 +1450,7 @@ renderSync(); renderData();
     renderShare();
   }
   loadLoc(''); loadRec();
+  setTimeout(fitTbls, 0);          // 首屏渲染后精调表格限高（th 吸顶）
 })();
 </script>
 </body>

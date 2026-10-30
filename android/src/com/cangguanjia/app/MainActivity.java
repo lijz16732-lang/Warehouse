@@ -99,6 +99,8 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new ScanBridge(), "AndroidOcr");
         // 页面调用本机「拍照/相册」加照片（原生读取+压缩，回传 base64）
         web.addJavascriptInterface(new PhotoBridge(), "AndroidPhotos");
+        // 页面「设置」里随时重看《隐私政策》和《用户协议》
+        web.addJavascriptInterface(new InfoBridge(), "AndroidInfo");
 
         setContentView(web);
 
@@ -170,9 +172,25 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    /** 设置页 → 随时重看协议：只读展示，关闭即回，不重复要同意。 */
+    private void showAgreementDialog() {
+        android.widget.ScrollView sc = new android.widget.ScrollView(this);
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setText(PRIVACY_TEXT);
+        tv.setTextSize(13.5f);
+        tv.setLineSpacing(0, 1.25f);
+        tv.setPadding(dp(18), dp(10), dp(18), dp(10));
+        sc.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("隐私政策与用户协议")
+                .setView(sc)
+                .setCancelable(true)
+                .setPositiveButton("我知道了", null)
+                .show();
+    }
+
     /** 协议正文（应用商店合规要求：首启展示、说明权限用途与数据去向）。 */
-    private static final String PRIVACY_TEXT =
-            "在使用本应用前，请务必阅读并理解《隐私政策》和《用户协议》：\n\n"
+    private static final String PRIVACY_TEXT =            "在使用本应用前，请务必阅读并理解《隐私政策》和《用户协议》：\n\n"
             + "一、隐私政策\n\n"
             + "1. 数据存储：您的全部库存数据仅保存在本机（手机本地存储 / 电脑本地数据库），"
             + "本应用不连接任何云服务器，不在云端留存任何数据。\n\n"
@@ -214,6 +232,19 @@ public class MainActivity extends Activity {
                     Intent it = new Intent(MainActivity.this, cls);
                     if (mode != null) it.putExtra(ScanActivity.EXTRA_MODE, mode);
                     startActivityForResult(it, req);
+                }
+            });
+        }
+    }
+
+    /** 页面 → 原生：window.AndroidInfo.showAgreement() 重看隐私政策/用户协议。 */
+    public class InfoBridge {
+        @JavascriptInterface
+        public void showAgreement() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    showAgreementDialog();
                 }
             });
         }

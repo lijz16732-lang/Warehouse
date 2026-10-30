@@ -24,6 +24,27 @@ from wm.store import blank_record, dedupe_records  # noqa: E402
 TMP = tempfile.mkdtemp(prefix="wm_test_")
 wapp.app_dir = lambda: TMP
 
+# ---- 测试环境自清理：上一轮留下的分库文件会让仓库编号偏移、测试不可重复 ----
+# （GUI 段走真实数据目录；warehouse.db 本身会被测试 clear_all，无需处理）
+_DATA = os.path.join(ROOT, "data")
+if os.path.isdir(_DATA):
+    for _n in os.listdir(_DATA):
+        if _n.startswith("warehouse_"):
+            try:
+                os.remove(os.path.join(_DATA, _n))
+            except OSError:
+                pass
+    _SP = os.path.join(_DATA, "settings.json")
+    if os.path.exists(_SP):
+        try:
+            _cfg = json.load(open(_SP, encoding="utf-8"))
+            _cfg["warehouses"] = []
+            _cfg["current_wh"] = 0
+            json.dump(_cfg, open(_SP, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
 FAILS = []
 
 
