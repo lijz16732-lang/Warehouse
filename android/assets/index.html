@@ -283,6 +283,10 @@ function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
    不跟 cgm_db 一起序列化，避免每次保存都搬运几百 KB 的图片数据。
    每张 {n:名字, d:dataURL, s:是否已同步到电脑}；连上电脑后自动补传 s=0 的。 */
 var PH_MAX = 10;
+/* 页面脚本出错直接弹出来（WebView 无控制台，静默失败最难排查） */
+window.onerror = function (msg) {
+  try { toast('脚本错误：' + msg); } catch (e) {}
+};
 function phKey(lid) { return 'cgm_ph_' + lid; }
 function getPh(lid) {
   try { return JSON.parse(LS.getItem(phKey(lid)) || '[]') || []; }
@@ -298,10 +302,16 @@ function phNewName() {
 }
 function compressImg(file, cb) {
   var fr = new FileReader();
-  fr.onerror = function () { cb(null); };
+  fr.onerror = function () {
+    toast('有一张照片读取失败，已跳过');
+    cb(null);
+  };
   fr.onload = function () {
     var img = new Image();
-    img.onerror = function () { cb(null); };
+    img.onerror = function () {
+      toast('有一张照片格式无法识别，已跳过');
+      cb(null);
+    };
     img.onload = function () {
       var m = 1024, w = img.width || 800, h = img.height || 600;
       if (Math.max(w, h) > m) {
@@ -611,7 +621,7 @@ function pushPhotos(prog) {
     var arr = getPh(it.lid);               // 同一商品共用一次解析的数组（s 标记要写回）
     arr.forEach(function (ph) { if (!ph.s) list.push({ arr: arr, ph: ph, lid: it.lid, code: it.code }); });
   });
-  var done = 0;
+  var done = 0, fail = 0;
   var p = Promise.resolve();
   list.forEach(function (o) {
     p = p.then(function () {
@@ -622,9 +632,11 @@ function pushPhotos(prog) {
         data: o.ph.d.split(',')[1]
       });
     }).then(function () { o.ph.s = 1; setPh(o.lid, o.arr); })
-      .catch(function () { /* 下次同步自动重试 */ });
+      .catch(function () {
+        fail += 1;                          // 不中断：下次同步自动重试
+      });
   });
-  return p.then(function () { return list.length; });
+  return p.then(function () { return { ok: list.length - fail, fail: fail }; });
 }
 function pendingPhotos() {
   var n = 0;
@@ -655,18 +667,24 @@ function syncAll(manual, full) {
   });
   return p.then(function () { return pushPhotos(function (done, total) {
     if (total) $('syncStat').textContent = '正在上传照片 ' + done + '/' + total + '…';
-  }); }).then(function (phUploaded) {
+  }); }).then(function (phRes) {
     DB.share.last = nowStr();
     saveDB(); renderSync(); refreshHead();
     if (manual) {
       var n = items.length + sales.length;
-      if (phUploaded) {
+      var phUploaded = phRes && phRes.ok, phFail = phRes && phRes.fail;
+      if (phFail) {
+        toast('同步完成：记录 ' + n + ' 条；照片 ' + phFail + ' 张上传失败'
+              + '（检查电脑连接，下次同步自动重试）');
+      } else if (phUploaded) {
         toast('同步完成：记录 ' + n + ' 条，照片 ' + phUploaded + ' 张已上传');
       } else if (n) {
         toast('同步完成：已上传 ' + n + ' 条');
       } else {
         toast('照片已全部同步到电脑');
       }
+    } else if (phFail) {
+      toast('有 ' + phFail + ' 张照片上传失败，下次同步自动重试');
     }
   }).catch(function (e) {
     renderSync();
@@ -680,7 +698,9 @@ $('btnAuto').onclick = function () {
   toast(DB.share.auto ? '已开启自动同步（每次改动后自动上传）' : '已关闭自动同步');
 };
 function autoSync() {
-  if (DB.share.auto && DB.share.token && pendingCount()) syncAll(false);
+  /* 待同步的不只是记录：给已同步过的记录补拍的照片也要能触发自动上传 */
+  if (DB.share.auto && DB.share.token &&
+      (pendingCount() || pendingPhotos())) syncAll(false);
 }
 function renderShare() {
   $('shBase').value = DB.share.base || $('shBase').value;
