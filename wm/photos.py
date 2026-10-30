@@ -279,6 +279,10 @@ class PhotoStrip(tk.Frame):
                 big = im.copy()
                 big.thumbnail((int(sw * 0.55), int(sh * 0.55)))
                 fg = ImageTk.PhotoImage(big)
+                # 查看窗自己持有引用（关键）：从表格 📷 打开时，Treeview 类绑定
+                # 会在实例绑定之后再次触发选中 → set_code 清空 self._imgs，
+                # 只挂 _imgs 的 PhotoImage 被回收 → 首屏白屏、翻页才恢复
+                win._held_img = fg
                 self._imgs["__view__"] = fg
                 lbl.configure(image=fg, text="")
             else:
@@ -363,7 +367,7 @@ class PhotoStrip(tk.Frame):
         # 首帧图像在窗口映射前就设置好了，部分系统映射后不会自动重绘，
         # 表现为「第一张打开老是白屏、翻页后正常」。映射后强制重设一次图像。
         def _repaint(_e=None):
-            fg = self._imgs.get("__view__")
+            fg = getattr(win, "_held_img", None) or self._imgs.get("__view__")
             if fg is not None:
                 try:
                     lbl.configure(image=fg)
