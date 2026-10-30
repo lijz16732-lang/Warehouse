@@ -53,16 +53,24 @@ public class PhotoProvider extends ContentProvider {
     public ParcelFileDescriptor openFile(Uri uri, String mode)
             throws FileNotFoundException {
         File f = fileFor(uri);
-        if (f == null || !f.isFile()) {
+        if (f == null) {
             throw new FileNotFoundException(uri.toString());
         }
-        int m = ParcelFileDescriptor.MODE_READ_ONLY;
-        if ("w".equals(mode) || "rw".equals(mode)) {
-            m = ParcelFileDescriptor.MODE_WRITE_ONLY
+        boolean write = mode != null && mode.contains("w");
+        if (write) {
+            // 相机先拿到写入口、再写入内容——此时文件还不存在，必须允许创建。
+            // 之前在这里检查「文件必须已存在」把相机全部挡在了门外，
+            // 导致拍照永远写不进文件（真凶）。
+            f.getParentFile().mkdirs();
+            int m = ParcelFileDescriptor.MODE_WRITE_ONLY
                     | ParcelFileDescriptor.MODE_CREATE
                     | ParcelFileDescriptor.MODE_TRUNCATE;
+            return ParcelFileDescriptor.open(f, m);
         }
-        return ParcelFileDescriptor.open(f, m);
+        if (!f.isFile()) {
+            throw new FileNotFoundException(uri.toString());
+        }
+        return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     @Override
