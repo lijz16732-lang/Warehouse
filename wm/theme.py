@@ -25,7 +25,11 @@ class RowHover:
     """
     TAG = "hover"
 
-    def __init__(self, tree, root, bg=CLR_HOVER_BG, edge=CLR_HOVER_EDGE):
+    def __init__(self, tree, root, bg=None, edge=None):
+        # 默认色不能写成参数默认值（导入时绑死，热切换主题后仍是旧色），
+        # 必须在调用时再取一次模块全局（apply_palette 会同步这些副本）
+        bg = bg or CLR_HOVER_BG
+        edge = edge or CLR_HOVER_EDGE
         self.tree = tree
         self.root = root
         self.bg = bg

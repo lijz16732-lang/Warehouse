@@ -6,7 +6,7 @@ from tkinter import ttk
 
 from .constants import (CLR_ACCENT, CLR_BORDER, CLR_BORDER_LT, CLR_CARD,
                         CLR_HEAD_FG, CLR_HEADER, CLR_MUTED, CLR_OK, CLR_TEXT,
-                        PALETTE)
+                        CLR_TROUGH, PALETTE)
 
 
 def _rounded(canvas, x1, y1, x2, y2, r, fill):
@@ -21,7 +21,8 @@ def _rounded(canvas, x1, y1, x2, y2, r, fill):
 class _ChartBase(tk.Canvas):
     """图表基类：负责标题、空数据占位与重绘调度。"""
 
-    def __init__(self, master, title="", height=230, bg=CLR_CARD, **kw):
+    def __init__(self, master, title="", height=230, bg=None, **kw):
+        bg = bg or CLR_CARD      # 调用时取色（默认参数会在导入时绑死旧主题色）
         super().__init__(master, bg=bg, highlightthickness=0, bd=0,
                          height=height, **kw)
         self._title = title
@@ -209,13 +210,15 @@ class DonutChart(_ChartBase):
 class ProgressStat(tk.Canvas):
     """上架率进度条（用于 KPI 卡下方）。"""
 
-    def __init__(self, master, height=8, bg=CLR_CARD, **kw):
+    def __init__(self, master, height=8, bg=None, **kw):
+        bg = bg or CLR_CARD
         super().__init__(master, bg=bg, highlightthickness=0, bd=0, height=height, **kw)
         self._pct = 0.0
         self._color = CLR_OK
         self.bind("<Configure>", lambda e: self._draw())
 
-    def set_value(self, pct, color=CLR_OK):
+    def set_value(self, pct, color=None):
+        color = color or CLR_OK
         self._pct = max(0.0, min(100.0, float(pct)))
         self._color = color
         self._draw()
@@ -226,7 +229,7 @@ class ProgressStat(tk.Canvas):
         h = self.winfo_height()
         if w <= 2 or h <= 2:
             return
-        _rounded(self, 0, 0, w, h, h / 2.0, "#EDF1F7")
+        _rounded(self, 0, 0, w, h, h / 2.0, CLR_TROUGH)
         bw = max(h, w * self._pct / 100.0)
         _rounded(self, 0, 0, bw, h, h / 2.0, self._color)
 
@@ -234,8 +237,9 @@ class ProgressStat(tk.Canvas):
 class KpiCard(tk.Frame):
     """指标卡：左侧色条 + 标题 + 大数值 + 副标题（可带进度条）。"""
 
-    def __init__(self, master, title, value="—", sub="", color=CLR_ACCENT,
+    def __init__(self, master, title, value="—", sub="", color=None,
                  bg=None, show_bar=False):
+        color = color or CLR_ACCENT
         bg = bg or CLR_CARD
         super().__init__(master, bg=bg, highlightbackground=CLR_BORDER,
                          highlightthickness=1, bd=0)
