@@ -359,3 +359,15 @@ class PhotoStrip(tk.Frame):
         win.bind("<Escape>", lambda e: win.destroy())
         show()
         center_window(win, self.winfo_toplevel(), force=True)
+
+        # 首帧图像在窗口映射前就设置好了，部分系统映射后不会自动重绘，
+        # 表现为「第一张打开老是白屏、翻页后正常」。映射后强制重设一次图像。
+        def _repaint(_e=None):
+            fg = self._imgs.get("__view__")
+            if fg is not None:
+                try:
+                    lbl.configure(image=fg)
+                except Exception:
+                    pass
+        win.bind("<Map>", _repaint)
+        win.after(80, _repaint)
