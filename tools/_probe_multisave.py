@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""验证照片查看窗「多选保存」：真实库副本 + 真实 PhotoStrip.view()。
+"""验证照片查看窗「多选保存」缩略图版：真实库副本 + 真实 PhotoStrip.view()。
 
-打开查看窗 → 点「多选保存」按钮 → 断言弹窗出现、勾选项数量 = 照片数、
-全选/全不选联动正常；不真正写盘（保存走 askdirectory 人工路径）。
+断言：缩略图单元数量 = 照片数、默认全选、单击切换选中、双击打开放大预览、
+取消一张后保存落盘数量与字节正确。
 """
 import os
 import shutil
@@ -60,12 +60,12 @@ def main():
     win = tops[-1]
     root.update()
 
-    # 在查看窗按钮行里找「多选保存」并点击
     def find_btns(w):
         for c in w.winfo_children():
             if isinstance(c, ttk.Button):
                 yield c
             yield from find_btns(c)
+
     btn = None
     for b in find_btns(win):
         if b.cget("text") == "多选保存":
@@ -74,37 +74,72 @@ def main():
     btn.invoke()
     root.update()
 
-    # dlg 的父级是 win（transient(win)），在 win 的子 Toplevel 里找
+    # dlg 是 win 的子 Toplevel
     sub = [w for w in win.winfo_children() if isinstance(w, tk.Toplevel)]
     assert sub, "多选保存弹窗没有打开"
     dlg = sub[-1]
-    checks = []
+    dlg.update_idletasks()
+    root.update()
 
-    def find_checks(w):
+    # 找缩略图单元：带 highlightthickness 的 Frame（选中态用边框色表达）
+    cells = []
+
+    def find_cells(w):
         for c in w.winfo_children():
-            if isinstance(c, tk.Checkbutton):
-                checks.append(c)
-            find_checks(c)
-    find_checks(dlg)
-    print("checkbox count:", len(checks))
-    assert len(checks) == len(names), "勾选项数量与照片数不符"
-    def var_of(c):
-        return bool(dlg.tk.globalgetvar(str(c.cget("variable"))))
-    assert all(var_of(c) for c in checks), "默认应全选"
+            if isinstance(c, tk.Frame) and int(c.cget("highlightthickness")) == 2:
+                cells.append(c)
+            find_cells(c)
+    find_cells(dlg)
+    print("cell count:", len(cells))
+    assert len(cells) == len(names), "缩略图单元数量与照片数不符"
+    for c in cells:
+        assert c.cget("highlightbackground") == constants.CLR_ACCENT, \
+            "默认应全选（边框应为选中色）"
 
-    # 全不选 → 按钮文字变化联动（点「全不选」再检查变量）
-    for b in find_btns(dlg):
-        if b.cget("text") == "全不选":
-            b.invoke()
-    all_off = all(not var_of(c) for c in checks)
-    for b in find_btns(dlg):
-        if b.cget("text") == "全选":
-            b.invoke()
-    all_on = all(var_of(c) for c in checks)
-    print("全不选:", all_off, "全选:", all_on)
-    assert all_off and all_on, "全选/全不选联动失效"
+    # 程序化交互句柄（event_generate 模拟点击有假阳性，不可靠）
+    import time
+    ms = dlg._msel
+    sel, cells_map = ms["sel"], ms["cells"]
+    fr0, cap0 = cells_map[names[0]]
 
-    # 端到端落盘：mock 选目录 → 点「保存」→ 校验文件数与字节一致
+    # 单击第一张 → 260ms 后取消选中（边框变普通色、✓ 消失）
+    ms["click"](names[0])
+    time.sleep(0.35)
+    root.update()
+    assert fr0.cget("highlightbackground") == constants.CLR_BORDER, \
+        "单击后应取消选中"
+    assert not cap0.cget("text").startswith("✓"), "取消选中后不应有 ✓"
+
+    # 再单击 → 恢复选中
+    ms["click"](names[0])
+    time.sleep(0.35)
+    root.update()
+    assert fr0.cget("highlightbackground") == constants.CLR_ACCENT, \
+        "再次单击应恢复选中"
+
+    # 双击第二张 → 立即打开放大预览窗，且不改变选中状态（待定切换被取消）
+    ms["dblclick"](names[1])
+    time.sleep(0.1)
+    root.update()
+    sub2 = [w for w in dlg.winfo_children() if isinstance(w, tk.Toplevel)]
+    assert sub2, "双击未打开放大预览窗"
+    pv = sub2[-1]
+    pv_img_labels = [w for w in pv.winfo_children() if isinstance(w, tk.Label)
+                     and w.cget("image")]
+    assert pv_img_labels, "预览窗没有大图"
+    cnt_lbls = [w for w in pv.winfo_children() if isinstance(w, tk.Label)
+                and not w.cget("image")]
+    assert any("2 / %d" % len(names) in w.cget("text") for w in cnt_lbls), \
+        "预览窗计数错误: %s" % [w.cget("text") for w in cnt_lbls]
+    print("preview ok:", [w.cget("text") for w in cnt_lbls])
+    assert sel[names[1]] is True, "双击不应改变选中状态"
+    pv.destroy()
+    root.update()
+
+    # 取消第一张（程序化单击，260ms 生效）→ 保存 → 落盘数量 = 照片数 - 1
+    ms["click"](names[0])
+    time.sleep(0.35)
+    root.update()
     import tkinter.filedialog as _fd
     outdir = os.path.join(tmpd, "out")
     if os.path.isdir(outdir):
@@ -120,14 +155,24 @@ def main():
     root.update()
     saved = os.listdir(outdir)
     print("saved files:", len(saved), saved[:3])
-    assert len(saved) == len(names), "落盘数量与照片数不符"
-    for n, fname in zip(names, sorted(saved)):
-        raw = app.store.photo_data("item", code, n)
-        import base64 as _b64
+    assert len(saved) == len(names) - 1, "落盘数量应为照片数-1"
+
+    import base64 as _b64
+    saved_stems = set()
+    for fname in saved:
         with open(os.path.join(outdir, fname), "rb") as f:
             disk = f.read()
-        assert disk == _b64.b64decode(raw), "文件字节与原图不一致: %s" % fname
-    print("bytes match: True")
+        hit = None
+        for n in names:
+            raw = app.store.photo_data("item", code, n)
+            if raw and disk == _b64.b64decode(raw):
+                hit = n
+                break
+        assert hit, "找不到与 %s 字节一致的照片" % fname
+        assert hit not in saved_stems, "同一张被保存两次: %s" % hit
+        saved_stems.add(hit)
+    assert saved_stems == set(names[1:]), "被取消的那张不应落盘"
+    print("bytes match: True（取消的那张未落盘）")
 
     dlg.destroy()
     win.destroy()
