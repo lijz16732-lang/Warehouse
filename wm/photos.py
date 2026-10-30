@@ -294,6 +294,31 @@ class PhotoStrip(tk.Frame):
             ttk.Button(row, text="下一张 ›",
                        state="normal" if state["idx"] < len(names) - 1 else "disabled",
                        command=lambda: step(1)).pack(side="left", padx=4)
+            ttk.Button(row, text="保存图片", style="Ghost.TButton",
+                       command=do_save).pack(side="left", padx=4)
+
+        def do_save():
+            """把当前照片另存为图片文件（原图字节，不重新压缩）。"""
+            n = names[state["idx"]]
+            stem, ext = os.path.splitext(n)
+            default = "%s_%s%s" % (self.code, stem, ext or ".jpg")
+            path = filedialog.asksaveasfilename(
+                parent=win, title="保存图片", initialfile=default,
+                defaultextension=ext or ".jpg",
+                filetypes=[("图片", "*.jpg *.jpeg *.png"), ("所有文件", "*.*")])
+            if not path:
+                return
+            raw = self._bytes_of(n)
+            if not raw:
+                messagebox.showerror("保存图片", "照片数据读取失败", parent=win)
+                return
+            try:
+                with open(path, "wb") as f:
+                    f.write(raw)
+            except OSError as e:
+                messagebox.showerror("保存失败", str(e)[:100], parent=win)
+                return
+            self.app._status("图片已保存：%s" % path)
 
         def step(d):
             state["idx"] = max(0, min(len(names) - 1, state["idx"] + d))
