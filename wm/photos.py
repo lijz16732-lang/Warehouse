@@ -211,7 +211,9 @@ class PhotoStrip(tk.Frame):
         lbl_name = tk.Label(prog, text="", bg=CLR_BG, fg=CLR_MUTED,
                             font=(self.app.fam, 8))
         lbl_name.pack(padx=28, pady=(0, 14))
+        prog.withdraw()          # 先隐藏→定位→再显示，避免左上角闪一下
         center_window(prog, self.winfo_toplevel(), force=True)
+        prog.deiconify()
         try:
             for i, p in enumerate(paths, 1):
                 lbl.configure(text="正在添加 %d/%d" % (i, total))
@@ -361,8 +363,13 @@ class PhotoStrip(tk.Frame):
             show()
 
         win.bind("<Escape>", lambda e: win.destroy())
+        # 先隐藏→定位→再显示：映射后再居中会「先在左上角闪一下」
+        win.withdraw()
         show()
         center_window(win, self.winfo_toplevel(), force=True)
+        win.deiconify()
+        win.lift()
+        win.focus_force()
 
         # 首帧图像在窗口映射前就设置好了，部分系统映射后不会自动重绘，
         # 表现为「第一张打开老是白屏、翻页后正常」。映射后强制重设一次图像。
