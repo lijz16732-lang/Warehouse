@@ -1860,17 +1860,37 @@ class App(object):
     def add_record(self):
         if self._guard_write():
             return
-        rec = ask_record(self.root, None, self.suggestions(), "新增记录", self.fam)
+        rec = ask_record(self.root, None, self.suggestions(), "新增记录", self.fam,
+                         app=self)
         if not rec:
             return
+        pending = rec.pop("_pending_photos", [])
         if not rec.get("code"):
             rec["code"] = self.store.generate_codes(1)[0]
         rid = self.store.insert(rec)
+        self._save_pending_photos(rec.get("code"), pending)
         self.load_data()
         # 升序排列时新记录在末尾，主动定位过去让用户看到
         if not self._focus_record(rid):
             self._goto_last_page()
         self._status("已新增记录：%s" % (rec.get("code") or ""))
+
+    def _save_pending_photos(self, code, pending):
+        """编辑弹窗里暂存的照片，记录入库后逐张落盘。"""
+        if not code or not pending:
+            return
+        import base64 as _b64
+        ok = 0
+        for i, rawb in enumerate(pending):
+            try:
+                self.store.photo_add("item", code,
+                                     _b64.b64encode(rawb).decode("ascii"),
+                                     "photo%d.jpg" % (i + 1))
+                ok += 1
+            except Exception:
+                pass
+        if ok:
+            self._status("已添加 %d 张照片" % ok)
 
     def edit_selected(self):
         if self._guard_write():
@@ -1885,7 +1905,8 @@ class App(object):
         self.edit_record(recs[0])
 
     def edit_record(self, rec):
-        out = ask_record(self.root, rec, self.suggestions(), "编辑记录", self.fam)
+        out = ask_record(self.root, rec, self.suggestions(), "编辑记录", self.fam,
+                         app=self)
         if not out:
             return
         if not out.get("code"):
@@ -1895,6 +1916,8 @@ class App(object):
         self.load_data()
         if cur:
             self._focus_record(cur[0])      # 排序字段变化时也能定位回原记录
+        else:
+            self.photo_strip.set_code(out["code"])   # 详情区照片条同步刷新
         self._status("已保存：%s" % (out.get("code") or ""))
 
     def delete_selected(self):

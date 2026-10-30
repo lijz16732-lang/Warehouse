@@ -6,6 +6,7 @@
 """
 
 import base64
+import hashlib
 import io
 import os
 import tkinter as tk
@@ -25,12 +26,18 @@ THUMB = 72                        # 缩略图边长（px）
 
 
 class PhotoStrip(tk.Frame):
-    """kind="item"：主库存记录；kind="phone"：手机区商品。"""
+    """kind="item"：主库存记录；kind="phone"：手机区商品。
 
-    def __init__(self, master, app, kind="item"):
+    pending=True：新增记录还没有编号，照片暂存在内存里（pending_list），
+    保存后由调用方取出逐张落盘（store.photo_add）。
+    """
+
+    def __init__(self, master, app, kind="item", pending=False):
         tk.Frame.__init__(self, master, bg=CLR_CARD)
         self.app = app
         self.kind = kind
+        self.pending = bool(pending)
+        self.pending_list = []        # [(name, raw_bytes)] 暂存区
         self.code = None
         self._imgs = {}               # name -> PhotoImage（防被 GC）
         self._cache = {}              # (code, name) -> PIL.Image（原图缓存）
@@ -51,6 +58,10 @@ class PhotoStrip(tk.Frame):
     # ------------------------------------------------------------ 数据
     def set_code(self, code):
         """切换当前记录（None = 未选中，显示提示）。"""
+        if self.pending:
+            self.code = "__pending__"
+            self._render_pending()
+            return
         self.code = code
         for w in self.bar.winfo_children():
             w.destroy()
@@ -85,8 +96,28 @@ class PhotoStrip(tk.Frame):
         for name in names:
             self._thumb(name)
 
+    def _render_pending(self):
+        """暂存模式：从 pending_list 渲染缩略图。"""
+        for w in self.bar.winfo_children():
+            w.destroy()
+        self._imgs.clear()
+        self.lbl_cap.configure(text="照片 %d/%d（保存记录后写入）"
+                               % (len(self.pending_list), PHOTO_MAX))
+        if not self.pending_list:
+            tk.Label(self.bar, text="暂无照片，点右上「＋ 添加照片」"
+                     "（最多 %d 张，自动压缩，保存后生效）" % PHOTO_MAX,
+                     bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(self.app.fam, 8)).pack(side="left")
+        for name, _raw in self.pending_list:
+            self._thumb(name)
+
     def _bytes_of(self, name):
-        """取照片原始字节（本机直接读；客户端经 RPC base64）。"""
+        """取照片原始字节（暂存 / 本机直接读；客户端经 RPC base64）。"""
+        if self.pending:
+            for n, raw in self.pending_list:
+                if n == name:
+                    return raw
+            return None
         b64 = self.app.store.photo_data(self.kind, self.code, name)
         if not b64:
             return None
@@ -127,12 +158,39 @@ class PhotoStrip(tk.Frame):
     # ------------------------------------------------------------ 操作
     def add_photos(self):
         """文件多选添加（自动压缩、内容去重、上限拦截）。"""
-        if not self.code:
-            return
         paths = filedialog.askopenfilenames(
             parent=self, title="选择照片（可多选）",
             filetypes=[("图片", "*.jpg *.jpeg *.png"), ("所有文件", "*.*")])
         if not paths:
+            return
+        if self.pending:
+            err = ""
+            for p in paths:
+                if len(self.pending_list) >= PHOTO_MAX:
+                    err = "最多 %d 张照片" % PHOTO_MAX
+                    break
+                try:
+                    with open(p, "rb") as f:
+                        raw = f.read()
+                except OSError as e:
+                    err = str(e)[:100]
+                    break
+                md5 = hashlib.md5(raw).hexdigest()
+                if any(md5 == m for m in
+                       (hashlib.md5(r).hexdigest() for _n, r in self.pending_list)):
+                    continue                     # 同内容去重
+                base = os.path.basename(p) or "photo.jpg"
+                name, i = base, 1
+                while any(n == name for n, _r in self.pending_list):
+                    stem, ext = os.path.splitext(base)
+                    i += 1
+                    name = "%s(%d)%s" % (stem, i, ext or ".jpg")
+                self.pending_list.append((name, raw))
+            self._render_pending()
+            if err:
+                messagebox.showwarning("添加照片", err, parent=self.winfo_toplevel())
+            return
+        if not self.code:
             return
         ok, err = 0, ""
         for p in paths:
@@ -154,12 +212,15 @@ class PhotoStrip(tk.Frame):
 
     def view(self, name):
         """大图查看窗：左右翻页、删除、Esc 关闭。"""
-        if not self.code:
-            return
-        try:
-            names = list(self.app.store.photos_list(self.kind, self.code) or [])
-        except Exception:
-            names = []
+        if self.pending:
+            names = [n for n, _r in self.pending_list]
+        else:
+            if not self.code:
+                return
+            try:
+                names = list(self.app.store.photos_list(self.kind, self.code) or [])
+            except Exception:
+                names = []
         if name not in names:
             return
         win = tk.Toplevel(self.winfo_toplevel())
@@ -209,6 +270,16 @@ class PhotoStrip(tk.Frame):
         def do_del():
             n = names[state["idx"]]
             if not messagebox.askyesno("删除照片", "确定删除这张照片吗？", parent=win):
+                return
+            if self.pending:
+                self.pending_list = [(nn, r) for nn, r in self.pending_list if nn != n]
+                names.pop(state["idx"])
+                self.set_code(self.code)
+                if not names:
+                    win.destroy()
+                    return
+                state["idx"] = min(state["idx"], len(names) - 1)
+                show()
                 return
             try:
                 self.app.store.photo_del(self.kind, self.code, n)

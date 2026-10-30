@@ -8,6 +8,7 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, EDIT_ROWS,
                         FIELD_LABEL,
                         FIELD_TYPE, LISTED_TEXT, apply_window_icon, center_window)
+from .photos import PhotoStrip
 
 LISTED_OPTIONS = ["已上架", "未上架"]
 
@@ -15,10 +16,12 @@ LISTED_OPTIONS = ["已上架", "未上架"]
 class RecordDialog(tk.Toplevel):
     """模态编辑窗口。result 为 dict 或 None。"""
 
-    def __init__(self, master, record=None, suggestions=None, title="编辑记录", fam="Microsoft YaHei UI"):
+    def __init__(self, master, record=None, suggestions=None, title="编辑记录",
+                 fam="Microsoft YaHei UI", app=None):
         super().__init__(master)
         self.result = None
         self.fam = fam
+        self.app = app
         self.suggestions = suggestions or {}
         self.is_new = record is None
         rec = record or {}
@@ -93,6 +96,21 @@ class RecordDialog(tk.Toplevel):
                         ent = ttk.Entry(body, textvariable=v, width=26, font=(self.fam, 10))
                         ent.grid(row=r, column=col + 1, sticky="ew", pady=6)
 
+        # 照片区（编辑已有记录：直接挂编号读写；新增：暂存，保存记录后写入）
+        self.photo_strip = None
+        if self.app is not None:
+            strip = PhotoStrip(body, self.app, kind="item", pending=self.is_new)
+            strip.grid(row=len(EDIT_ROWS), column=0, columnspan=4,
+                       sticky="ew", pady=(10, 0))
+            if not self.is_new:
+                strip.set_code(rec.get("code"))
+                # 编辑中改编号 → 照片条实时跟随新编号
+                self.vars["code"].trace_add(
+                    "write",
+                    lambda *_a, _s=strip: _s.set_code(
+                        self.vars["code"].get().strip()))
+            self.photo_strip = strip
+
         # 提示
         tip = tk.Frame(self, bg=CLR_BG)
         tip.pack(fill="x", padx=16)
@@ -156,6 +174,11 @@ class RecordDialog(tk.Toplevel):
         for key, txt in self.text_widgets.items():
             raw[key] = txt.get("1.0", "end").strip()
         self.result = normalize_record(raw)
+        if (self.is_new and self.photo_strip is not None
+                and self.photo_strip.pending_list):
+            # 新增记录的照片随结果带回，由调用方在入库后落盘
+            self.result["_pending_photos"] = [
+                rawb for _n, rawb in self.photo_strip.pending_list]
         self.destroy()
 
     def _cancel(self):
@@ -163,7 +186,8 @@ class RecordDialog(tk.Toplevel):
         self.destroy()
 
 
-def ask_record(master, record=None, suggestions=None, title="编辑记录", fam="Microsoft YaHei UI"):
-    dlg = RecordDialog(master, record, suggestions, title, fam)
+def ask_record(master, record=None, suggestions=None, title="编辑记录",
+               fam="Microsoft YaHei UI", app=None):
+    dlg = RecordDialog(master, record, suggestions, title, fam, app=app)
     master.wait_window(dlg)
     return dlg.result
