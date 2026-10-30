@@ -38,10 +38,12 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE = 1003;      // 相册选照片（可多选）
     private static final int REQ_CAMERA = 1004;    // 拍照
     private static final int REQ_CAM_PERM = 1005;  // 相机运行时权限
+    private static final int REQ_GAL_PERM = 1006;  // 相册读取权限
 
     private WebView web;
     private ValueCallback<Uri[]> fileCb;     // 页面文件选择回调（拍照/相册共用）
     private File pendingCamFile;             // 本次拍照要写入的文件
+    private WebChromeClient.FileChooserParams pendingGalleryParams;  // 权限通过后继续打开相册
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -238,7 +240,56 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void startGallery(WebChromeClient.FileChooserParams params) {
+    private void startGallery(final WebChromeClient.FileChooserParams params) {
+        String perm = galleryPerm();
+        if (Build.VERSION.SDK_INT >= 23 && perm != null && checkSelfPermission(perm)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingGalleryParams = params;
+            // 申请前先给用途说明（合规要求：权限使用告知）
+            new AlertDialog.Builder(this)
+                    .setTitle("需要照片权限")
+                    .setMessage("「从相册选择」需要读取您相册里的照片，"
+                            + "用于添加商品照片。照片仅保存在本机并同步到您自己的电脑，"
+                            + "不会上传互联网。")
+                    .setPositiveButton("去允许",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    requestPermissions(new String[]{galleryPerm()},
+                                            REQ_GAL_PERM);
+                                }
+                            })
+                    .setNegativeButton("暂不",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    finishFileCb(null);
+                                }
+                            })
+                    .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface d) {
+                            finishFileCb(null);
+                        }
+                    })
+                    .show();
+            return;
+        }
+        openGallery(params);
+    }
+
+    /** 相册读取权限名：API 33+ 用 READ_MEDIA_IMAGES，旧系统用 READ_EXTERNAL_STORAGE。 */
+    private String galleryPerm() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return "android.permission.READ_MEDIA_IMAGES";
+        }
+        if (Build.VERSION.SDK_INT >= 23) {
+            return android.Manifest.permission.READ_EXTERNAL_STORAGE;
+        }
+        return null;    // 6.0 以下安装时授予，无需运行时申请
+    }
+
+    private void openGallery(WebChromeClient.FileChooserParams params) {
         try {
             // createIntent 带 image/* 与多选标记（页面 input 已设 multiple）
             startActivityForResult(Intent.createChooser(
@@ -315,6 +366,16 @@ public class MainActivity extends Activity {
             } else {
                 android.widget.Toast.makeText(this,
                         "未授予相机权限，无法拍照；可在系统设置 → 应用 → 仓管家里允许",
+                        android.widget.Toast.LENGTH_LONG).show();
+                finishFileCb(null);
+            }
+        } else if (requestCode == REQ_GAL_PERM) {
+            if (results.length > 0
+                    && results[0] == PackageManager.PERMISSION_GRANTED) {
+                openGallery(pendingGalleryParams);
+            } else {
+                android.widget.Toast.makeText(this,
+                        "未授予照片权限，无法从相册选择；可在系统设置 → 应用 → 仓管家里允许",
                         android.widget.Toast.LENGTH_LONG).show();
                 finishFileCb(null);
             }

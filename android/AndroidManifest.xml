@@ -3,8 +3,8 @@
      usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="18"
-    android:versionName="1.25.4">
+    android:versionCode="19"
+    android:versionName="1.25.5">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -13,6 +13,10 @@
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
   <!-- 扫一扫：相机只用于实时取景识别，不存照片、不上传 -->
   <uses-permission android:name="android.permission.CAMERA"/>
+  <!-- 相册：选商品照片（API 33+ 用 READ_MEDIA_IMAGES，旧系统用 READ_EXTERNAL_STORAGE） -->
+  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+      android:maxSdkVersion="32"/>
   <uses-feature android:name="android.hardware.camera" android:required="false"/>
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
