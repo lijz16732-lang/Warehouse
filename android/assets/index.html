@@ -301,6 +301,7 @@ function phNewName() {
   return 'P' + Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36);
 }
 function compressImg(file, cb) {
+  if (file && file.durl) { cb(file.durl); return; }   // 原生桥已压缩好的 dataURL 直接过
   var fr = new FileReader();
   fr.onerror = function () {
     toast('有一张照片读取失败，已跳过');
@@ -330,6 +331,16 @@ function compressImg(file, cb) {
 var phInput = null;
 /* 拉起系统选择器（拍照 / 相册，accept=image/* 由系统决定），把选中的文件交给 cb */
 function pickImageFiles(cb) {
+  /* App 内优先走原生桥：原生完成「拍照/相册→权限→读取→压缩」，直接回 base64，
+     不依赖 WebView 的 <input type=file> 回传（部分机型会丢失结果，照片永远到不了页面） */
+  if (window.AndroidPhotos && AndroidPhotos.available && AndroidPhotos.available()) {
+    var b64s = [];
+    try { b64s = JSON.parse(AndroidPhotos.pick() || '[]'); } catch (e) { b64s = []; }
+    if (!b64s.length) { toast('没有获取到照片，请重试'); cb([]); return; }
+    toast('已获取 ' + b64s.length + ' 张照片');
+    cb(b64s.map(function (d) { return { durl: d }; }));
+    return;
+  }
   if (!phInput) {
     phInput = document.createElement('input');
     phInput.type = 'file'; phInput.accept = 'image/*'; phInput.multiple = true;
@@ -1019,15 +1030,7 @@ function openPcPhotos(r) {
   }
   function addPc() {
     if (names.length >= PH_MAX) { toast('每条记录最多 ' + PH_MAX + ' 张'); return; }
-    if (!phInputPc) {
-      phInputPc = document.createElement('input');
-      phInputPc.type = 'file'; phInputPc.accept = 'image/*'; phInputPc.multiple = true;
-      phInputPc.style.display = 'none';
-      document.body.appendChild(phInputPc);
-    }
-    phInputPc.onchange = function () {
-      var fs = Array.prototype.slice.call(phInputPc.files || []);
-      phInputPc.value = '';
+    pickImageFiles(function (fs) {
       if (!fs.length) return;
       var done = 0, fails = 0;
       fs.forEach(function (f) {
@@ -1045,8 +1048,7 @@ function openPcPhotos(r) {
             });
         });
       });
-    };
-    phInputPc.click();
+    });
   }
   function phViewerPc(idx) {
     var cur = idx;
