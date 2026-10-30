@@ -18,8 +18,9 @@ from tkinter import filedialog, messagebox, ttk
 
 from .charts import HBarChart, ProgressStat, VBarChart
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_LOW_BG, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TEXT,
-                        CLR_WARN, OUT_TYPE_HINT, OUT_TYPE_SALE, OUT_TYPES,
+                        CLR_INPUT, CLR_LOW_BG, CLR_MUTED, CLR_OK, CLR_ROW_ALT,
+                        CLR_TEXT, CLR_WARN, OUT_TYPE_HINT, OUT_TYPE_SALE,
+                        OUT_TYPES,
                         apply_window_icon, center_window)
 from .theme import RowHover, dot_check
 
@@ -37,6 +38,7 @@ def money(v):
 
 def _entry(parent, var, width=16, fam="Microsoft YaHei UI"):
     e = tk.Entry(parent, textvariable=var, width=width, font=(fam, 10),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER, highlightthickness=1)
     return e
 

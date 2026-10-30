@@ -5,7 +5,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, EDIT_ROWS, FIELD_LABEL,
+                        CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, EDIT_ROWS,
+                        FIELD_LABEL,
                         FIELD_TYPE, LISTED_TEXT, apply_window_icon, center_window)
 
 LISTED_OPTIONS = ["已上架", "未上架"]
@@ -72,7 +73,7 @@ class RecordDialog(tk.Toplevel):
                     cb.grid(row=r, column=col + 1, sticky="w", pady=6)
                 elif key == "remark":
                     txt = tk.Text(body, height=3, width=1, wrap="word", relief="solid",
-                                  bd=1, highlightthickness=1, bg="#FFFFFF", fg=CLR_TEXT,
+                                  bd=1, highlightthickness=1, bg=CLR_INPUT, fg=CLR_TEXT,
                                   insertbackground=CLR_ACCENT, font=(self.fam, 10),
                                   highlightbackground=CLR_BORDER, highlightcolor=CLR_ACCENT)
                     txt.insert("1.0", str(rec.get(key, "") or ""))

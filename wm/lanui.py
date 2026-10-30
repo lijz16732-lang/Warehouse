@@ -13,8 +13,8 @@ except ImportError:          # 二维码库缺失时只显示文字地址，不�
     segno = None
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN, apply_window_icon,
-                        center_window)
+                        CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN,
+                        apply_window_icon, center_window)
 from .lan import DEFAULT_PORT, local_ips
 
 
@@ -109,12 +109,14 @@ class LanDialog(tk.Toplevel):
                  font=(self.fam, 9)).pack(side="left")
         self.var_port = tk.StringVar(value=str(DEFAULT_PORT))
         tk.Entry(row2, textvariable=self.var_port, width=7, font=(self.fam, 9),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 12), ipady=2)
         tk.Label(row2, text="连接码", bg=CLR_CARD, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
         self.var_code = tk.StringVar()
         tk.Entry(row2, textvariable=self.var_code, width=9, font=(self.fam, 9),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 6), ipady=2)
         self.btn_newcode = ttk.Button(row2, text="换一个", style="Ghost.TButton", width=7,
@@ -182,18 +184,21 @@ class LanDialog(tk.Toplevel):
                  font=(self.fam, 9)).pack(side="left")
         self.var_host = tk.StringVar()
         tk.Entry(rowc, textvariable=self.var_host, width=16, font=(self.fam, 9),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 10), ipady=2)
         tk.Label(rowc, text="端口", bg=CLR_CARD, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
         self.var_cport = tk.StringVar(value=str(DEFAULT_PORT))
         tk.Entry(rowc, textvariable=self.var_cport, width=6, font=(self.fam, 9),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 10), ipady=2)
         tk.Label(rowc, text="连接码", bg=CLR_CARD, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
         self.var_ccode = tk.StringVar()
         tk.Entry(rowc, textvariable=self.var_ccode, width=9, font=(self.fam, 9),
+                 bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                  relief="flat", highlightbackground=CLR_BORDER,
                  highlightthickness=1).pack(side="left", padx=(4, 0), ipady=2)
 

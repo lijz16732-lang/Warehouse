@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.24.2"
+APP_VERSION = "1.24.3"
 
 
 def app_icon_path():

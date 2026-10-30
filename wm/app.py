@@ -496,6 +496,7 @@ class App(object):
                  font=(self.fam, 10)).pack(side="left", padx=(0, 8))
         var_name = tk.StringVar()
         ent = tk.Entry(row, textvariable=var_name, width=16, font=(self.fam, 10),
+                       bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                        relief="flat", highlightbackground=CLR_BORDER,
                        highlightthickness=1)
         ent.pack(side="left", ipady=3)

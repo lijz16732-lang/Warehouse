@@ -12,7 +12,8 @@ from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN, FIELD_KEYS,
+                        CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN,
+                        FIELD_KEYS,
                         FIELD_LABEL, FIELD_TYPE, FIELD_WIDTH,
                         apply_window_icon, center_window)
 from .theme import dot_check
@@ -28,6 +29,7 @@ def money(v):
 
 def _entry(parent, var, width=16, fam="Microsoft YaHei UI"):
     return tk.Entry(parent, textvariable=var, width=width, font=(fam, 10),
+                    bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                     relief="flat", highlightbackground=CLR_BORDER, highlightthickness=1)
 
 

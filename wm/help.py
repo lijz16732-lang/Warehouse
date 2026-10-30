@@ -9,7 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_TEXT, apply_window_icon, center_window)
+                        CLR_INPUT, CLR_MUTED, CLR_TEXT, apply_window_icon,
+                        center_window)
 
 
 def help_sections(db_path=""):
@@ -198,6 +199,7 @@ class HelpDialog(tk.Toplevel):
                                   font=(self.fam, 8), width=12, anchor="w")
         self.lbl_found.pack(side="right", padx=(0, 14))
         ent = tk.Entry(head, textvariable=self.var_kw, width=16, font=(self.fam, 9),
+                       bg=CLR_INPUT, fg=CLR_TEXT, insertbackground=CLR_ACCENT,
                        relief="flat", highlightbackground=CLR_BORDER,
                        highlightthickness=1)
         ent.pack(side="right", ipady=3, pady=10)
