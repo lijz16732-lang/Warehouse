@@ -3,8 +3,8 @@
      usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="16"
-    android:versionName="1.25.2">
+    android:versionCode="17"
+    android:versionName="1.25.3">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -41,5 +41,12 @@
         android:exported="false"
         android:screenOrientation="portrait"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"/>
+
+    <!-- 拍照照片中转：只服务 cacheDir/photos，临时授权给相机应用写入 -->
+    <provider
+        android:name=".PhotoProvider"
+        android:authorities="com.cangguanjia.app.photos"
+        android:exported="false"
+        android:grantUriPermissions="true"/>
   </application>
 </manifest>
