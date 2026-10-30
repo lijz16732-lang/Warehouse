@@ -818,10 +818,12 @@ try:
           and _C.CLR_BG != "#000000")
     _app_src = open(os.path.join(_wm_dir, "app.py"),
                     encoding="utf-8").read()
-    check("电脑端外观设置：主题/字体/快捷键可配置（重启生效+即时重绑）",
+    check("电脑端外观设置：主题/字体/快捷键可配置（即时生效+原地重建）",
           all(x in _app_src for x in
               ("open_appearance", "ui_theme", "font_scale",
-               "_rebind_shortcuts", "_restart_app", "SC_DEFS", "_restart_app")))
+               "_rebind_shortcuts", "_soft_reboot", "SC_DEFS", "_reboot"))
+          and "_restart_app" not in _app_src
+          and "subprocess.Popen" not in _app_src)
     check("电脑端操作日志页签（筛选/导出/清空）",
           all(x in _app_src for x in
               ("操作日志", "_build_log_tab", "_load_log", "_export_log",

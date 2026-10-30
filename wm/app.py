@@ -8,7 +8,6 @@ import queue
 import random
 import socket
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
@@ -120,6 +119,7 @@ class App(object):
 
         self._ui_queue = queue.Queue()
         self._stopped = False
+        self._reboot = False          # _soft_reboot 置位 → main() 原地重建界面
         self._busy = False
         self._debounce = None
 
@@ -682,8 +682,6 @@ class App(object):
         m.add_cascade(label="编辑", menu=em)
 
         vm = tk.Menu(m, tearoff=0)
-        vm.add_command(label="外观与快捷键设置…", command=self.open_appearance)
-        vm.add_separator()
         self.var_show_detail = tk.BooleanVar(value=bool(self.settings.get("show_detail", True)))
         vm.add_checkbutton(label="显示详情面板", variable=self.var_show_detail,
                            command=self._toggle_detail)
@@ -731,6 +729,8 @@ class App(object):
         m.add_cascade(label="数据", menu=dm)
 
         hm = tk.Menu(m, tearoff=0)
+        hm.add_command(label="设置（外观 / 快捷键）…", command=self.open_appearance)
+        hm.add_separator()
         hm.add_command(label="使用说明", command=self.show_help)
         hm.add_command(label="关于", command=self.show_about)
         m.add_cascade(label="帮助", menu=hm)
@@ -2851,10 +2851,10 @@ class App(object):
             pass
 
     def open_appearance(self):
-        """外观与快捷键设置：主题（重启生效）/ 字体大小（重启生效）/ 快捷键（即时生效）。"""
+        """设置：主题（即时生效）/ 字体大小（即时生效）/ 快捷键（即时生效）。"""
         from .constants import UI_THEME
         win = tk.Toplevel(self.root)
-        win.title("外观与快捷键设置")
+        win.title("设置（外观 / 快捷键）")
         win.configure(bg=CLR_CARD)
         win.transient(self.root)
         win.resizable(False, False)
@@ -2873,8 +2873,8 @@ class App(object):
                            bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
                            activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
                                                                            padx=(0, 16))
-        tk.Label(win, text="切换主题需重启程序生效", bg=CLR_CARD, fg=CLR_MUTED,
-                 font=(fam, 8)).pack(anchor="w", padx=18)
+        tk.Label(win, text="选择主题后点下方「应用外观」，界面自动刷新（无需重启）",
+                 bg=CLR_CARD, fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w", padx=18)
 
         # ---- 字体大小 ----
         tk.Label(win, text="字体大小", bg=CLR_CARD, fg=CLR_HEAD_FG,
@@ -2887,7 +2887,7 @@ class App(object):
                            bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
                            activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
                                                                            padx=(0, 16))
-        tk.Label(win, text="字体大小同样重启后生效（整窗等比放大 / 缩小）", bg=CLR_CARD,
+        tk.Label(win, text="点「应用外观」立即生效（整窗等比放大 / 缩小）", bg=CLR_CARD,
                  fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w", padx=18)
 
         def apply_look():
@@ -2897,11 +2897,9 @@ class App(object):
             except (TypeError, ValueError):
                 self.settings["font_scale"] = 1.0
             self._save_settings()
-            if messagebox.askyesno("应用外观", "外观设置已保存。\n立即重启程序使其生效吗？",
-                                   parent=win):
-                self._restart_app()
+            self._soft_reboot()      # 原地重建界面，主题/字体立即生效
 
-        ttk.Button(win, text="保存外观并重启", style="Accent.TButton",
+        ttk.Button(win, text="应用外观", style="Accent.TButton",
                    command=apply_look).pack(anchor="w", padx=18, pady=(8, 0))
 
         # ---- 快捷键 ----
@@ -2992,22 +2990,30 @@ class App(object):
         win.bind("<Escape>", lambda e: win.destroy())
         center_window(win, self.root, size=(360, 520), force=True)
 
-    def _restart_app(self):
-        """重启程序（主题 / 字体大小需要重建界面才能生效）。"""
+    def _soft_reboot(self):
+        """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
+
+        不再另起新进程（exe 自重启在个别情况下会报错），只在程序内部重建：
+        停局域网共享 → 保存设置 → 关数据库 → 退出事件循环；main() 检测到
+        _reboot 标记后按新调色板重建 App（主机模式会在新界面里自动恢复）。
+        """
+        self._stopped = True
+        self._reboot = True
+        if self.lan_server:
+            try:
+                self.lan_server.stop()
+            except Exception:
+                pass
+            self.lan_server = None
+        self._save_settings()
         try:
-            if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable],
-                                 cwd=os.path.dirname(os.path.abspath(sys.executable)),
-                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
-            else:
-                subprocess.Popen([sys.executable,
-                                  os.path.join(app_dir(), "main.py")],
-                                 cwd=app_dir(),
-                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
-        except Exception as e:
-            messagebox.showerror("重启失败", str(e), parent=self.root)
-            return
-        self.on_close()
+            self.store.close()
+        except Exception:
+            pass
+        try:
+            self.root.quit()          # 结束 mainloop，回到 main() 的重建循环
+        except Exception:
+            pass
 
     # ---------------------------------------------------------- 操作日志页
     LOG_ACTS = ["新增", "导入", "修改", "批量修改", "上架", "下架", "删除", "恢复",
@@ -3627,7 +3633,15 @@ class App(object):
 
 
 def main():
-    root = tk.Tk()
-    app = App(root)
-    root.mainloop()
+    while True:
+        root = tk.Tk()
+        app = App(root)
+        root.mainloop()
+        reboot = bool(getattr(app, "_reboot", False))
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        if not reboot:
+            break
     return 0

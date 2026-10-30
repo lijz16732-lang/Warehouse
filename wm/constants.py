@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.24.0"
+APP_VERSION = "1.24.1"
 
 
 def app_icon_path():
@@ -278,12 +278,26 @@ _PALETTE_DARK = {
 }
 
 def apply_palette(theme):
-    """把调色板写入模块全局（light / dark）。返回实际应用的主题名。"""
+    """把调色板写入模块全局（light / dark）。返回实际应用的主题名。
+
+    各界面模块用 `from .constants import *` 把颜色绑进了自己的命名空间，
+    所以这里要把新值同步进所有已导入的 wm 模块副本，否则同进程内热切换
+    主题时，重建的界面仍会拿旧颜色（老版本靠重启 exe 重新导入掩盖）。
+    """
     p = _PALETTE_DARK if str(theme) == "dark" else _PALETTE_LIGHT
-    for k, v in p.items():
-        globals()[k] = v
-    globals()["UI_THEME"] = "dark" if str(theme) == "dark" else "light"
-    return globals()["UI_THEME"]
+    names = list(p) + ["UI_THEME"]
+    vals = dict(p)
+    vals["UI_THEME"] = "dark" if str(theme) == "dark" else "light"
+    for k in names:
+        globals()[k] = vals[k]
+    import sys as _sys
+    for m in list(_sys.modules.values()):
+        if m is None or not getattr(m, "__name__", "").startswith("wm."):
+            continue
+        for k in names:
+            if hasattr(m, k):
+                setattr(m, k, vals[k])
+    return vals["UI_THEME"]
 
 
 apply_palette("light")
