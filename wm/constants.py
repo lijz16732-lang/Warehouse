@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.26.3"
+APP_VERSION = "1.26.4"
 
 
 def app_icon_path():
@@ -108,7 +108,7 @@ FIELDS = [
     ("qty",       "数量",    "int",    80, "e",      False),
     ("shelf",     "货架",    "text",  110, "center", True),
     ("listed",    "上架状态", "bool",  100, "center", True),
-    ("remark",    "备注",    "text",  260, "w",      False),
+    ("remark",    "备注",    "text",  150, "w",      False),
 ]
 
 FIELD_KEYS    = [f[0] for f in FIELDS]

@@ -12,7 +12,7 @@
 import ctypes
 import sys
 
-BASE_W, BASE_H = 1440, 900          # 100% 缩放下的设计基准窗口
+BASE_W, BASE_H = 1600, 900          # 100% 缩放下的设计基准窗口
 MIN_W, MIN_H = 1080, 660            # 最小可用尺寸（布局在这之上才完整）
 COMPACT_W, COMPACT_H = 1280, 760    # 工作区小于此值视为小屏（笔记本），直接最大化
 MAX_SCALE = 1.5                     # DPI 放大上限，再大只会让界面变笨重

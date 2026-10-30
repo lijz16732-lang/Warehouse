@@ -1426,15 +1426,15 @@ check("笔记本窗口铺满工作区（不压任务栏）",
 check("笔记本最小尺寸不超过屏幕", _f_lap["min_w"] <= 1366
       and _f_lap["min_h"] <= 728, _f_lap)
 _f_desk = scr.fit_window(_desk)
-check("台式 1080p 用 1440×900 基准窗口",
-      (_f_desk["w"], _f_desk["h"]) == (1440, 900), _f_desk)
+check("台式 1080p 用 1600×900 基准窗口",
+      (_f_desk["w"], _f_desk["h"]) == (1600, 900), _f_desk)
 check("台式机不最大化且水平居中",
-      _f_desk["maxed"] is False and _f_desk["x"] == (1920 - 1440) // 2, _f_desk)
+      _f_desk["maxed"] is False and _f_desk["x"] == (1920 - 1600) // 2, _f_desk)
 check("窗口垂直位置在工作区内",
       _f_desk["y"] >= 0 and _f_desk["y"] + _f_desk["h"] <= 1032, _f_desk)
 _f_big = scr.fit_window(_big)
 check("2K 大屏窗口不超过设计基准",
-      (_f_big["w"], _f_big["h"]) == (1440, 900), _f_big)
+      (_f_big["w"], _f_big["h"]) == (1600, 900), _f_big)
 _f_hd = scr.fit_window(_hidpi)
 check("150% 缩放：窗口按比例放大", _f_hd["w"] > 1800 and _f_hd["h"] > 900, _f_hd)
 check("150% 缩放：窗口仍收在屏幕内",
@@ -1449,7 +1449,7 @@ _f_s2 = scr.fit_window(_desk, saved="1200x800+120+80")
 check("大屏上正常恢复上次尺寸 1200×800",
       (_f_s2["w"], _f_s2["h"]) == (1200, 800), _f_s2)
 _f_s3 = scr.fit_window(_desk, saved="2400x1400+0+0")
-check("超出工作区的上次尺寸被忽略", (_f_s3["w"], _f_s3["h"]) == (1440, 900), _f_s3)
+check("超出工作区的上次尺寸被忽略", (_f_s3["w"], _f_s3["h"]) == (1600, 900), _f_s3)
 # 弹窗：笔记本上不能比屏幕还高
 _d_lap = scr.fit_dialog((670, 730), _lap)
 check("730 高弹窗在 768 屏幕上被收进工作区",
