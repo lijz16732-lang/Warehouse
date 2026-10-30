@@ -1619,8 +1619,23 @@ class App(object):
             self._drag_anchor = (iid, idx)
         if self.tree.identify_region(event.x, event.y) == "cell":
             cols = self._cols()
-            if 0 <= idx < len(cols):
+            if idx is not None and 0 <= idx < len(cols):
                 self._cell_col = cols[idx]
+            elif iid is None and idx is None:
+                # 📷 指示列（_cell_at 对越界列统一返回 None）：单击选中该行
+                # 并直接打开照片查看
+                row = self.tree.identify_row(event.y)
+                try:
+                    cidx = int(str(self.tree.identify_column(event.x))
+                               .replace("#", "")) - 1
+                except (TypeError, ValueError):
+                    cidx = None
+                if row and cidx == len(cols):
+                    rec = self.by_id.get(str(row))
+                    if rec is not None:
+                        self.tree.selection_set(str(row))
+                        self.tree.focus(str(row))
+                        self._open_record_photos(rec)
 
     def _in_drag_block(self, x, y):
         """右键坐标是否落在当前框选区块内（是则右键不该打散区块）。"""
@@ -1709,6 +1724,14 @@ class App(object):
             return
         rec = self.by_id.get(str(iid))
         if not rec:
+            return
+        try:
+            cidx = int(str(self.tree.identify_column(event.x))
+                       .replace("#", "")) - 1
+        except (TypeError, ValueError):
+            cidx = None
+        if cidx == len(self._cols()):     # 📷 指示列：双击直接看照片
+            self._open_record_photos(rec)
             return
         col = self._cell_col
         if col == "listed":
@@ -1915,6 +1938,20 @@ class App(object):
         elif not has and code in codes:
             codes.discard(code)
             self.render_page()
+
+    def _open_record_photos(self, rec):
+        """点表格里的 📷 指示：直接打开这条记录的照片查看窗。"""
+        code = rec.get("code") or ""
+        if not code:
+            return
+        try:
+            names = list(self.store.photos_list("item", code) or [])
+        except Exception:
+            names = []
+        if not names:
+            self._status("「%s」暂无照片：选中后可在下方「照片」区添加" % code)
+            return
+        self.photo_strip.view(names[0])
 
     def _save_pending_photos(self, code, pending):
         """编辑弹窗里暂存的照片，记录入库后逐张落盘（带进度）。"""
