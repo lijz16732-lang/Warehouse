@@ -302,6 +302,8 @@ class PhotoStrip(tk.Frame):
                        command=lambda: step(1)).pack(side="left", padx=4)
             ttk.Button(row, text="保存图片", style="Ghost.TButton",
                        command=do_save).pack(side="left", padx=4)
+            ttk.Button(row, text="多选保存", style="Ghost.TButton",
+                       command=do_save_multi).pack(side="left", padx=4)
             if not self.pending:
                 ttk.Button(row, text="添加照片", style="Ghost.TButton",
                            command=do_add).pack(side="left", padx=4)
@@ -328,6 +330,95 @@ class PhotoStrip(tk.Frame):
                 messagebox.showerror("保存失败", str(e)[:100], parent=win)
                 return
             self.app._status("图片已保存：%s" % path)
+
+        def _safe_target(folder, name, used):
+            """目标文件名：编号_原名，重名自动追加 (2)、(3)……"""
+            stem, ext = os.path.splitext(name)
+            base = "%s_%s%s" % (self.code, stem, ext or ".jpg")
+            target, i = base, 1
+            while target in used or os.path.exists(os.path.join(folder, target)):
+                i += 1
+                target = "%s(%d)%s" % (os.path.splitext(base)[0], i,
+                                       os.path.splitext(base)[1])
+            used.add(target)
+            return os.path.join(folder, target)
+
+        def do_save_multi():
+            """多选保存：勾选若干张，一次选文件夹批量写出原图。"""
+            if not names:
+                return
+            dlg = tk.Toplevel(win)
+            dlg.title("多选保存")
+            dlg.configure(bg=CLR_BG)
+            dlg.resizable(False, False)
+            dlg.transient(win)
+            dlg.grab_set()
+            apply_window_icon(dlg)
+            tk.Label(dlg, text="勾选要保存的照片（默认全选）：",
+                     bg=CLR_BG, fg=CLR_TEXT,
+                     font=(self.app.fam, 10, "bold")).pack(
+                anchor="w", padx=16, pady=(14, 6))
+            box = tk.Frame(dlg, bg=CLR_BG)
+            box.pack(padx=16, pady=(0, 8))
+            vars_ = []
+            for n in names:
+                v = tk.BooleanVar(value=True)
+                vars_.append((v, n))
+                tk.Checkbutton(box, text=n, variable=v, bg=CLR_BG, fg=CLR_TEXT,
+                               anchor="w", font=(self.app.fam, 9)).pack(
+                    anchor="w", fill="x")
+            tip = tk.Label(dlg, text="", bg=CLR_BG, fg=CLR_DANGER,
+                           font=(self.app.fam, 8))
+            tip.pack(padx=16, anchor="w")
+
+            def set_all(val):
+                for v, _n in vars_:
+                    v.set(val)
+            brow = tk.Frame(dlg, bg=CLR_BG)
+            brow.pack(pady=(0, 4))
+            ttk.Button(brow, text="全选", style="Ghost.TButton",
+                       command=lambda: set_all(True)).pack(side="left", padx=4)
+            ttk.Button(brow, text="全不选", style="Ghost.TButton",
+                       command=lambda: set_all(False)).pack(side="left", padx=4)
+
+            def confirm():
+                picked = [n for v, n in vars_ if v.get()]
+                if not picked:
+                    tip.configure(text="请至少勾选一张照片")
+                    return
+                folder = filedialog.askdirectory(
+                    parent=dlg, title="选择保存位置", mustexist=True)
+                if not folder:
+                    return
+                used = set()
+                ok, err = 0, ""
+                for n in picked:
+                    raw = self._bytes_of(n)
+                    if not raw:
+                        err = "%s 数据读取失败" % n
+                        continue
+                    try:
+                        with open(_safe_target(folder, n, used), "wb") as f:
+                            f.write(raw)
+                        ok += 1
+                    except OSError as e:
+                        err = str(e)[:100]
+                        break
+                dlg.destroy()
+                if ok:
+                    self.app._status("已保存 %d 张图片到 %s" % (ok, folder))
+                if err:
+                    messagebox.showwarning("多选保存", err, parent=win)
+
+            frow = tk.Frame(dlg, bg=CLR_BG)
+            frow.pack(pady=(4, 14))
+            ttk.Button(frow, text="取消", style="Ghost.TButton",
+                       command=dlg.destroy).pack(side="left", padx=4)
+            ttk.Button(frow, text="保存", style="Accent.TButton",
+                       command=confirm).pack(side="left", padx=4)
+            dlg.withdraw()
+            center_window(dlg, win, force=True)
+            dlg.deiconify()
 
         def step(d):
             state["idx"] = max(0, min(len(names) - 1, state["idx"] + d))
