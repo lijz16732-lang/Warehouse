@@ -339,6 +339,7 @@ function pickImageFiles(cb) {
   phInput.onchange = function () {
     var fs = Array.prototype.slice.call(phInput.files || []);
     phInput.value = '';
+    if (!fs.length) toast('没有获取到照片，请重试');
     cb(fs);
   };
   phInput.click();

@@ -102,6 +102,11 @@ public class MainActivity extends Activity {
                 getResources().getDisplayMetrics());
     }
 
+    private void toast(String msg) {
+        android.widget.Toast.makeText(this, msg,
+                android.widget.Toast.LENGTH_SHORT).show();
+    }
+
     // ------------------------------------------------------------ 首启协议
     /** 首次打开：滚动展示隐私政策+用户协议，同意才加载界面，不同意退出。 */
     private void showPrivacyDialog(final String url) {
@@ -188,15 +193,32 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_FILE) {                  // 相册：支持单/多选
-            finishFileCb(WebChromeClient.FileChooserParams
-                    .parseResult(resultCode, data));
+            Uri[] uris = WebChromeClient.FileChooserParams
+                    .parseResult(resultCode, data);
+            if (uris == null || uris.length == 0) {
+                if (resultCode == RESULT_OK) {
+                    toast("没有获取到所选照片，请重试");
+                }
+            } else {
+                toast("已获取 " + uris.length + " 张照片，处理中…");
+            }
+            finishFileCb(uris);
             return;
         }
         if (requestCode == REQ_CAMERA) {                // 拍照：成功把文件 Uri 交给页面
             if (resultCode == RESULT_OK && pendingCamFile != null
+                    && (!pendingCamFile.isFile()
+                        || pendingCamFile.length() == 0)) {
+                saveCameraThumbnail(data);              // 部分相机不写 EXTRA_OUTPUT，
+            }                                           // 只回缩略图，这里兜底落盘
+            if (resultCode == RESULT_OK && pendingCamFile != null
                     && pendingCamFile.isFile() && pendingCamFile.length() > 0) {
+                toast("照片已拍摄，处理中…");
                 finishFileCb(new Uri[]{PhotoProvider.uriFor(pendingCamFile.getName())});
             } else {
+                if (resultCode == RESULT_OK) {
+                    toast("拍照没有保存成功，请重试");
+                }
                 if (pendingCamFile != null) {
                     pendingCamFile.delete();            // 拍照取消/失败：清掉空文件
                 }
@@ -342,16 +364,35 @@ public class MainActivity extends Activity {
             dir.mkdirs();
         }
         pendingCamFile = new File(dir, "cam_" + System.currentTimeMillis() + ".jpg");
+        Uri out = PhotoProvider.uriFor(pendingCamFile.getName());
         Intent it = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
-        it.putExtra(android.provider.MediaStore.EXTRA_OUTPUT,
-                PhotoProvider.uriFor(pendingCamFile.getName()));
+        it.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, out);
+        // 关键：EXTRA_OUTPUT 的 content:// 必须经 ClipData 授权，只加 Intent flags
+        // 部分相机（如 MIUI）拿不到写权限 → 不写文件、只回缩略图 → 照片丢失
         it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        it.setClipData(android.content.ClipData.newRawUri("photos", out));
         try {
             startActivityForResult(it, REQ_CAMERA);
         } catch (Exception e) {
             pendingCamFile = null;
             finishFileCb(null);
+        }
+    }
+
+    /** 相机没写 EXTRA_OUTPUT 时，把返回的缩略图 Bitmap 落盘兜底（质量 90）。 */
+    private void saveCameraThumbnail(Intent data) {
+        try {
+            android.graphics.Bitmap bm = (data == null || data.getExtras() == null)
+                    ? null : (android.graphics.Bitmap) data.getExtras().get("data");
+            if (bm == null) {
+                return;
+            }
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(pendingCamFile);
+            bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fo);
+            fo.close();
+        } catch (Exception e) {
+            // 落盘失败就按拍照失败处理
         }
     }
 
