@@ -1003,6 +1003,33 @@ class Store(object):
         except OSError:
             return []
 
+    def photo_codes(self, kind):
+        """该类别下所有存有照片的编号集合（扫一遍照片目录，轻量）。
+        供表格渲染 📷 指示列，避免逐条 photos_list。"""
+        if kind not in PHOTO_KINDS:
+            return set()
+        stem = os.path.splitext(os.path.basename(self.path))[0]
+        root = os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                            "photos", stem, kind)
+        out = set()
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    if not e.is_dir():
+                        continue
+                    try:
+                        with os.scandir(e.path) as sub:
+                            for f in sub:
+                                if (f.is_file()
+                                        and f.name.lower().endswith(PHOTO_EXTS)):
+                                    out.add(e.name)
+                                    break
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return out
+
     def photo_path(self, kind, code, name):
         """照片绝对路径（做 basename 防路径穿越；不存在返回 None）。"""
         name = os.path.basename(str(name or ""))

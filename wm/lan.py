@@ -43,7 +43,7 @@ READ_METHODS = {
     "list_purchases", "purchase_totals", "list_deleted", "deleted_count",
     "duplicate_models", "model_keys", "blank_content_keys",
     "sales_totals", "out_totals", "stats", "revision",
-    "photos_list", "photo_data",
+    "photos_list", "photo_data", "photo_codes",
 }
 WRITE_METHODS = RPC_METHODS - READ_METHODS
 # 这些操作和主机本地文件有关，客户端不准调用

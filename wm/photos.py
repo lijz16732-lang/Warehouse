@@ -193,20 +193,52 @@ class PhotoStrip(tk.Frame):
         if not self.code:
             return
         ok, err = 0, ""
-        for p in paths:
-            try:
-                with open(p, "rb") as f:
-                    raw = f.read()
-                self.app.store.photo_add(self.kind, self.code,
-                                         base64.b64encode(raw).decode("ascii"),
-                                         os.path.basename(p))
-                ok += 1
-            except Exception as e:
-                err = str(e)[:100]
-                break
+        paths = list(paths)
+        total = len(paths)
+        # 进度窗：压缩大图较慢，逐张反馈避免“不知道有没有在存”
+        prog = tk.Toplevel(self.winfo_toplevel())
+        prog.title("添加照片")
+        prog.configure(bg=CLR_BG)
+        prog.resizable(False, False)
+        prog.transient(self.winfo_toplevel())
+        apply_window_icon(prog)
+        lbl = tk.Label(prog, text="正在添加 1/%d" % total, bg=CLR_BG, fg=CLR_TEXT,
+                       font=(self.app.fam, 10, "bold"))
+        lbl.pack(padx=28, pady=(16, 4))
+        bar = ttk.Progressbar(prog, length=280, maximum=total,
+                              mode="determinate")
+        bar.pack(padx=28, pady=(0, 6))
+        lbl_name = tk.Label(prog, text="", bg=CLR_BG, fg=CLR_MUTED,
+                            font=(self.app.fam, 8))
+        lbl_name.pack(padx=28, pady=(0, 14))
+        center_window(prog, self.winfo_toplevel(), force=True)
+        try:
+            for i, p in enumerate(paths, 1):
+                lbl.configure(text="正在添加 %d/%d" % (i, total))
+                lbl_name.configure(text=os.path.basename(p))
+                bar["value"] = i - 1
+                prog.update_idletasks()
+                prog.update()
+                try:
+                    with open(p, "rb") as f:
+                        raw = f.read()
+                    self.app.store.photo_add(self.kind, self.code,
+                                             base64.b64encode(raw).decode("ascii"),
+                                             os.path.basename(p))
+                    ok += 1
+                except Exception as e:
+                    err = str(e)[:100]
+                    break
+        finally:
+            bar["value"] = total
+            prog.destroy()
         self.set_code(self.code)
+        try:
+            self.app._photo_codes_changed(self.kind, self.code)
+        except Exception:
+            pass
         if ok:
-            self.app._status("已添加 %d 张照片" % ok)
+            self.app._status("已添加 %d 张照片（完成）" % ok)
         if err:
             messagebox.showwarning("添加照片", err, parent=self.winfo_toplevel())
 
@@ -286,6 +318,10 @@ class PhotoStrip(tk.Frame):
             except Exception as e:
                 messagebox.showerror("删除失败", str(e), parent=win)
                 return
+            try:
+                self.app._photo_codes_changed(self.kind, self.code)
+            except Exception:
+                pass
             self._cache.pop((self.code, n), None)
             names.pop(state["idx"])
             self.set_code(self.code)         # 底部缩略图同步刷新

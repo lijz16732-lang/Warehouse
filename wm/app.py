@@ -1083,6 +1083,10 @@ class App(object):
         except Exception as e:
             messagebox.showerror("读取失败", "无法读取数据库：\n%s" % e, parent=self.root)
             self.records = []
+        try:
+            self._photo_codes = self.store.photo_codes("item")   # 📷 指示列数据源
+        except Exception:
+            self._photo_codes = set()
         self._load_prefs()
         self._reload_choices()
         self.apply_filters(keep_page=first)
@@ -1257,8 +1261,9 @@ class App(object):
 
     def _setup_columns(self):
         cols = self._cols()
-        if list(self.tree["columns"]) != cols:
-            self.tree["columns"] = cols
+        tree_cols = cols + ["_photos"]        # 末尾：照片指示列（📷）
+        if list(self.tree["columns"]) != tree_cols:
+            self.tree["columns"] = tree_cols
         titles = self.store.col_titles()      # 手机端/电脑端共享的自定义列题
         for c in cols:
             arrow = ""
@@ -1271,6 +1276,10 @@ class App(object):
             self.tree.column(c, width=int(FIELD_WIDTH[c] * self.ui_scale),
                              minwidth=int(60 * self.ui_scale),
                              anchor=FIELD_ANCHOR[c], stretch=(c in ("remark",)))
+        self.tree.heading("_photos", text="📷")
+        self.tree.column("_photos", width=int(46 * self.ui_scale),
+                         minwidth=int(40 * self.ui_scale),
+                         anchor="center", stretch=False)
 
     @staticmethod
     def fmt(field, rec):
@@ -1324,7 +1333,10 @@ class App(object):
                     elif 0 < thr and q <= thr:
                         tags.append("low")   # 低库存：橙色底提醒补货
             self.tree.insert("", "end", iid=rid,
-                             values=[self.fmt(c, rec) for c in cols], tags=tuple(tags))
+                             values=[self.fmt(c, rec) for c in cols]
+                             + ["📷" if (rec.get("code") or "")
+                                in getattr(self, "_photo_codes", ()) else ""],
+                             tags=tuple(tags))
         self.lbl_page.configure(
             text="共 %d 条记录 · 第 %d/%d 页 · 本页 %d 条（勾选/多选后可批量操作）"
                  % (total, self.page, pages, max(0, end - start)))
@@ -1875,22 +1887,71 @@ class App(object):
             self._goto_last_page()
         self._status("已新增记录：%s" % (rec.get("code") or ""))
 
+    def _photo_codes_changed(self, kind, code):
+        """照片增删后刷新 📷 指示列（不整表重查，只更新集合+当前页）。"""
+        if not code:
+            return
+        if kind == "phone":
+            try:
+                pt = self.tab_phone
+                pt._fill(pt.tree_items, pt.item_rows, pt.PHONE_ITEM_COLS,
+                         pt._item_state,
+                         photo_codes=self.store.photo_codes("phone"))
+            except Exception:
+                pass
+            return
+        if kind != "item":
+            return
+        try:
+            has = bool(self.store.photos_list("item", code))
+        except Exception:
+            return
+        codes = getattr(self, "_photo_codes", None)
+        if codes is None:
+            return
+        if has and code not in codes:
+            codes.add(code)
+            self.render_page()
+        elif not has and code in codes:
+            codes.discard(code)
+            self.render_page()
+
     def _save_pending_photos(self, code, pending):
-        """编辑弹窗里暂存的照片，记录入库后逐张落盘。"""
+        """编辑弹窗里暂存的照片，记录入库后逐张落盘（带进度）。"""
         if not code or not pending:
             return
         import base64 as _b64
+        total = len(pending)
+        prog = tk.Toplevel(self.root)
+        prog.title("保存照片")
+        prog.configure(bg=CLR_BG)
+        prog.resizable(False, False)
+        prog.transient(self.root)
+        apply_window_icon(prog)
+        lbl = tk.Label(prog, text="正在保存 1/%d" % total, bg=CLR_BG, fg=CLR_TEXT,
+                       font=(self.fam, 10, "bold"))
+        lbl.pack(padx=28, pady=(16, 4))
+        bar = ttk.Progressbar(prog, length=280, maximum=total, mode="determinate")
+        bar.pack(padx=28, pady=(0, 14))
+        center_window(prog, self.root, force=True)
         ok = 0
-        for i, rawb in enumerate(pending):
-            try:
-                self.store.photo_add("item", code,
-                                     _b64.b64encode(rawb).decode("ascii"),
-                                     "photo%d.jpg" % (i + 1))
-                ok += 1
-            except Exception:
-                pass
+        try:
+            for i, rawb in enumerate(pending, 1):
+                lbl.configure(text="正在保存 %d/%d" % (i, total))
+                bar["value"] = i - 1
+                prog.update_idletasks()
+                prog.update()
+                try:
+                    self.store.photo_add("item", code,
+                                         _b64.b64encode(rawb).decode("ascii"),
+                                         "photo%d.jpg" % (i + 1))
+                    ok += 1
+                except Exception:
+                    pass
+        finally:
+            prog.destroy()
         if ok:
-            self._status("已添加 %d 张照片" % ok)
+            self._status("已添加 %d 张照片（完成）" % ok)
 
     def edit_selected(self):
         if self._guard_write():

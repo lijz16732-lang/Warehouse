@@ -269,11 +269,16 @@ def handle_items(srv, ip, token, query):
         limit = PAGE_LIMIT
     limit = max(1, min(limit, PAGE_LIMIT))
     page = rows[offset:offset + limit]
+    try:
+        has_ph = srv.get_store().photo_codes("item")   # 📷 指示列数据源
+    except Exception:
+        has_ph = set()
     out = []
     for r in page:
         d = {k: r.get(k) for k in ITEM_FIELDS}
         d["remark"] = _trim(d["remark"], 60)
         d["price"] = _fmt_price(d["price"])
+        d["ph"] = 1 if (r.get("code") or "") in has_ph else 0
         out.append(d)
     return 200, {"ok": True, "total": len(rows), "offset": offset,
                  "has_more": offset + limit < len(rows), "items": out}, NO_STORE

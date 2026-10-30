@@ -120,6 +120,8 @@ class PhoneTab(ttk.Frame):
                         highlightthickness=1)
         wrap.pack(fill="both", expand=True, padx=0, pady=10)
         cols = [c[0] for c in cols_def]
+        if is_items:
+            cols = cols + ["_photos"]      # 末尾：照片指示列（📷）
         tree = ttk.Treeview(wrap, columns=cols, show="headings",
                             selectmode="extended")
         vs = ttk.Scrollbar(wrap, orient="vertical", style="Vertical.TScrollbar",
@@ -130,6 +132,10 @@ class PhoneTab(ttk.Frame):
             tree.heading(key, text=title, anchor=anc)
             tree.column(key, width=w, anchor=anc,
                         stretch=(key in ("model", "remark", "brand")))
+        if is_items:
+            tree.heading("_photos", text="📷")
+            tree.column("_photos", width=42, minwidth=36, anchor="center",
+                        stretch=False)
         # 滚动条先占位（pack 顺序坑：expand 的表格先 pack 会把滚动条挤掉）
         vs.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
@@ -191,7 +197,9 @@ class PhoneTab(ttk.Frame):
             self.item_rows, self.sale_rows = [], []
             self.lbl_summary.configure(text="读取失败：%s" % e)
             return
-        self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS, self._item_state)
+        self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS,
+                   self._item_state,
+                   photo_codes=self._store().photo_codes("phone"))
         self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS)
         self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
                                    % (len(self.item_rows), len(self.sale_rows)))
@@ -204,7 +212,7 @@ class PhoneTab(ttk.Frame):
     def _item_state(r):
         return "已转入库存" if r.get("transferred") else "待转入"
 
-    def _fill(self, tree, rows, cols_def, extra=None):
+    def _fill(self, tree, rows, cols_def, extra=None, photo_codes=None):
         tree.delete(*tree.get_children())
         mapping = {}                       # 每个 tree 独立映射（共用会互相覆盖）
         self._maps[tree] = mapping
@@ -219,6 +227,8 @@ class PhoneTab(ttk.Frame):
                     vals.append("%.2f" % float(r.get(key) or 0))
                 else:
                     vals.append("" if r.get(key) is None else str(r.get(key)))
+            if photo_codes is not None:
+                vals.append("📷" if (r.get("code") or "") in photo_codes else "")
             tags = []
             if extra and r.get("transferred"):
                 tags.append("done")
