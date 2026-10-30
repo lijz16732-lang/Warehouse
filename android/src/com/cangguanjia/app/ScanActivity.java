@@ -122,10 +122,40 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         buildUi();
 
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_PERM);
+            askCameraPerm();
         }
         // 相机不在这里开：等 surfaceCreated / 权限回调，避免 surface 未就绪导致黑屏
         if (!isQr) prepareEngine();       // 扫二维码不需要 OCR 引擎，省 2 秒和内存
+    }
+
+    /** 申请相机权限前先说明用途（合规要求：权限使用告知）。 */
+    private void askCameraPerm() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("需要相机权限")
+                .setMessage(isQr
+                        ? "扫二维码需要使用相机取景。画面仅在手机本地处理，不保存、不上传。"
+                        : "扫一扫识别型号需要使用相机取景，识别完全在手机本地完成"
+                          + "（离线 OCR），画面不保存、不上传。")
+                .setCancelable(false)
+                .setPositiveButton("去允许",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int w) {
+                                requestPermissions(
+                                        new String[]{Manifest.permission.CAMERA},
+                                        REQ_PERM);
+                            }
+                        })
+                .setNegativeButton("暂不",
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int w) {
+                                toast("没有相机权限，无法扫一扫（可在系统设置里允许）");
+                                setResult(RESULT_CANCELED);
+                                finish();
+                            }
+                        })
+                .show();
     }
 
     // ------------------------------------------------------------- 界面

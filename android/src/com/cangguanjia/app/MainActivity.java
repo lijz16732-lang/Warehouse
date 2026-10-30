@@ -31,6 +31,7 @@ public class MainActivity extends Activity {
 
     private static final String PREFS = "cgm";
     private static final String KEY_URL = "server_url";
+    private static final String KEY_PRIVACY = "privacy_agreed";   // 首启协议同意标记
     private static final String LOCAL_PAGE = "file:///android_asset/index.html";
     private static final int REQ_SCAN = 1001;
     private static final int REQ_QR = 1002;
@@ -84,8 +85,73 @@ public class MainActivity extends Activity {
         if (saved.length() > 0) {
             url += "#base=" + Uri.encode(saved);
         }
-        web.loadUrl(url);
+        // 首次打开必须先阅读并同意《隐私政策》与《用户协议》才能进入
+        if (getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getBoolean(KEY_PRIVACY, false)) {
+            web.loadUrl(url);
+        } else {
+            showPrivacyDialog(url);
+        }
     }
+
+    private int dp(float v) {
+        return (int) android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, v,
+                getResources().getDisplayMetrics());
+    }
+
+    // ------------------------------------------------------------ 首启协议
+    /** 首次打开：滚动展示隐私政策+用户协议，同意才加载界面，不同意退出。 */
+    private void showPrivacyDialog(final String url) {
+        android.widget.ScrollView sc = new android.widget.ScrollView(this);
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setText(PRIVACY_TEXT);
+        tv.setTextSize(13.5f);
+        tv.setLineSpacing(0, 1.25f);
+        tv.setPadding(dp(18), dp(10), dp(18), dp(10));
+        sc.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("欢迎使用仓管家")
+                .setView(sc)
+                .setCancelable(false)
+                .setPositiveButton("同意并继续",
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int w) {
+                                getSharedPreferences(PREFS, MODE_PRIVATE)
+                                        .edit().putBoolean(KEY_PRIVACY, true).apply();
+                                web.loadUrl(url);
+                            }
+                        })
+                .setNegativeButton("不同意并退出",
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int w) {
+                                finish();
+                            }
+                        })
+                .show();
+    }
+
+    /** 协议正文（应用商店合规要求：首启展示、说明权限用途与数据去向）。 */
+    private static final String PRIVACY_TEXT =
+            "在使用本应用前，请务必阅读并理解《隐私政策》和《用户协议》：\n\n"
+            + "一、隐私政策\n\n"
+            + "1. 数据存储：您的全部库存数据仅保存在本机（手机本地存储 / 电脑本地数据库），"
+            + "本应用不连接任何云服务器，不在云端留存任何数据。\n\n"
+            + "2. 局域网同步：仅当您主动开启「数据共享到电脑端」时，应用才会与同一局域网内"
+            + "您自己的电脑直接通信；数据不经互联网传输，也不经过任何第三方。\n\n"
+            + "3. 相机权限：仅用于 ① 拍照添加商品照片 ② 扫一扫识别型号文字 / 二维码。"
+            + "相机画面只在手机本地处理，不拍摄存储无关内容、不上传互联网。\n\n"
+            + "4. 照片：您添加的商品照片经压缩后保存在本机；开启共享后仅同步到您自己的电脑，"
+            + "删除记录时照片一并删除。\n\n"
+            + "5. 我们不收集、不分析、不共享、不出售您的任何数据。\n\n"
+            + "二、用户协议\n\n"
+            + "1. 本应用供个人或小型商户进行本地库存管理，按「现状」提供。\n"
+            + "2. 您的数据由您自行保管，重要数据请定期在电脑端导出备份；"
+            + "因设备丢失、系统故障、误删除等造成的数据损失，需由您自行承担。\n"
+            + "3. 请遵守当地法律法规使用本应用，不得用于非法用途。\n"
+            + "4. 点击「同意并继续」即表示您已阅读并同意以上全部条款。";
 
     /** 页面 → 原生：window.AndroidOcr.scan() 识别型号文字；scanQr() 扫电脑二维码。 */
     public class ScanBridge {
@@ -186,8 +252,34 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(
                 android.Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{android.Manifest.permission.CAMERA},
-                    REQ_CAM_PERM);
+            // 申请前先给用途说明（应用市场合规要求：权限用途告知）
+            new AlertDialog.Builder(this)
+                    .setTitle("需要相机权限")
+                    .setMessage("「拍照」需要使用相机拍摄商品照片。"
+                            + "照片仅保存在本机并同步到您自己的电脑，不会上传互联网。")
+                    .setPositiveButton("去允许",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    requestPermissions(new String[]{
+                                            android.Manifest.permission.CAMERA},
+                                            REQ_CAM_PERM);
+                                }
+                            })
+                    .setNegativeButton("暂不",
+                            new DialogInterface.OnClickListener() {
+                                @Override
+                                public void onClick(DialogInterface d, int w) {
+                                    finishFileCb(null);
+                                }
+                            })
+                    .setOnCancelListener(new DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(DialogInterface d) {
+                            finishFileCb(null);
+                        }
+                    })
+                    .show();
             return;
         }
         launchCamera();
@@ -221,6 +313,9 @@ public class MainActivity extends Activity {
                     && results[0] == PackageManager.PERMISSION_GRANTED) {
                 launchCamera();
             } else {
+                android.widget.Toast.makeText(this,
+                        "未授予相机权限，无法拍照；可在系统设置 → 应用 → 仓管家里允许",
+                        android.widget.Toast.LENGTH_LONG).show();
                 finishFileCb(null);
             }
         }
