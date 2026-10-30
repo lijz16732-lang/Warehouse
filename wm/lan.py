@@ -23,7 +23,9 @@ from .constants import APP_NAME, APP_VERSION
 from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
                      handle_logout, handle_m_item, handle_m_sale, handle_page,
                      handle_request_write, handle_sales, handle_sell,
-                     handle_update_all, handle_whoami, handle_items)
+                     handle_update_all, handle_whoami, handle_items,
+                     handle_photos, handle_photo_get, handle_photo_add,
+                     handle_photo_del)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -41,10 +43,11 @@ READ_METHODS = {
     "list_purchases", "purchase_totals", "list_deleted", "deleted_count",
     "duplicate_models", "model_keys", "blank_content_keys",
     "sales_totals", "out_totals", "stats", "revision",
+    "photos_list", "photo_data",
 }
 WRITE_METHODS = RPC_METHODS - READ_METHODS
 # 这些操作和主机本地文件有关，客户端不准调用
-BLOCKED_METHODS = {"backup_to"}
+BLOCKED_METHODS = {"backup_to", "photos_dir", "photo_path"}
 
 
 def local_ips():
@@ -348,6 +351,10 @@ def _make_handler(srv):
                     return self._send_full(*handle_sales(srv, ip, token, q))
                 if path.startswith("/m/api/coltitles"):
                     return self._send_full(*handle_coltitles(srv, ip, token))
+                if path.startswith("/m/api/photos"):
+                    return self._send_full(*handle_photos(srv, ip, token, q))
+                if path.startswith("/m/api/photo_get"):
+                    return self._send_full(*handle_photo_get(srv, ip, token, q))
                 return self._send(404, {"ok": False, "error": "not found"})
             # /ping（电脑客户端 4 秒轮询）
             q = self._query()
@@ -404,6 +411,10 @@ def _make_handler(srv):
                         return self._send_full(*handle_m_sale(srv, ip, token, payload))
                     if path.startswith("/m/api/coltitles"):
                         return self._send_full(*handle_coltitles(srv, ip, token, payload))
+                    if path.startswith("/m/api/photo_add"):
+                        return self._send_full(*handle_photo_add(srv, ip, token, payload))
+                    if path.startswith("/m/api/photo_del"):
+                        return self._send_full(*handle_photo_del(srv, ip, token, payload))
                 return self._send(404, {"ok": False, "error": "not found"})
             if path.startswith("/request_write"):
                 if not srv._code_ok(str(payload.get("code") or "")):

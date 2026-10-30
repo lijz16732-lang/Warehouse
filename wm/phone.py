@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
                         CLR_TEXT)
+from .photos import PhotoStrip
 from .theme import RowHover
 
 # (key, 标题, 宽度)
@@ -99,6 +100,20 @@ class PhoneTab(ttk.Frame):
         self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS,
                                           is_items=True)
         self.tree_sales = self._make_tree(self.frm_sales, PHONE_SALE_COLS)
+        # 手机区商品照片条（v1.25.0）：选中一行后可查看 / 添加照片
+        self.photo_strip = PhotoStrip(self.frm_items, self.app, kind="phone")
+        self.photo_strip.pack(fill="x", padx=(0, 0), pady=(0, 8))
+        self.tree_items.bind("<<TreeviewSelect>>", self._psel, add="+")
+
+    def _psel(self, _event=None):
+        """手机库存表选中变化 → 照片条跟随。"""
+        try:
+            mapping = self._maps.get(self.tree_items) or {}
+            sel = self.tree_items.selection()
+            code = mapping[sel[0]].get("code") if len(sel) == 1 else None
+            self.photo_strip.set_code(code or None)
+        except Exception:
+            pass
 
     def _make_tree(self, parent, cols_def, is_items=False):
         wrap = tk.Frame(parent, bg=CLR_CARD, highlightbackground=CLR_BORDER,
@@ -180,6 +195,10 @@ class PhoneTab(ttk.Frame):
         self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS)
         self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
                                    % (len(self.item_rows), len(self.sale_rows)))
+        try:                                 # 行重建后旧选中作废 → 照片条复位
+            self.photo_strip.set_code(None)
+        except Exception:
+            pass
 
     @staticmethod
     def _item_state(r):

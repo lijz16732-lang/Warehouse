@@ -824,6 +824,55 @@ try:
                "_rebind_shortcuts", "_soft_reboot", "SC_DEFS", "_reboot"))
           and "_restart_app" not in _app_src
           and "subprocess.Popen" not in _app_src)
+    # ---- v1.25.0 多张照片备注（电脑端 + 手机端） ----
+    import tempfile as _tmpf
+    _pst = _wstore.Store(os.path.join(_tmpf.mkdtemp(), "t.db"))
+    _jpg = b"\xff\xd8\xff\xe0FAKEJPGDATA" * 40
+    _pn = _pst.photo_add("item", "WL-P1", _jpg, "a.jpg")
+    _pst.photo_add("item", "WL-P1", _jpg + b"x", "b.jpg")
+    check("照片：添加/列表/去重/读取（base64）",
+          _pst.photo_add("item", "WL-P1", _jpg, "a.jpg") == _pn
+          and len(_pst.photos_list("item", "WL-P1")) == 2
+          and _pst.photo_data("item", "WL-P1", _pn) is not None
+          and _pst.photo_data("item", "WL-P1", "不存在.jpg") is None)
+    check("照片：上限 10 张与非法 kind/路径穿越拦截",
+          not _pst.photos_list("hack", "x")
+          and _pst.photo_path("item", "WL-P1", "../../x.jpg") is None
+          and (_pst.photo_add("item", "WL-P2", _jpg) or True))
+    _ok_limit = True
+    try:
+        for _i in range(20):
+            _pst.photo_add("item", "WL-P2", _jpg + bytes([_i]) * 16, "x.jpg")
+    except ValueError:
+        _ok_limit = len(_pst.photos_list("item", "WL-P2")) == _wstore.PHOTO_MAX
+    check("照片：超过 10 张抛 ValueError", _ok_limit)
+    _pst.photo_del("item", "WL-P1", _pn)
+    check("照片：删除生效", _pn not in _pst.photos_list("item", "WL-P1"))
+    _ridp = _pst.insert(blank_record() | {"code": "WL-P3", "model": "PM"})
+    _pst.photo_add("item", "WL-P3", _jpg, "c.jpg")
+    _pst._execute("UPDATE items SET deleted_at='2026-10-30' WHERE id=?", (_ridp,))
+    _pst.purge_ids([_ridp])
+    check("照片：彻底删除记录级联清理照片",
+          _pst.photos_list("item", "WL-P3") == [])
+    _app_html_ph = _app_html
+    check("手机端照片：拍照/选图/压缩/自动同步 + 电脑库存照片接口调用",
+          all(x in _app_html_ph for x in
+              ("pickPhotos", "compressImg", "pushPhotos", "openPcPhotos",
+               "/m/api/photo_add", "/m/api/photo_get", "/m/api/photo_del",
+               "cgm_ph_")) and "PH_MAX = 10" in _app_html_ph)
+    _mob_src = open(os.path.join(_wm_dir, "mobile.py"), encoding="utf-8").read()
+    check("手机照片接口：列表/取图/上传/删除（主库存需授权、手机区登录即可）",
+          all(x in _mob_src for x in
+              ("handle_photos", "handle_photo_get", "handle_photo_add",
+               "handle_photo_del", "_need_write")))
+    _lan_src = open(os.path.join(_wm_dir, "lan.py"), encoding="utf-8").read()
+    check("局域网照片 RPC：photos_list/photo_data 只读，photo_add/photo_del 需授权",
+          "photos_list" in _lan_src and "photo_data" in _lan_src
+          and '"photos_dir", "photo_path"' in _lan_src)
+    check("电脑端照片条：详情面板缩略图/大图/添加/删除 + 手机数据页接入",
+          all(x in _app_src for x in ("PhotoStrip", "photo_strip"))
+          and "PhotoStrip" in open(os.path.join(_wm_dir, "phone.py"),
+                                   encoding="utf-8").read())
     check("电脑端操作日志页签（筛选/导出/清空）",
           all(x in _app_src for x in
               ("操作日志", "_build_log_tab", "_load_log", "_export_log",

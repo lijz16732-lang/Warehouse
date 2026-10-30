@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """SQLite 数据层：仓库记录的持久化与查询。"""
 
+import base64
+import hashlib
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -157,6 +160,42 @@ BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 """
 
 CODE_SEQ_KEY = "code_seq"
+
+# --------------------------------------------------------------------------
+# 照片（v1.25.0）：每条记录可挂多张照片，文件存磁盘、不动数据库结构。
+# 目录：data/photos/<库文件名>/<kind>/<编号>/，kind = item 主库存 / phone 手机区
+# 列表即目录内容；照片增删后写 meta 触发 rev 自增，客户端轮询即感知刷新。
+# --------------------------------------------------------------------------
+PHOTO_MAX = 10                     # 每条记录最多张数
+PHOTO_KINDS = ("item", "phone")
+PHOTO_EXTS = (".jpg", ".jpeg", ".png")
+
+
+def _safe_code(code):
+    """编号 → 安全目录名（保留中英文数字-_.，其余替换为下划线）。"""
+    s = re.sub(r'[\\/:*?"<>|\r\n\t ]+', "_", str(code or "").strip())
+    return s[:80] or "_"
+
+
+def _shrink_image(data, max_side=1600, quality=85):
+    """图片字节压缩：最长边超限等比缩小并转 JPEG。PIL 不可用或解析失败
+    时原样返回 (data, None)；成功返回 (jpg_bytes, ".jpg")。"""
+    try:
+        import io as _io
+        from PIL import Image
+        im = Image.open(_io.BytesIO(data))
+        im.load()
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        if max(im.size) > max_side:
+            r = float(max_side) / max(im.size)
+            im = im.resize((max(1, int(im.width * r)),
+                            max(1, int(im.height * r))), Image.LANCZOS)
+        out = _io.BytesIO()
+        im.save(out, "JPEG", quality=quality)
+        return out.getvalue(), ".jpg"
+    except Exception:
+        return data, None
 
 
 def _content_key(rec):
@@ -560,6 +599,8 @@ class Store(object):
             self.conn.execute("DELETE FROM phone_items WHERE lid = ?", (int(lid),))
         self.conn.commit()
         d = dict(row) if row else {}
+        if d.get("code"):                    # 手机区商品照片一并清理
+            self.photos_wipe("phone", d["code"])
         self.log_op("手机删除商品", d.get("code") or d.get("model") or "", "手机区商品")
 
     def m_del_sale(self, lid):
@@ -577,6 +618,7 @@ class Store(object):
             self.conn.execute("DELETE FROM phone_items")
             self.conn.execute("DELETE FROM phone_sales")
         self.conn.commit()
+        self.photos_wipe_kind("phone")       # 手机区照片一并清理
         self.log_op("清空手机数据", "", "%d 条手机区记录" % n)
 
     def m_transfer(self, lids):
@@ -593,6 +635,7 @@ class Store(object):
                 continue
             rec = {k: row[k] for k in FIELD_KEYS}
             rec["sold_out"] = row["sold_out"]
+            old_code = row["code"]
             code = self.generate_codes(1)[0]
             rec["code"] = code
             rid = self.insert(rec)
@@ -600,6 +643,8 @@ class Store(object):
                 with self._lock:
                     self.conn.execute("UPDATE items SET sold_out=1 WHERE id=?", (rid,))
                 self.conn.commit()
+            if old_code:                     # 照片跟随转入主库存
+                self.photos_copy("phone", old_code, "item", code)
             with self._lock:
                 self.conn.execute(
                     "UPDATE phone_items SET transferred=1, pc_id=?, updated_at=? "
@@ -872,6 +917,8 @@ class Store(object):
             cur = self._execute(
                 "DELETE FROM items WHERE id IN ({ph}) AND deleted_at IS NOT NULL".format(ph=ph),
                 tuple(ids))
+            for c in codes:                      # 物理删除 → 照片一并清理
+                self.photos_wipe("item", c)
             self.log_op("彻底删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
                         "%d 条" % cur.rowcount)
         return cur.rowcount
@@ -915,12 +962,19 @@ class Store(object):
         cur = self._execute(
             "DELETE FROM items WHERE id IN ({ph}) AND deleted_at IS NOT NULL".format(ph=ph),
             tuple(ids))
+        for c in codes:                          # 照片一并清理
+            self.photos_wipe("item", c)
         self.log_op("彻底删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
                     "%d 条（回收站）" % cur.rowcount)
         return cur.rowcount
 
     def purge_all_deleted(self):
+        codes = [r["code"] for r in
+                 self.conn.execute('SELECT code FROM items WHERE deleted_at IS NOT NULL')
+                 if r["code"]]
         cur = self._execute("DELETE FROM items WHERE deleted_at IS NOT NULL")
+        for c in codes:                          # 照片一并清理
+            self.photos_wipe("item", c)
         self.log_op("清空回收站", "", "%d 条" % cur.rowcount)
         return cur.rowcount
 
@@ -928,6 +982,125 @@ class Store(object):
         """清除编号计数器，让下一次导入从 WL-00001 重新开始。"""
         self._execute("DELETE FROM meta WHERE k = ?", (CODE_SEQ_KEY,))
         self.log_op("重置编号", "", "编号计数器归零，下次从 1 开始")
+
+    # ---------------------------------------------------------------- 照片
+    def photos_dir(self, kind, code):
+        """某条记录的照片目录（按库文件名隔离，多仓库互不干扰）。"""
+        stem = os.path.splitext(os.path.basename(self.path))[0]
+        return os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                            "photos", stem, kind, _safe_code(code))
+
+    def photos_list(self, kind, code):
+        """某条记录的照片文件名列表（按文件名排序，即添加顺序）。"""
+        if kind not in PHOTO_KINDS:
+            return []
+        d = self.photos_dir(kind, code)
+        try:
+            return sorted(
+                f for f in os.listdir(d)
+                if f.lower().endswith(PHOTO_EXTS)
+                and os.path.isfile(os.path.join(d, f)))
+        except OSError:
+            return []
+
+    def photo_path(self, kind, code, name):
+        """照片绝对路径（做 basename 防路径穿越；不存在返回 None）。"""
+        name = os.path.basename(str(name or ""))
+        if (kind not in PHOTO_KINDS or not name
+                or not name.lower().endswith(PHOTO_EXTS)):
+            return None
+        p = os.path.join(self.photos_dir(kind, code), name)
+        return p if os.path.isfile(p) else None
+
+    def photo_add(self, kind, code, data, orig_name=""):
+        """存一张照片（自动压缩），返回文件名；超过上限抛 ValueError。
+        data 可为原始字节或 base64 字符串（局域网/手机接口传图用）。
+        同一内容（md5 相同）重复添加只保留一份。"""
+        if isinstance(data, str):
+            try:
+                data = base64.b64decode(data)
+            except Exception:
+                raise ValueError("照片数据不是有效的 base64")
+        if kind not in PHOTO_KINDS:
+            raise ValueError("未知的照片类型")
+        if not data:
+            raise ValueError("空照片")
+        cur = self.photos_list(kind, code)
+        if len(cur) >= PHOTO_MAX:
+            raise ValueError("每条记录最多 %d 张照片" % PHOTO_MAX)
+        jpg, ext = _shrink_image(data)
+        if ext is None:                      # PIL 不可用 → 按原始扩展名保存
+            ext = os.path.splitext(orig_name or "")[1].lower()
+            if ext not in PHOTO_EXTS:
+                ext = ".jpg"
+        name = hashlib.md5(jpg).hexdigest()[:12] + ext
+        d = self.photos_dir(kind, code)
+        os.makedirs(d, exist_ok=True)
+        if name not in cur:
+            with open(os.path.join(d, name), "wb") as f:
+                f.write(jpg)
+            self._photo_rev()
+            self.log_op("添加照片", str(code), name)
+        return name
+
+    def photo_del(self, kind, code, name):
+        """删一张照片。返回是否删除了文件。"""
+        p = self.photo_path(kind, code, name)
+        if p:
+            try:
+                os.remove(p)
+            except OSError:
+                return False
+            self._photo_rev()
+            self.log_op("删除照片", str(code), name)
+            return True
+        return False
+
+    def photo_data(self, kind, code, name):
+        """读一张照片，返回 base64 字符串（不存在返回 None）。
+        局域网客户端 / 手机端取图统一走这里（JSON 通道友好）。"""
+        p = self.photo_path(kind, code, name)
+        if not p:
+            return None
+        try:
+            with open(p, "rb") as f:
+                return base64.b64encode(f.read()).decode("ascii")
+        except OSError:
+            return None
+
+    def photos_wipe(self, kind, code):
+        """清掉某条记录的全部照片（删记录时级联调用）。"""
+        shutil.rmtree(self.photos_dir(kind, code), ignore_errors=True)
+
+    def photos_wipe_kind(self, kind):
+        """清掉某类全部照片（清空数据 / 清空手机数据时级联调用）。"""
+        if kind in PHOTO_KINDS:
+            stem = os.path.splitext(os.path.basename(self.path))[0]
+            shutil.rmtree(os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                                       "photos", stem, kind), ignore_errors=True)
+
+    def photos_copy(self, kind_src, code_src, kind_dst, code_dst):
+        """照片整体迁移（手机商品转入主库存时用）。返回迁移张数。"""
+        names = self.photos_list(kind_src, code_src)
+        if not names:
+            return 0
+        os.makedirs(self.photos_dir(kind_dst, code_dst), exist_ok=True)
+        n = 0
+        for f in names:
+            try:
+                shutil.copy2(os.path.join(self.photos_dir(kind_src, code_src), f),
+                             os.path.join(self.photos_dir(kind_dst, code_dst), f))
+                n += 1
+            except OSError:
+                pass
+        return n
+
+    def _photo_rev(self):
+        """照片变化后 bump 数据版本号（meta 写入由触发器自增 rev）。"""
+        try:
+            self.set_meta("photos_rev", now_str())
+        except Exception:
+            pass
 
     # ---------------------------------------------------------------- 出售
     def add_sale(self, item_id, qty, price, buyer="", sale_date="", remark="",
@@ -1498,6 +1671,7 @@ class Store(object):
         导入「覆盖全部」只重建库存，保留出售流水。
         """
         self._execute("DELETE FROM items")
+        self.photos_wipe_kind("item")            # 照片一并清理
         if purge_sales:
             self._execute("DELETE FROM sales")
             self._execute("DELETE FROM purchases")

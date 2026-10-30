@@ -587,6 +587,88 @@ def handle_logout(srv, ip, token):
     return 200, {"ok": True}, [_clear_cookie()]
 
 
+# ---------------------------------------------------------------- 照片 v1.25.0
+def _photo_args(payload, need_code=True):
+    kind = str((payload or {}).get("kind") or "item")
+    code = str((payload or {}).get("code") or "").strip()
+    if kind not in ("item", "phone"):
+        return None
+    if need_code and not code:
+        return None
+    return kind, code
+
+
+def handle_photos(srv, ip, token, query):
+    """GET /m/api/photos?kind=&code=：照片文件名列表（登录即可看）。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate
+    a = _photo_args(query)
+    if not a:
+        return 400, {"ok": False, "error": "参数不正确"}
+    try:
+        names = srv.get_store().photos_list(a[0], a[1])
+    except Exception as e:
+        return 500, {"ok": False, "error": "读取失败：%s" % e}
+    return 200, {"ok": True, "photos": names}
+
+
+def handle_photo_get(srv, ip, token, query):
+    """GET /m/api/photo_get?kind=&code=&name=：单张照片（base64）。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate
+    a = _photo_args(query)
+    name = str((query or {}).get("name") or "")
+    if not a or not name:
+        return 400, {"ok": False, "error": "参数不正确"}
+    b64 = srv.get_store().photo_data(a[0], a[1], name)
+    if b64 is None:
+        return 404, {"ok": False, "error": "照片不存在"}
+    return 200, {"ok": True, "data": b64}
+
+
+def handle_photo_add(srv, ip, token, payload):
+    """POST /m/api/photo_add {kind, code, data(base64), name?}。
+    主库存照片需要「允许录入」授权；手机区照片登录即可（独立数据）。"""
+    p = payload or {}
+    a = _photo_args(p)
+    if not a:
+        return 400, {"ok": False, "error": "参数不正确"}
+    gate = _need_write(srv, ip, token) if a[0] == "item" \
+        else _need_login(srv, ip, token)
+    if gate:
+        return gate
+    data = p.get("data") or ""
+    if not data:
+        return 400, {"ok": False, "error": "缺少照片数据"}
+    try:
+        name = srv.get_store().photo_add(a[0], a[1], data,
+                                         str(p.get("name") or ""))
+    except ValueError as e:
+        return 400, {"ok": False, "error": str(e)}, NO_STORE
+    except Exception as e:
+        return 500, {"ok": False, "error": "保存失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "name": name, "message": "照片已保存"}, NO_STORE
+
+
+def handle_photo_del(srv, ip, token, payload):
+    """POST /m/api/photo_del {kind, code, name}。权限同 photo_add。"""
+    p = payload or {}
+    a = _photo_args(p)
+    name = str(p.get("name") or "")
+    if not a or not name:
+        return 400, {"ok": False, "error": "参数不正确"}
+    gate = _need_write(srv, ip, token) if a[0] == "item" \
+        else _need_login(srv, ip, token)
+    if gate:
+        return gate
+    ok = srv.get_store().photo_del(a[0], a[1], name)
+    if not ok:
+        return 404, {"ok": False, "error": "照片不存在"}, NO_STORE
+    return 200, {"ok": True, "message": "已删除"}, NO_STORE
+
+
 # ================================================================ 手机页面
 # 单文件、无外部依赖（局域网里未必有互联网）：原生 JS + 内联 CSS。
 # 注意：本字符串里不允许出现反斜杠（tests 有断言）——Python 会把 JS 的转义吃掉。

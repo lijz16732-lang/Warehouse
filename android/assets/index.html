@@ -94,6 +94,18 @@ tr:active { background:var(--active); }
          border-bottom:1px solid var(--ctline); font-size:14px; color:var(--fg); }
 .ckrow input { width:auto; flex:none; }
 .ckrow.dis { color:var(--muted); }
+/* 照片（v1.25.0） */
+.phrow { display:flex; flex-wrap:wrap; gap:8px; }
+.phthumb { width:72px; height:72px; border-radius:10px; object-fit:cover;
+           background:var(--seg); border:1px solid var(--line); cursor:pointer; }
+.phadd { width:72px; height:72px; border-radius:10px; border:1px dashed var(--soft);
+         background:none; color:var(--soft); font-size:26px; line-height:66px;
+         text-align:center; padding:0; }
+.phdel { position:absolute; margin:-26px 0 0 44px; width:26px; height:26px; border-radius:50%;
+         border:none; background:rgba(0,0,0,.55); color:#fff; font-size:14px; padding:0; }
+.phbig { width:100%; max-height:56vh; object-fit:contain; border-radius:10px;
+         background:var(--seg); }
+.phcnt { text-align:center; font-size:12px; color:var(--soft); margin:6px 0; }
 </style>
 </head>
 <body>
@@ -260,6 +272,73 @@ function loadDB() {
   if (!DB.kwHist) DB.kwHist = [];
 }
 function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
+
+/* ================= 照片（v1.25.0） =================
+   每件商品最多 10 张；照片按 lid 存在独立 localStorage 键里（cgm_ph_<lid>），
+   不跟 cgm_db 一起序列化，避免每次保存都搬运几百 KB 的图片数据。
+   每张 {n:名字, d:dataURL, s:是否已同步到电脑}；连上电脑后自动补传 s=0 的。 */
+var PH_MAX = 10;
+function phKey(lid) { return 'cgm_ph_' + lid; }
+function getPh(lid) {
+  try { return JSON.parse(LS.getItem(phKey(lid)) || '[]') || []; }
+  catch (e) { return []; }
+}
+function setPh(lid, arr) {
+  try { LS.setItem(phKey(lid), JSON.stringify(arr)); return true; }
+  catch (e) { toast('手机存储空间不足，照片没保存上（可删几张旧照片）'); return false; }
+}
+function delPh(lid) { LS.removeItem(phKey(lid)); }
+function phNewName() {
+  return 'P' + Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36);
+}
+function compressImg(file, cb) {
+  var fr = new FileReader();
+  fr.onerror = function () { cb(null); };
+  fr.onload = function () {
+    var img = new Image();
+    img.onerror = function () { cb(null); };
+    img.onload = function () {
+      var m = 1024, w = img.width || 800, h = img.height || 600;
+      if (Math.max(w, h) > m) {
+        var r = m / Math.max(w, h);
+        w = Math.max(1, Math.round(w * r)); h = Math.max(1, Math.round(h * r));
+      }
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      cb(c.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+var phInput = null;
+function pickPhotos(lid, cb) {
+  if (!phInput) {
+    phInput = document.createElement('input');
+    phInput.type = 'file'; phInput.accept = 'image/*'; phInput.multiple = true;
+    phInput.style.display = 'none';
+    document.body.appendChild(phInput);
+  }
+  phInput.onchange = function () {
+    var fs = Array.prototype.slice.call(phInput.files || []);
+    phInput.value = '';
+    if (!fs.length) return;
+    var arr = getPh(lid);
+    var done = 0, added = 0, full = arr.length >= PH_MAX;
+    fs.forEach(function (f) {
+      compressImg(f, function (durl) {
+        done += 1;
+        if (durl && arr.length < PH_MAX) { arr.push({ n: phNewName(), d: durl, s: 0 }); added += 1; }
+        if (done === fs.length) {
+          if (!added && full) { toast('每件商品最多 ' + PH_MAX + ' 张照片'); return; }
+          if (setPh(lid, arr) && added && cb) cb(added);
+        }
+      });
+    });
+  };
+  phInput.click();
+}
 function itemByLid(lid) {
   for (var i = 0; i < DB.items.length; i += 1)
     if (DB.items[i].lid === lid) return DB.items[i];
@@ -470,13 +549,43 @@ function pushSale(s) {
     out_type: s.out_type || '出售', remark: s.remark || ''
   }).then(function () { s.dirty = 0; saveDB(); });
 }
+/* 商品记录同步成功后，把它还没上传过的照片补传到电脑「手机数据」区。
+   只挑 s=0 的传，按商品逐张串行；一条失败不影响后面的商品。 */
+function pushPhotos() {
+  var p = Promise.resolve();
+  DB.items.forEach(function (it) {
+    if (it.dirty || !it.code) return;      // 记录本身没同步成功前先不传照片
+    var arr = getPh(it.lid);
+    arr.forEach(function (ph) {
+      if (ph.s) return;
+      p = p.then(function () {
+        return api('POST', '/m/api/photo_add', {
+          kind: 'phone', code: it.code, name: ph.n + '.jpg',
+          data: ph.d.split(',')[1]
+        });
+      }).then(function () { ph.s = 1; setPh(it.lid, arr); })
+        .catch(function () { /* 下次同步自动重试 */ });
+    });
+  });
+  return p;
+}
+function pendingPhotos() {
+  var n = 0;
+  DB.items.forEach(function (it) {
+    if (it.dirty) return;
+    var arr = getPh(it.lid);
+    arr.forEach(function (ph) { if (!ph.s) n += 1; });
+  });
+  return n;
+}
 /* full=true：全量推送（不看是否待同步），点「立即同步」用它 → 任何时候都能同步，
    不需要先在数据里点保存；/m/api/m_item、m_sale 按手机 lid 幂等覆盖，重复同步安全。 */
 function syncAll(manual, full) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
   var items = DB.items.filter(function (it) { return full ? true : it.dirty; });
   var sales = DB.sales.filter(function (s) { return full ? true : s.dirty; });
-  if (!items.length && !sales.length) {
+  var phN = pendingPhotos();
+  if (!items.length && !sales.length && !phN) {
     if (manual) toast('手机里还没有数据，先在「录入」里添加');
     renderSync(); return Promise.resolve();
   }
@@ -487,10 +596,14 @@ function syncAll(manual, full) {
   sales.forEach(function (s) {
     p = p.then(function () { return pushSale(s); });
   });
-  return p.then(function () {
+  return p.then(pushPhotos).then(function () {
     DB.share.last = nowStr();
     saveDB(); renderSync(); refreshHead();
-    if (manual) toast('同步完成：已上传 ' + (items.length + sales.length) + ' 条');
+    if (manual) {
+      var n = items.length + sales.length;
+      toast(n ? ('同步完成：已上传 ' + n + ' 条' + (phN ? '（照片随后自动补传）' : ''))
+              : '照片已同步到电脑');
+    }
   }).catch(function (e) {
     renderSync();
     if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
@@ -644,6 +757,7 @@ function pcRow(r, cols) {
     td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
     tr.appendChild(td);
   });
+  tr.onclick = function () { openPcPhotos(r); };   // 点行看 / 管理照片
   return tr;
 }
 function pcMoreRow(cols) {
@@ -712,6 +826,176 @@ function loadPc(kw) {
       (e.message || e) + '</td></tr>';
   });
 }
+/* ---------- 照片缩略图排（本地商品编辑弹窗里用） ---------- */
+function renderPhRow(container, lid) {
+  container.innerHTML = '';
+  var arr = getPh(lid);
+  arr.forEach(function (ph, i) {
+    var im = document.createElement('img');
+    im.className = 'phthumb'; im.src = ph.d;
+    im.onclick = function () { phViewerLocal(lid, i, function () { renderPhRow(container, lid); }); };
+    container.appendChild(im);
+  });
+  if (arr.length < PH_MAX) {
+    var b = document.createElement('button');
+    b.className = 'phadd'; b.textContent = '+';
+    b.onclick = function () { pickPhotos(lid, function () { renderPhRow(container, lid); }); };
+    container.appendChild(b);
+  }
+  var tip = document.createElement('div');
+  tip.className = 'phcnt';
+  tip.textContent = arr.length + '/' + PH_MAX + ' 张' +
+    (DB.share.token ? '；连上电脑后自动同步' : '（连接电脑后同步）');
+  container.appendChild(tip);
+}
+/* 本地照片查看（大图 / 删除 / 翻页） */
+function phViewerLocal(lid, idx, onChange) {
+  var arr = getPh(lid);
+  if (!arr.length) return;
+  $('shTitle').textContent = '照片';
+  var b = $('shBody'); b.innerHTML = '';
+  var cur = idx;
+  var im = document.createElement('img'); im.className = 'phbig';
+  var cnt = document.createElement('div'); cnt.className = 'phcnt';
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bPrev = document.createElement('button'); bPrev.className = 'gray'; bPrev.textContent = '‹';
+  var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除这张';
+  var bNext = document.createElement('button'); bNext.className = 'gray'; bNext.textContent = '›';
+  row.appendChild(bPrev); row.appendChild(bDel); row.appendChild(bNext);
+  b.appendChild(im); b.appendChild(cnt); b.appendChild(row);
+  function show() {
+    im.src = arr[cur].d;
+    cnt.textContent = (cur + 1) + ' / ' + arr.length;
+    bPrev.disabled = cur <= 0; bNext.disabled = cur >= arr.length - 1;
+  }
+  bPrev.onclick = function () { if (cur > 0) { cur -= 1; show(); } };
+  bNext.onclick = function () { if (cur < arr.length - 1) { cur += 1; show(); } };
+  bDel.onclick = function () {
+    askConfirm('删除这张照片？已同步到电脑的不会被删（要在电脑上删）。', '删除', function () {
+      arr.splice(cur, 1); setPh(lid, arr);
+      if (!arr.length) { $('mask').classList.add('hide'); } else { cur = Math.min(cur, arr.length - 1); show(); }
+      if (onChange) onChange();
+    });
+  };
+  show();
+  $('mask').classList.remove('hide');
+}
+
+/* ---------- 电脑库存照片（查看 / 添加 / 删除，走 HTTP 接口） ---------- */
+function openPcPhotos(r) {
+  if (!DB.share.token) { toast('先在「设置」里连接电脑'); return; }
+  var code = r.code || '';
+  $('shTitle').textContent = '照片 · ' + code;
+  var b = $('shBody'); b.innerHTML = '';
+  var grid = document.createElement('div');
+  grid.className = 'phrow';
+  var tip = document.createElement('div'); tip.className = 'phcnt'; tip.textContent = '读取中…';
+  b.appendChild(grid); b.appendChild(tip);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bAdd = document.createElement('button'); bAdd.textContent = '＋ 添加照片';
+  var bClose = document.createElement('button'); bClose.className = 'gray'; bClose.textContent = '关闭';
+  row.appendChild(bAdd); row.appendChild(bClose); b.appendChild(row);
+  var names = [];
+  function load() {
+    tip.textContent = '读取中…';
+    api('GET', '/m/api/photos?kind=item&code=' + encodeURIComponent(code))
+      .then(function (j) { names = j.photos || []; render(); })
+      .catch(function (e) { tip.textContent = e.message || String(e); });
+  }
+  function render() {
+    grid.innerHTML = '';
+    tip.textContent = names.length + '/' + PH_MAX + ' 张（电脑端存储，点击看大图）';
+    names.forEach(function (n, i) {
+      var im = document.createElement('img');
+      im.className = 'phthumb';
+      /* <img> 直连带不上会话令牌 → 统一用接口取 base64 再显示 */
+      im.onclick = function () { phViewerPc(i); };
+      api('GET', '/m/api/photo_get?kind=item&code=' + encodeURIComponent(code) +
+          '&name=' + encodeURIComponent(n))
+        .then(function (j) { im.src = 'data:image/jpeg;base64,' + j.data; })
+        .catch(function () { im.src = ''; });
+      grid.appendChild(im);
+    });
+    if (names.length < PH_MAX) {
+      var add = document.createElement('button');
+      add.className = 'phadd'; add.textContent = '+';
+      add.onclick = addPc;
+      grid.appendChild(add);
+    }
+  }
+  function addPc() {
+    if (names.length >= PH_MAX) { toast('每条记录最多 ' + PH_MAX + ' 张'); return; }
+    if (!phInputPc) {
+      phInputPc = document.createElement('input');
+      phInputPc.type = 'file'; phInputPc.accept = 'image/*'; phInputPc.multiple = true;
+      phInputPc.style.display = 'none';
+      document.body.appendChild(phInputPc);
+    }
+    phInputPc.onchange = function () {
+      var fs = Array.prototype.slice.call(phInputPc.files || []);
+      phInputPc.value = '';
+      if (!fs.length) return;
+      var done = 0, fails = 0;
+      fs.forEach(function (f) {
+        compressImg(f, function (durl) {
+          done += 1;
+          var go = durl && names.length < PH_MAX;
+          var run = go
+            ? api('POST', '/m/api/photo_add', { kind: 'item', code: code,
+                name: phNewName() + '.jpg', data: durl.split(',')[1] })
+                .then(function (j) { names.push(j.name); })
+            : Promise.resolve();
+          run.catch(function (e) { fails += 1; toast(e.message || String(e)); })
+            .then(function () {
+              if (done === fs.length && !fails) load();
+            });
+        });
+      });
+    };
+    phInputPc.click();
+  }
+  function phViewerPc(idx) {
+    var cur = idx;
+    $('shTitle').textContent = '照片 · ' + code;
+    b.innerHTML = '';
+    var im = document.createElement('img'); im.className = 'phbig';
+    var c2 = document.createElement('div'); c2.className = 'phcnt';
+    var row2 = document.createElement('div'); row2.className = 'btnrow';
+    var bp = document.createElement('button'); bp.className = 'gray'; bp.textContent = '‹';
+    var bd = document.createElement('button'); bd.className = 'danger'; bd.textContent = '删除这张';
+    var bn = document.createElement('button'); bn.className = 'gray'; bn.textContent = '›';
+    row2.appendChild(bp); row2.appendChild(bd); row2.appendChild(bn);
+    b.appendChild(im); b.appendChild(c2); b.appendChild(row2);
+    function show() {
+      im.src = '';
+      c2.textContent = (cur + 1) + ' / ' + names.length + '（加载中…）';
+      api('GET', '/m/api/photo_get?kind=item&code=' + encodeURIComponent(code) +
+          '&name=' + encodeURIComponent(names[cur]))
+        .then(function (j) { im.src = 'data:image/jpeg;base64,' + j.data; c2.textContent = (cur + 1) + ' / ' + names.length; })
+        .catch(function (e) { c2.textContent = e.message || String(e); });
+      bp.disabled = cur <= 0; bn.disabled = cur >= names.length - 1;
+    }
+    bp.onclick = function () { if (cur > 0) { cur -= 1; show(); } };
+    bn.onclick = function () { if (cur < names.length - 1) { cur += 1; show(); } };
+    bd.onclick = function () {
+      askConfirm('删除电脑上的这张照片？', '删除', function () {
+        api('POST', '/m/api/photo_del', { kind: 'item', code: code, name: names[cur] })
+          .then(function () {
+            names.splice(cur, 1);
+            if (!names.length) { load(); return; }
+            cur = Math.min(cur, names.length - 1); show();
+          })
+          .catch(function (e) { toast(e.message || String(e)); });
+      });
+    };
+    show();
+  }
+  bClose.onclick = function () { $('mask').classList.add('hide'); };
+  load();
+  $('mask').classList.remove('hide');
+}
+var phInputPc = null;
+
 /* 编辑本地商品 */
 function openEdit(r) {
   curItem = r;
@@ -749,6 +1033,14 @@ function openEdit(r) {
   var fShelf = field('货架', 'eShelf', r.shelf);
   two(fBrand, fCate); two(fModel, fCond); two(fPrice, fQty);
   b.appendChild(fShelf);
+  /* 照片区（最多 10 张，拍照或相册，连电脑自动同步） */
+  var phSec = document.createElement('div'); phSec.className = 'fcol';
+  var phLbl = document.createElement('label'); phLbl.textContent = '照片';
+  phSec.appendChild(phLbl);
+  var phRow = document.createElement('div'); phRow.className = 'phrow';
+  phSec.appendChild(phRow);
+  b.appendChild(phSec);
+  renderPhRow(phRow, r.lid);
   var rowBtn = document.createElement('div'); rowBtn.className = 'btnrow';
   var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除';
   var bSave = document.createElement('button'); bSave.textContent = '保存';
@@ -770,6 +1062,7 @@ function openEdit(r) {
     $('mask').classList.add('hide');
     askConfirm('删除手机上的 ' + r.code + ' ？\n已同步到电脑的记录不会被删除。', '删除', function () {
       DB.items = DB.items.filter(function (x) { return x.lid !== r.lid; });
+      delPh(r.lid);
       saveDB(); loadLoc($('inKw').value); renderSync(); renderData();
       toast('已删除（本地）');
     });
@@ -892,6 +1185,11 @@ $('btnWipe').onclick = function () {
   askConfirm('确定清空手机上的全部库存和出售记录？\n已同步到电脑的数据不受影响，但未同步的会丢失。', '全部清空', function () {
     var keep = { seq: DB.seq, prefix: DB.prefix, share: DB.share,
                  theme: DB.theme, locCols: DB.locCols, kwHist: DB.kwHist };
+    var rm = [], i;
+    for (i = 0; i < LS.length; i += 1) {
+      if (LS.key(i).indexOf('cgm_ph_') === 0) rm.push(LS.key(i));
+    }
+    rm.forEach(function (k) { LS.removeItem(k); });   // 照片一并清掉
     DB = blankDB(); DB.seq = keep.seq; DB.prefix = keep.prefix; DB.share = keep.share;
     DB.theme = keep.theme; DB.locCols = keep.locCols; DB.kwHist = keep.kwHist;
     saveDB();

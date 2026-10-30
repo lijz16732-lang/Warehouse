@@ -17,6 +17,7 @@ from datetime import datetime
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 from . import screen, xlsxio
+from .photos import PhotoStrip
 from .analysis import AnalysisTab
 from .phone import PhoneTab
 from .sales import SalesTab, ask_sale
@@ -405,6 +406,10 @@ class App(object):
         self._block_preview = None
         self.detail_txt.delete("1.0", "end")
         self.lbl_detail_title.configure(text="未选中记录")
+        try:
+            self.photo_strip.set_code(None)
+        except Exception:
+            pass
         self.load_data()
         self._refresh_wh_ui()
         self._on_sale_changed()
@@ -1049,6 +1054,10 @@ class App(object):
         self._detail_menu = dm
         self.detail_txt.bind("<Button-3>", lambda e: dm.tk_popup(e.x_root, e.y_root))
 
+        # 记录照片条（v1.25.0）：缩略图一排，点开大图，可添加/删除
+        self.photo_strip = PhotoStrip(self.detail_card, self, kind="item")
+        self.photo_strip.pack(fill="x")
+
         if self.var_show_detail.get():
             self.detail_card.pack(fill="x", pady=(10, 0))
             self.detail_card.pack_configure(ipady=2)
@@ -1373,6 +1382,10 @@ class App(object):
         self.detail_txt.delete("1.0", "end")
         if not recs:
             self.lbl_detail_title.configure(text="未选中记录")
+            try:
+                self.photo_strip.set_code(None)
+            except Exception:
+                pass
             self.detail_txt.insert("end", "在上方表格中单击任意一行查看完整字段，内容可直接选中复制。\n",
                                    "k")
             self.detail_txt.insert("end", "在表格里按住鼠标左键划过若干单元格即可框选区块，"
@@ -1381,11 +1394,19 @@ class App(object):
             r = recs[0]
             self.lbl_detail_title.configure(
                 text="%s  ·  %s" % (r.get("code") or "无编号", r.get("brand") or ""))
+            try:
+                self.photo_strip.set_code(r.get("code") or None)
+            except Exception:
+                pass
             for k in FIELD_KEYS:
                 self.detail_txt.insert("end", "%s：" % FIELD_LABEL[k], "k")
                 self.detail_txt.insert("end", "%s\n" % self.fmt(k, r), "v")
         else:
             self.lbl_detail_title.configure(text="已选中 %d 条记录" % len(recs))
+            try:
+                self.photo_strip.set_code(None)
+            except Exception:
+                pass
             self.detail_txt.insert("end", "多选 %d 条记录：\n" % len(recs), "k")
             for r in recs[:40]:
                 self.detail_txt.insert(
@@ -1402,6 +1423,10 @@ class App(object):
         recs = [self.by_id[i] for i in blk["rows"] if i in self.by_id]
         self.detail_txt.configure(state="normal")
         self.detail_txt.delete("1.0", "end")
+        try:
+            self.photo_strip.set_code(None)
+        except Exception:
+            pass
         self.lbl_detail_title.configure(
             text="已框选 %d 行 × %d 列（鼠标可在此拖选复制）" % (len(recs), len(sel)))
         self.detail_txt.insert("end", "编号：" + "　".join(
@@ -3021,7 +3046,7 @@ class App(object):
                 "彻底删除", "清空回收站", "出售", "出库", "撤销出售", "修改出售",
                 "手动补录出售", "采购入库", "清空全部", "重置编号", "手机上传商品",
                 "手机上传出售", "手机删除商品", "手机删除出售", "清空手机数据",
-                "转入库存"]
+                "转入库存", "添加照片", "删除照片"]
 
     def _build_log_tab(self):
         tab = self.tab_log
