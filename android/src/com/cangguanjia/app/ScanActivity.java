@@ -210,6 +210,24 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                     } catch (Throwable t) {
                         sb.append("自绘图 FAILED: ").append(brief(t)).append('\n');
                     }
+                    // ①b 内部合成小字回归（v1.30）：直接复现「字很小很清晰但认不出」，
+                    // 不依赖外部文件。smallText 画的就是用户反馈的场景——
+                    // 文字只占几个像素高、四周紧贴边框（框得准反而失败的典型输入）。
+                    try {
+                        String[][] mini = {
+                                {"GV2ME08", "小字紧贴"},
+                                {"LC1D18M7", "小字带边"},
+                                {"T40 59633", "灰底小字"},
+                        };
+                        for (String[] m : mini) {
+                            Bitmap bmp = miniLabel(m[0], "灰底小字".equals(m[1]));
+                            sb.append(m[1]).append(": ")
+                              .append(ocr(api, bmp)).append('\n');
+                            bmp.recycle();
+                        }
+                    } catch (Throwable t) {
+                        sb.append("小字回归 FAILED: ").append(brief(t)).append('\n');
+                    }
                     try {                                   // ② 真实照片（可选）
                         File f = new File(getExternalFilesDir(null), "cgm_test.jpg");
                         if (f.isFile()) {
@@ -225,8 +243,44 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                     } catch (Throwable t) {
                         sb.append("照片 FAILED: ").append(brief(t)).append('\n');
                     }
+                    try {                                   // ③ ocr_cases 回归素材（可选目录）
+                        File ext = getExternalFilesDir(null);
+                        File dir = ext == null ? null : new File(ext, "ocr_cases");
+                        File[] fs = dir == null ? null : dir.listFiles();
+                        if (fs != null && fs.length > 0) {
+                            java.util.Arrays.sort(fs, new java.util.Comparator<File>() {
+                                @Override
+                                public int compare(File a, File b) {
+                                    return a.getName().compareTo(b.getName());
+                                }
+                            });
+                            for (File f : fs) {
+                                Bitmap ph = BitmapFactory.decodeFile(f.getAbsolutePath());
+                                if (ph == null) {
+                                    sb.append(f.getName()).append(": 解码失败\n");
+                                    continue;
+                                }
+                                long at = android.os.SystemClock.elapsedRealtime();
+                                String r = ocr(api, ph);
+                                long ms = android.os.SystemClock.elapsedRealtime() - at;
+                                sb.append(f.getName()).append(" (").append(ms).append("ms): ");
+                                sb.append(r.isEmpty() ? "(空)" : r.replace('\n', ' ')).append('\n');
+                                ph.recycle();
+                            }
+                        } else {
+                            sb.append("回归素材: 目录为空或不可读 (").append(dir).append(")\n");
+                        }
+                    } catch (Throwable t) {
+                        sb.append("回归素材 FAILED: ").append(brief(t)).append('\n');
+                    }
                 }
                 android.util.Log.i("CGMDIAG", sb.toString());
+                // logcat 单条上限 ~4068 字节，回归素材结果多时会被截尾 → 逐行再打一遍
+                for (String line : sb.toString().split("\n")) {
+                    if (!line.isEmpty()) {
+                        android.util.Log.i("CGMDIAGL", line);
+                    }
+                }
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
@@ -238,6 +292,25 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     // ------------------------------------------------------------- 入口流
+
+    /** 画一张「小字标签」：文字高约 16px、四周留 margin 像素的白边（0=紧贴），
+     *  gray=true 时用灰底模拟照片。给自检当回归输入用。 */
+    private static Bitmap miniLabel(String text, boolean gray) {
+        int textPx = 16;
+        int margin = 0;
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setTextSize(textPx);
+        p.setTypeface(Typeface.DEFAULT_BOLD);
+        p.setColor(Color.BLACK);
+        Paint.FontMetrics fm = p.getFontMetrics();
+        int tw = (int) p.measureText(text);
+        int th = (int) (fm.descent - fm.ascent);
+        Bitmap bmp = Bitmap.createBitmap(tw + margin * 2 + 2, th + margin * 2 + 2,
+                Bitmap.Config.ARGB_8888);
+        bmp.eraseColor(gray ? 0xffcfd3d8 : Color.WHITE);
+        new Canvas(bmp).drawText(text, margin + 1, margin + 1 - fm.ascent, p);
+        return bmp;
+    }
 
     /** 申请相机权限前先说明用途（合规要求：权限使用告知）。 */
     private void askCameraPerm() {
@@ -456,29 +529,58 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
 
-    /** 统一的一张图识别入口（含预处理 + 自动转正）。
+    /** 统一的一张图识别入口（含预处理 + 自动转正 + 多变体重试）。
      *  拍照时标签经常是倒的/横的（Tesseract 只认正的文字，倒着认全是乱码），
-     *  先按原方向识别，置信度不够高就自动转 90/180/270° 再认，取分最高的结果。
+     *  先按原方向识别，置信度不够高就自动转 180/90/270° 再认，取分最高的结果。
+     *  v1.30：每个方向先试「灰度拉伸」，不够好再试「二值化」；每版内先整块识别，
+     *  分不够再按单行/散点模式兜底（框得紧、行稀疏时整块模式常空手而归）。
      *  TessBaseAPI 非线程安全：只在 worker 里调用。 */
     private String ocr(TessBaseAPI api, Bitmap src) {
         String best = null;
         int bestScore = -1;
-        for (int rot = 0; rot < 4; rot++) {
-            Bitmap in = preprocess(rot == 0 ? src : rotate(src, rot * 90));
-            String t;
+        int budget = 14;                        // 识别次数上限：最坏也不至于卡半分钟
+        for (int rot : new int[]{0, 180, 90, 270}) {
+            Bitmap base = rot == 0 ? src : rotate(src, rot);
             try {
-                api.setImage(in);
-                t = api.getUTF8Text();
-                t = t == null ? "" : t.trim();
+                for (boolean bin : new boolean[]{false, true}) {
+                    Bitmap in = preprocess(base, bin);
+                    int score = -1;
+                    String t = "";
+                    try {
+                        for (int psm : new int[]{
+                                TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK,
+                                TessBaseAPI.PageSegMode.PSM_SINGLE_LINE,
+                                TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT}) {
+                            if (budget-- <= 0) break;
+                            api.setPageSegMode(psm);
+                            api.setImage(in);
+                            String r;
+                            try {
+                                r = api.getUTF8Text();
+                            } catch (Throwable ignored) {
+                                r = null;
+                            }
+                            r = r == null ? "" : r.trim();
+                            int s = scoreOcr(r, api.meanConfidence());
+                            if (s > score) {
+                                score = s;
+                                t = r;
+                            }
+                            if (score >= 75) break;   // 这版已经很准，别再换模式
+                        }
+                    } finally {
+                        in.recycle();
+                    }
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = t;
+                    }
+                    if (bestScore >= 75) break;
+                }
             } finally {
-                in.recycle();
+                if (base != src) base.recycle();
             }
-            int score = scoreOcr(t, api.meanConfidence());
-            if (score > bestScore) {
-                bestScore = score;
-                best = t;
-            }
-            if (score >= 75) break;      // 已经很准，不用再试其他方向
+            if (bestScore >= 75) break;             // 已经很准，不用再试其他方向
         }
         return best == null ? "" : best;
     }
@@ -506,37 +608,71 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         return Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
     }
 
-    /** 识别前处理：缩放到合适尺寸 + 去色 + 对比度拉伸。
-     *  手机拍的照片常偏灰、字偏小，直接喂引擎命中率低；这两步能明显提高识别率。 */
-    private Bitmap preprocess(Bitmap src) {
+    /** 识别前处理（v1.30 重写，专治「字很小很清晰却认不出」）：
+     *  ① 放大到引擎合适的尺寸——框选出来的小图若直接喂，笔画只有几个像素高；
+     *  ② 放大后 3×3 锐化——双线性放大把小字笔画糊开，糊了就认不出；
+     *  ③ 去色 + 2%/98% 对比度拉伸——发灰的照片拉成黑白分明；
+     *  ④ 四周加白边——文字贴着图边时 Tesseract 经常整张认不出，
+     *     「框得越准反而越失败」的主因就是它；
+     *  binarize=true 时再叠加 Otsu 全局二值化（灰底/彩底标签更黑白分明）。
+     *  内存峰值约 (2000+边距)²×4B ≈ 17MB，可接受。 */
+    private Bitmap preprocess(Bitmap src, boolean binarize) {
         int w = src.getWidth();
         int h = src.getHeight();
         int longEdge = Math.max(w, h);
+        int shortEdge = Math.min(w, h);
         float scale = 1f;
-        if (longEdge < 1200) scale = 1200f / longEdge;          // 字太小：放大
-        else if (longEdge > 1800) scale = 1800f / longEdge;     // 太大：缩一点，省内存也更快
+        if (longEdge < 1500) scale = 1500f / longEdge;          // 小图：放大（宁大勿小）
+        else if (longEdge > 2000) scale = 2000f / longEdge;     // 太大：略缩，省内存也更快
+        if (shortEdge * scale < 320) scale = 320f / shortEdge;  // 窄长条单行字：再放大
 
         int dw = Math.max(1, Math.round(w * scale));
         int dh = Math.max(1, Math.round(h * scale));
-        Bitmap out = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(out);
+        Bitmap up = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(up);
         Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
         ColorMatrix cm = new ColorMatrix();
         cm.setSaturation(0f);                                   // 去色：文字/背景对比更纯
         p.setColorFilter(new ColorMatrixColorFilter(cm));
         c.drawBitmap(src, null, new Rect(0, 0, dw, dh), p);
-        stretch(out);
+
+        int n = dw * dh;
+        int[] px = new int[n];
+        up.getPixels(px, 0, dw, 0, 0, dw, dh);
+        up.recycle();
+        sharpen(px, dw, dh);
+        stretch(px, n);
+        if (binarize) {
+            otsu(px, n);
+        }
+        int pad = Math.max(12, Math.max(dw, dh) / 28);          // 白边防「贴边认不出」
+        Bitmap out = Bitmap.createBitmap(dw + pad * 2, dh + pad * 2,
+                Bitmap.Config.ARGB_8888);
+        out.eraseColor(Color.WHITE);
+        out.setPixels(px, 0, dw, pad, pad, dw, dh);
         return out;
     }
 
+    /** 3×3 锐化（unsharp：5×中心 - 上下左右），只处理已去色的 R 通道，边缘写回灰度。 */
+    private static void sharpen(int[] px, int w, int h) {
+        if (w < 3 || h < 3) return;
+        int[] src = px.clone();
+        for (int y = 1; y < h - 1; y++) {
+            for (int x = 1; x < w - 1; x++) {
+                int i = y * w + x;
+                int c = (src[i] >> 16) & 0xff;
+                int sum = ((src[i - 1] >> 16) & 0xff) + ((src[i + 1] >> 16) & 0xff)
+                        + ((src[i - w] >> 16) & 0xff) + ((src[i + w] >> 16) & 0xff);
+                int v = c * 5 - sum;
+                v = v < 0 ? 0 : (Math.min(v, 255));
+                px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
+            }
+        }
+    }
+
     /** 对比度线性拉伸（按 2%/98% 分位），把发灰的照片拉成黑白分明，引擎更认。 */
-    private void stretch(Bitmap bmp) {
-        int w = bmp.getWidth();
-        int h = bmp.getHeight();
-        int n = w * h;
+    private static void stretch(int[] px, int n) {
         if (n <= 0) return;
-        int[] px = new int[n];
-        bmp.getPixels(px, 0, w, 0, 0, w, h);
         int[] hist = new int[256];
         for (int i = 0; i < n; i++) {
             hist[(px[i] >> 16) & 0xff]++;                       // 已去色，取 R 通道即可
@@ -559,7 +695,39 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             v = v < 0 ? 0 : (v > 255 ? 255 : v);
             px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
         }
-        bmp.setPixels(px, 0, w, 0, 0, w, h);
+    }
+
+    /** Otsu 全局二值化：按类间方差自动挑阈值，输出纯黑白（小字笔画边缘更利落）。 */
+    private static void otsu(int[] px, int n) {
+        int[] hist = new int[256];
+        for (int i = 0; i < n; i++) {
+            hist[(px[i] >> 16) & 0xff]++;
+        }
+        double sum = 0;
+        for (int v = 0; v < 256; v++) {
+            sum += v * hist[v];
+        }
+        double sumB = 0;
+        int wB = 0, thr = 127;
+        double maxVar = -1;
+        for (int t = 0; t < 256; t++) {
+            wB += hist[t];
+            if (wB == 0) continue;
+            int wF = n - wB;
+            if (wF == 0) break;
+            sumB += t * hist[t];
+            double mB = sumB / wB;
+            double mF = (sum - sumB) / wF;
+            double var = (double) wB * wF * (mB - mF) * (mB - mF);
+            if (var > maxVar) {
+                maxVar = var;
+                thr = t;
+            }
+        }
+        for (int i = 0; i < n; i++) {
+            int v = ((px[i] >> 16) & 0xff) <= thr ? 0 : 255;
+            px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
+        }
     }
 
     /** 异常压成一小段可读文字，方便用户反馈时截图。 */
@@ -599,6 +767,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 throw new IllegalStateException("模型加载失败（tessdata 缺失或版本不符）");
             }
             api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK);
+            // 小图必须有 DPI 提示，否则引擎按 0dpi 估算字高、小字整张认不出
+            api.setVariable("user_defined_dpi", "300");
+            api.setVariable("preserve_interword_spaces", "1");
             api.setVariable(TessBaseAPI.VAR_CHAR_BLACKLIST, "|");
             sTess = api;
             return sTess;
@@ -649,7 +820,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     private void showLines(List<String> lines) {
         if (lines.isEmpty()) {
-            status.setText("没认出文字，试着框小一点只框住文字，或靠近点重拍");
+            status.setText("没认出文字：靠近点重拍让字占满框，或换个角度/光线再试");
             return;
         }
         String top = lines.get(0);

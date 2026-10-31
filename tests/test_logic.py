@@ -961,7 +961,18 @@ try:
                                           "tessdata", "eng.traineddata")))
     check("识别前做尺寸归一 + 去色 + 对比度拉伸（照片发灰也能认）",
           "private Bitmap preprocess(" in _sj and "setSaturation(0f)" in _sj
-          and "private void stretch(" in _sj and "inSampleSize" in _sj)
+          and "private static void stretch(" in _sj and "inSampleSize" in _sj)
+    # v1.30.0 专治「字很小很清晰却认不出」：贴边加白边 / 放大后锐化 / DPI 提示 /
+    # Otsu 二值化变体 / 单行与散点 PSM 兜底 / 自检内置小字紧贴回归
+    check("v1.30 小字识别四件套：白边防贴边、锐化防糊、DPI 提示、Otsu 二值化",
+          "eraseColor(Color.WHITE)" in _sj and "private static void sharpen("
+          in _sj and "user_defined_dpi" in _sj
+          and "private static void otsu(" in _sj)
+    check("v1.30 多模式兜底：二值化变体 + 单行/散点 PSM + 识别次数预算",
+          "PSM_SINGLE_LINE" in _sj and "PSM_SPARSE_TEXT" in _sj
+          and "boolean bin" in _sj and "budget" in _sj)
+    check("v1.30 自检内置小字回归（不依赖外部文件即可验证识别率）",
+          "miniLabel" in _sj and "小字紧贴" in _sj)
     check("引擎起不来时会说明原因，且长按「识别」可自检（手机上看不到日志）",
           "识别引擎不可用" in _sj and "setOnLongClickListener" in _sj
           and "runDiag" in _sj and "CGMDIAG" in _sj)
