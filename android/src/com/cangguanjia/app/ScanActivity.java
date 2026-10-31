@@ -274,6 +274,110 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         sb.append("回归素材 FAILED: ").append(brief(t)).append('\n');
                     }
                 }
+                // ---- v1.31 测试：PP-OCR（ONNX Runtime）对照，同一批输入跑准确率与耗时 ----
+                PpOcrEngine pp = null;
+                try {
+                    pp = PpOcrEngine.create(getAssets(), getFilesDir());
+                    sb.append("PP引擎: OK 字数=").append(pp.charsetSize())
+                      .append(" 加载=").append(pp.loadMs).append("ms\n");
+                } catch (Throwable t) {
+                    sb.append("PP引擎: FAIL ").append(brief(t)).append('\n');
+                }
+                if (pp != null) {
+                    List<String> names = new ArrayList<>();
+                    List<Bitmap> inputs = new ArrayList<>();
+                    try {
+                        for (String[] m : new String[][]{
+                                {"GV2ME08", "小字紧贴"},
+                                {"LC1D18M7", "小字带边"},
+                                {"T40 59633", "灰底小字"},
+                                {"LC1D18 施耐德 交流接触器", "小字中文"}}) {
+                            names.add(m[1]);
+                            inputs.add(miniLabel(m[0], "灰底小字".equals(m[1])));
+                        }
+                        try {
+                            Bitmap big = Bitmap.createBitmap(900, 240, Bitmap.Config.ARGB_8888);
+                            Canvas cv = new Canvas(big);
+                            cv.drawColor(Color.WHITE);
+                            Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                            p.setColor(Color.BLACK);
+                            p.setTextSize(72);
+                            p.setTypeface(Typeface.DEFAULT_BOLD);
+                            cv.drawText("SEREAM T40 59633", 24, 150, p);
+                            names.add("自绘图");
+                            inputs.add(big);
+                        } catch (Throwable ignored) {
+                        }
+                        File photo = new File(getExternalFilesDir(null), "cgm_test.jpg");
+                        if (photo.isFile()) {
+                            Bitmap ph = BitmapFactory.decodeFile(photo.getAbsolutePath());
+                            if (ph != null) {
+                                names.add("真机照片");
+                                inputs.add(ph);
+                            }
+                        }
+                        File ext = getExternalFilesDir(null);
+                        File dir = ext == null ? null : new File(ext, "ocr_cases");
+                        File[] fs = dir == null ? null : dir.listFiles();
+                        if (fs != null && fs.length > 0) {
+                            java.util.Arrays.sort(fs, new java.util.Comparator<File>() {
+                                @Override
+                                public int compare(File a, File b) {
+                                    return a.getName().compareTo(b.getName());
+                                }
+                            });
+                            for (File f : fs) {
+                                Bitmap ph = BitmapFactory.decodeFile(f.getAbsolutePath());
+                                if (ph != null) {
+                                    names.add(f.getName().replace(".png", ""));
+                                    inputs.add(ph);
+                                }
+                            }
+                        }
+                    } catch (Throwable t) {
+                        sb.append("PP素材 FAILED: ").append(brief(t)).append('\n');
+                    }
+                    long totalRaw = 0, totalPre = 0;
+                    for (int i = 0; i < inputs.size(); i++) {
+                        Bitmap in = inputs.get(i);
+                        // 真机照片单独转储每行裁剪图，便于排查裁剪 vs 识别
+                        PpOcrEngine.dumpDir = "真机照片".equals(names.get(i))
+                                ? new File(getExternalFilesDir(null), "ppdump") : null;
+                        try {
+                            long t0 = android.os.SystemClock.elapsedRealtime();
+                            List<PpOcrEngine.Line> r = pp.run(in);
+                            long ms = android.os.SystemClock.elapsedRealtime() - t0;
+                            totalRaw += ms;
+                            sb.append("PP 原始|").append(names.get(i)).append('|')
+                              .append(ms).append("ms: ")
+                              .append(joinPP(r)).append('\n');
+                        } catch (Throwable t) {
+                            sb.append("PP 原始|").append(names.get(i))
+                              .append(" FAILED: ").append(brief(t)).append('\n');
+                        }
+                        try {                               // 加同一套预处理后再试一遍
+                            Bitmap pre = preprocess(in, false);
+                            long t0 = android.os.SystemClock.elapsedRealtime();
+                            List<PpOcrEngine.Line> r = pp.run(pre);
+                            long ms = android.os.SystemClock.elapsedRealtime() - t0;
+                            totalPre += ms;
+                            sb.append("PP 预处理|").append(names.get(i)).append('|')
+                              .append(ms).append("ms: ")
+                              .append(joinPP(r)).append('\n');
+                            pre.recycle();
+                        } catch (Throwable t) {
+                            sb.append("PP 预处理|").append(names.get(i))
+                              .append(" FAILED: ").append(brief(t)).append('\n');
+                        }
+                    }
+                    sb.append("PP 合计: 原始 ").append(totalRaw).append("ms / 预处理 ")
+                      .append(totalPre).append("ms，共 ").append(inputs.size()).append(" 张\n");
+                    PpOcrEngine.dumpDir = null;
+                    for (Bitmap b : inputs) {
+                        b.recycle();
+                    }
+                    pp.close();
+                }
                 android.util.Log.i("CGMDIAG", sb.toString());
                 // logcat 单条上限 ~4068 字节，回归素材结果多时会被截尾 → 逐行再打一遍
                 for (String line : sb.toString().split("\n")) {
@@ -736,6 +840,17 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         if (m == null || m.trim().isEmpty()) return t.getClass().getSimpleName();
         m = m.replace('\n', ' ').trim();
         return m.length() > 60 ? m.substring(0, 60) + "…" : m;
+    }
+
+    /** PP-OCR 多行结果拼一行（诊断日志用）。 */
+    private static String joinPP(List<PpOcrEngine.Line> lines) {
+        if (lines == null || lines.isEmpty()) return "(空)";
+        StringBuilder sb = new StringBuilder();
+        for (PpOcrEngine.Line l : lines) {
+            if (sb.length() > 0) sb.append(" | ");
+            sb.append(l.text);
+        }
+        return sb.toString();
     }
 
     /** 当前 APK 版本名，失败提示里带上，便于确认手机上跑的是哪个包。 */
