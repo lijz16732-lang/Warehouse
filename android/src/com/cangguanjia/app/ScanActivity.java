@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -20,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -46,7 +49,10 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -104,8 +110,12 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private final AtomicBoolean busy = new AtomicBoolean(false);
     private long lastAt = 0L;
     private String lastShown = "";
-    private String lastText = "";
-    private int stable = 0;
+
+    // 点按对焦（v1.27.6：靠近拍铭牌模糊 → 支持点画面手动对焦 + 连续对焦卡住时周期性重新对焦）
+    private long lastUserFocusAt = 0L;
+
+    // 近几帧投票（v1.27.6：单帧 OCR 噪声会让候选乱跳 → 跨帧累计出现次数，稳定的行才展示）
+    private final LinkedHashMap<String, int[]> votes = new LinkedHashMap<>();   // 行文本 -> {出现次数, 最高置信度}
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -172,6 +182,16 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         root.addView(preview, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         preview.getHolder().addCallback(this);
+        // 点画面手动对焦（近拍铭牌时连续对焦常常收不住，手动点一下立刻清晰）
+        preview.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (event.getAction() == MotionEvent.ACTION_UP) {
+                    tapFocus(event.getX(), event.getY());
+                }
+                return true;
+            }
+        });
 
         // 取景框（型号铭牌是窄长一条；扫二维码用方形框）
         root.addView(new FrameView(this, isQr), new FrameLayout.LayoutParams(
@@ -393,7 +413,11 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 p.setPreviewSize(best.width, best.height);
             }
             try {
-                p.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+                // 对焦模式按机型支持度取最优：连续对焦 > 微距（近拍铭牌）> 单次自动
+                String fm = pickFocusMode(p.getSupportedFocusModes());
+                if (fm != null) {
+                    p.setFocusMode(fm);
+                }
             } catch (Throwable ignored) {
             }
             c.setParameters(p);
@@ -464,8 +488,11 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             previewRunning = true;
             lastFrameAt = System.currentTimeMillis();
             String size = previewSize == null ? "" : (" " + previewSize.width + "×" + previewSize.height);
-            status.setText(isQr ? "把电脑上的二维码放进框内…" : ("把型号对准框内…" + size));
+            status.setText(isQr ? "把电脑上的二维码放进框内…（点画面可对焦）"
+                    : ("把型号对准框内…（点画面可对焦）" + size));
             startWatchdog();
+            ui.removeCallbacks(refocus);
+            ui.postDelayed(refocus, 3500);
         } catch (Throwable e) {
             previewRunning = false;
             releaseCamera();
@@ -483,6 +510,100 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             }
         }
     }
+
+    /** 按机型支持度挑对焦模式：连续对焦 > 微距 > 单次自动。 */
+    private String pickFocusMode(List<String> modes) {
+        if (modes == null || modes.isEmpty()) return null;
+        for (String m : new String[]{
+                Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE,
+                Camera.Parameters.FOCUS_MODE_MACRO,
+                Camera.Parameters.FOCUS_MODE_AUTO}) {
+            if (modes.contains(m)) return m;
+        }
+        return modes.get(0);
+    }
+
+    /** 点按对焦：在点击处设对焦/测光区域，触发一次自动对焦。 */
+    private void tapFocus(float x, float y) {
+        final Camera c = camera;
+        if (c == null || !previewRunning) return;
+        lastUserFocusAt = System.currentTimeMillis();
+        try {
+            Camera.Parameters p = c.getParameters();
+            int w = preview.getWidth();
+            int h = preview.getHeight();
+            if (w == 0 || h == 0) return;
+            if (p.getMaxNumFocusAreas() > 0) {
+                // 相机坐标系是 -1000..1000，把点击位置映射过去，取 200 半径的区域
+                int cx = (int) (x / w * 2000f) - 1000;
+                int cy = (int) (y / h * 2000f) - 1000;
+                Rect r = new Rect(clampCam(cx - 200), clampCam(cy - 200),
+                        clampCam(cx + 200), clampCam(cy + 200));
+                Camera.Area area = new Camera.Area(r, 800);
+                p.setFocusAreas(Collections.singletonList(area));
+                if (p.getMaxNumMeteringAreas() > 0) {
+                    p.setMeteringAreas(Collections.singletonList(area));
+                }
+                p.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);   // 单次对焦比连续更干脆
+                c.setParameters(p);
+                status.setText("对焦中…点画面可重新对焦");
+            }
+            c.autoFocus(new Camera.AutoFocusCallback() {
+                @Override
+                public void onAutoFocus(boolean ok, Camera cam) {
+                    resumeContinuous();
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 单次对焦完成后回到连续对焦（清掉点按设置的区域，避免一直锁在旧位置）。 */
+    private void resumeContinuous() {
+        Camera c = camera;
+        if (c == null) return;
+        try {
+            c.cancelAutoFocus();
+            Camera.Parameters p = c.getParameters();
+            String fm = pickFocusMode(p.getSupportedFocusModes());
+            if (fm != null && !fm.equals(p.getFocusMode())) {
+                p.setFocusMode(fm);
+            }
+            p.setFocusAreas(null);
+            p.setMeteringAreas(null);
+            c.setParameters(p);
+            if (previewRunning) {
+                status.setText(isQr ? "把电脑上的二维码放进框内…（点画面可对焦）"
+                        : "把型号对准框内…（点画面可对焦）");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static int clampCam(int v) {
+        return v < -1000 ? -1000 : (Math.min(v, 1000));
+    }
+
+    /** 连续对焦在近距铭牌上经常"卡住不收敛"：周期性触发一次重新对焦（点按对焦后让路）。 */
+    private final Runnable refocus = new Runnable() {
+        @Override
+        public void run() {
+            if (isFinishing()) return;
+            Camera c = camera;
+            if (c != null && previewRunning
+                    && System.currentTimeMillis() - lastUserFocusAt > 2500) {
+                try {
+                    c.autoFocus(new Camera.AutoFocusCallback() {
+                        @Override
+                        public void onAutoFocus(boolean ok, Camera cam) {
+                        }
+                    });
+                } catch (Throwable ignored) {
+                }
+            }
+            ui.postDelayed(this, 3500);
+        }
+    };
 
     /** 后摄优先（扫铭牌用后摄最清楚）。 */
     private Camera openBackCamera() {
@@ -658,50 +779,146 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
         YuvImage yuv = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        yuv.compressToJpeg(new Rect(0, 0, w, h), 82, bos);
+        yuv.compressToJpeg(new Rect(0, 0, w, h), 90, bos);
         byte[] jpg = bos.toByteArray();
         Bitmap bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
         if (bmp == null) return;
 
         Bitmap cropped = cropBand(bmp);
+        bmp.recycle();
+        Bitmap band = enhance(cropped);          // 灰度 + 对比度拉伸，小字识别率明显提升
+        cropped.recycle();
         try {
             String text;
             int conf;
             synchronized (API_LOCK) {
-                api.setImage(cropped);
+                api.setImage(band);
                 text = api.getUTF8Text();
                 conf = api.meanConfidence();
             }
             final List<String> lines = linesOf(text);
             if (!lines.isEmpty()) {
-                final String first = lines.get(0);
                 final int c = conf;
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
-                        onResult(lines, first, c);
+                        onResult(lines, c);
                     }
                 });
             }
         } finally {
-            cropped.recycle();
-            bmp.recycle();
+            band.recycle();
         }
     }
 
-    /** 同一结果连续两帧、且置信度够高 → 直接填回（像扫码一样），否则只列候选。 */
-    private void onResult(List<String> lines, String first, int conf) {
-        if (first.equals(lastText)) {
-            stable += 1;
-        } else {
-            lastText = first;
-            stable = 0;
-            lastShown = "";
+    /** 灰度 + 自动对比度拉伸（按 5%~95% 分位亮度）：铭牌小字在低对比帧上识别率明显更好。 */
+    private Bitmap enhance(Bitmap src) {
+        try {
+            int w = src.getWidth();
+            int h = src.getHeight();
+            Paint gp = new Paint();
+            ColorMatrix gray = new ColorMatrix();
+            gray.setSaturation(0);
+            gp.setColorFilter(new ColorMatrixColorFilter(gray));
+            Bitmap gs = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            new Canvas(gs).drawBitmap(src, 0, 0, gp);
+
+            int[] px = new int[w * h];
+            gs.getPixels(px, 0, w, 0, 0, w, h);
+            int[] hist = new int[256];
+            for (int v : px) hist[(v >> 16) & 0xFF]++;    // 灰度后 r=g=b，取一个通道即可
+            int lim = px.length / 20;                     // 5% 分位
+            int lo = 0;
+            int hi = 255;
+            int acc = 0;
+            for (int i = 0; i < 256; i++) {
+                acc += hist[i];
+                if (acc > lim) {
+                    lo = i;
+                    break;
+                }
+            }
+            acc = 0;
+            for (int i = 255; i >= 0; i--) {
+                acc += hist[i];
+                if (acc > lim) {
+                    hi = i;
+                    break;
+                }
+            }
+            if (hi - lo < 40) hi = Math.min(255, lo + 40);   // 对比度已够就不拉伸
+            float scale = Math.min(255f / (hi - lo), 3f);
+            float off = -lo * scale;
+            float[] st = new float[]{
+                    scale, 0, 0, 0, off,
+                    0, scale, 0, 0, off,
+                    0, 0, scale, 0, off,
+                    0, 0, 0, 1, 0};
+            Paint sp = new Paint();
+            sp.setColorFilter(new ColorMatrixColorFilter(new ColorMatrix(st)));
+            Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            new Canvas(out).drawBitmap(gs, 0, 0, sp);
+            gs.recycle();
+            return out;
+        } catch (Throwable t) {
+            Bitmap copy = src.copy(src.getConfig(), false);
+            return copy != null ? copy : src;
         }
-        show(lines);
-        if (stable >= 1 && conf >= 60) {         // 第二帧仍相同 → 自动填入
-            stable = 0;
-            finishWith(first);
+    }
+
+    /** 跨帧投票：单帧 OCR 噪声不再直接顶掉候选（防乱跳）；连续两帧都认出且置信度够 → 自动填入。 */
+    private void onResult(List<String> lines, int conf) {
+        for (int[] v : votes.values()) {
+            v[0] = v[0] * 7 / 10;                    // 老票衰减，长时间不出现自动沉底
+        }
+        for (String s : lines) {
+            int[] v = votes.get(s);
+            if (v == null) {
+                votes.put(s, new int[]{1, conf});
+            } else {
+                v[0] = Math.min(v[0] + 1, 12);
+                v[1] = Math.max(v[1], conf);
+            }
+        }
+        Iterator<Map.Entry<String, int[]>> it = votes.entrySet().iterator();
+        while (it.hasNext()) {
+            if (it.next().getValue()[0] == 0) it.remove();
+        }
+        if (votes.isEmpty()) {                       // 镜头离开文字 → 清掉候选
+            clearCandidates();
+            return;
+        }
+        List<Map.Entry<String, int[]>> list = new ArrayList<>(votes.entrySet());
+        Collections.sort(list, new Comparator<Map.Entry<String, int[]>>() {
+            @Override
+            public int compare(Map.Entry<String, int[]> a, Map.Entry<String, int[]> b) {
+                if (a.getValue()[0] != b.getValue()[0]) {
+                    return b.getValue()[0] - a.getValue()[0];     // 出现次数多的在前
+                }
+                return b.getValue()[1] - a.getValue()[1];         // 其次置信度高的在前
+            }
+        });
+        Map.Entry<String, int[]> best = list.get(0);
+        if (best.getValue()[0] >= 2 && best.getValue()[1] >= 60) {
+            votes.clear();
+            finishWith(best.getKey());               // 连续两帧都认出 → 像扫码一样直接填
+            return;
+        }
+        List<String> top4 = new ArrayList<>();
+        for (int i = 0; i < list.size() && i < 4; i++) {
+            top4.add(list.get(i).getKey());
+        }
+        show(top4);
+    }
+
+    private void clearCandidates() {
+        if (lastShown.length() > 0 || hintBig.getTag() != null) {
+            lastShown = "";
+            hintBig.setText("");
+            hintBig.setTag(null);
+            hintBig.setBackgroundColor(Color.TRANSPARENT);
+            choices.removeAllViews();
+            status.setText("把型号对准框内…（点画面可对焦）");
         }
     }
 
@@ -729,8 +946,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         Bitmap band = Bitmap.createBitmap(up, left, top, bw, bh);
         if (up != src) up.recycle();
 
-        if (bh < 110) {                              // 字号太小识别率差，等比放大
-            float k = 110f / bh;
+        // 字号太小识别率差：把条带高度归一到 130~220 区间（偏小放大利于认小字，偏大略缩提速）
+        if (bh > 0 && (bh < 130 || bh > 220)) {
+            float k = 160f / bh;
             Bitmap big = Bitmap.createScaledBitmap(band,
                     Math.max(1, (int) (bw * k)), Math.max(1, (int) (bh * k)), true);
             if (big != band) band.recycle();
@@ -756,9 +974,11 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     private void show(List<String> lines) {
         if (lines.isEmpty()) return;
+        StringBuilder key = new StringBuilder();
+        for (String s : lines) key.append(s).append('\n');
+        if (key.toString().equals(lastShown)) return;
+        lastShown = key.toString();
         String top = lines.get(0);
-        if (top.equals(lastShown)) return;
-        lastShown = top;
 
         hintBig.setText("填入：" + top);
         hintBig.setTag(top);
@@ -816,6 +1036,12 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         copyAsset("tessdata/" + lang + ".traineddata", f);
                     }
                     TessBaseAPI a = new TessBaseAPI();
+                    // 相机帧没有 DPI 元数据，LSTM 会按错误密度切字（清晰文字也认不出）；
+                    // 必须在 init 前声明，且 init 后不能改
+                    try {
+                        a.setVariable("user_defined_dpi", "300");
+                    } catch (Throwable ignored) {
+                    }
                     boolean ok = a.init(getFilesDir().getAbsolutePath(), LANG);
                     if (!ok) {
                         a.recycle();
@@ -872,6 +1098,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     protected void onPause() {
         super.onPause();
         ui.removeCallbacks(watchdog);
+        ui.removeCallbacks(refocus);
         releaseCamera();
     }
 

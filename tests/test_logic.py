@@ -946,6 +946,17 @@ try:
     check("相机打不开/预览失败有提示与自动重试",
           "正在重试" in _sj and "相机打不开" in _sj
           and "releaseCamera();" in _sj and "startCamera();" in _sj)
+    # v1.27.5 靠近模糊 + OCR 乱跳/识别慢：点按对焦 + 周期重新对焦 + 跨帧投票防跳
+    check("扫一扫支持点按对焦与近距对焦兜底",
+          "tapFocus" in _sj and "setFocusAreas" in _sj
+          and "FOCUS_MODE_MACRO" in _sj and "pickFocusMode" in _sj
+          and "refocus" in _sj and "resumeContinuous" in _sj)
+    check("OCR 跨帧投票防候选乱跳（不再单帧替换）",
+          "votes" in _sj and "LinkedHashMap" in _sj
+          and "finishWith(best.getKey())" in _sj and "clearCandidates" in _sj)
+    check("OCR 前灰度+对比度拉伸与 DPI 声明",
+          "enhance" in _sj and "user_defined_dpi" in _sj
+          and "createScaledBitmap" in _sj)
     # v1.21.0 扫电脑二维码自动连接
     check("设置页有「扫电脑二维码，自动连接」按钮",
           'id="btnQrConn"' in _app_html and "扫电脑二维码" in _app_html)
