@@ -183,6 +183,29 @@ tab._export_to(p3)
 n1, n2 = export_counts(p3)
 check("时间筛选后导出：出售 1 行", n2 == 1, n2)
 
+# ---- 9) 本月 / 今天快捷键（与出售页一致）----
+import datetime as _dt
+_cm = _dt.datetime.now().strftime("%Y-%m")
+_td = _dt.datetime.now().strftime("%Y-%m-%d")
+tab.reset_filters()
+tab.qb_sale_month.invoke()
+exp = sum(1 for r in tab.raw_sales
+          if str(r.get("sale_date") or "")[:7] == _cm)
+check("出售「本月」快捷键 → %d 条" % exp, rows(tab.tree_sales) == exp,
+      rows(tab.tree_sales))
+tab.qb_sale_today.invoke()
+exp = sum(1 for r in tab.raw_sales
+          if str(r.get("sale_date") or "")[:10] == _td)
+check("出售「今天」快捷键 → %d 条" % exp, rows(tab.tree_sales) == exp,
+      rows(tab.tree_sales))
+tab.reset_filters()
+tab.qb_sync_month.invoke()
+exp = sum(1 for r in tab.raw_items
+          if str(r.get("synced_at") or "")[:7] == _cm)
+check("库存「本月」同步时间快捷键 → %d 条" % exp, rows(tab.tree_items) == exp,
+      rows(tab.tree_items))
+tab.reset_filters()
+
 print("\n%s" % ("ALL PROBES PASSED" if ok else "SOME PROBES FAILED"))
 
 if "--shot" in sys.argv:

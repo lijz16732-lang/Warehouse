@@ -8,6 +8,7 @@
 
 import os
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
@@ -128,21 +129,18 @@ class PhoneTab(ttk.Frame):
         self._filter_label(bar_i, "状态")
         self.cb_state = self._filter_combo(
             bar_i, self.var_f_state, 9, values=("全部", "待转入", "已转入"))
-        ttk.Button(bar_i, text="清空筛选", style="Ghost.TButton", width=9,
-                   command=self.reset_filters).pack(side="left", padx=(12, 0))
 
-        # 第二行：同步时间（手机上传进电脑的时间）
+        # 第二行：同步时间（手机上传进电脑的时间）+ 本月/今天快捷键
         bar_i2 = self._filter_bar(self.frm_items, pady=(6, 0))
         self._filter_label(bar_i2, "同步时间")
         self.ent_sync_from = self._filter_entry(bar_i2, self.var_f_sync_from)
-        tk.Label(bar_i2, text="→", bg=CLR_BG, fg=CLR_MUTED,
-                 font=(self.fam, 9)).pack(side="left", padx=3)
+        self._filter_label(bar_i2, "起", pad=(2, 6))
         self.ent_sync_to = self._filter_entry(bar_i2, self.var_f_sync_to)
-        tk.Label(bar_i2, text="yyyy-mm-dd（可加 HH:MM），可只填一边",
-                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(
-            side="left", padx=(6, 0))
+        self._filter_label(bar_i2, "止", pad=(2, 6))
+        self.qb_sync_month, self.qb_sync_today = self._quick_buttons(
+            bar_i2, "var_f_sync_from", "var_f_sync_to")
 
-        # 出售：类型 / 买家 / 日期区间（支持到时分）
+        # 出售：类型 / 买家 / 出售时间区间（支持到时分）+ 本月/今天快捷键
         self.var_f_type = tk.StringVar(value=self._ALL)
         self.var_f_buyer = tk.StringVar(value=self._ALL)
         self.var_f_from = tk.StringVar()
@@ -154,14 +152,11 @@ class PhoneTab(ttk.Frame):
         self.cb_buyer = self._filter_combo(bar_s, self.var_f_buyer, 11)
         self._filter_label(bar_s, "出售时间")
         self.ent_from = self._filter_entry(bar_s, self.var_f_from)
-        tk.Label(bar_s, text="→", bg=CLR_BG, fg=CLR_MUTED,
-                 font=(self.fam, 9)).pack(side="left", padx=3)
+        self._filter_label(bar_s, "起", pad=(2, 6))
         self.ent_to = self._filter_entry(bar_s, self.var_f_to)
-        tk.Label(bar_s, text="yyyy-mm-dd（可加 HH:MM），可只填一边",
-                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(
-            side="left", padx=(6, 0))
-        ttk.Button(bar_s, text="清空筛选", style="Ghost.TButton", width=9,
-                   command=self.reset_filters).pack(side="left", padx=(12, 0))
+        self._filter_label(bar_s, "止", pad=(2, 6))
+        self.qb_sale_month, self.qb_sale_today = self._quick_buttons(
+            bar_s, "var_f_from", "var_f_to")
 
         self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS,
                                           is_items=True)
@@ -316,6 +311,22 @@ class PhoneTab(ttk.Frame):
         ent.pack(side="left", padx=(4, 0), ipady=1)
         ent.bind("<KeyRelease>", self._debounce)
         return ent
+
+    def _quick_buttons(self, bar, from_attr, to_attr):
+        """「本月 / 今天」快捷区间（与出售页一致），写入指定的起止变量。
+        返回 (本月按钮, 今天按钮)，探针可直接 invoke。"""
+        def _set(mode):
+            d = datetime.now().strftime("%Y-%m-%d")
+            getattr(self, from_attr).set(d[:8] + "01" if mode == "month" else d)
+            getattr(self, to_attr).set(d)
+            self.refresh_rows()
+        bm = ttk.Button(bar, text="本月", style="Ghost.TButton", width=6,
+                        command=lambda: _set("month"))
+        bm.pack(side="left", padx=(10, 4))
+        bt = ttk.Button(bar, text="今天", style="Ghost.TButton", width=6,
+                        command=lambda: _set("today"))
+        bt.pack(side="left", padx=(0, 4))
+        return bm, bt
 
     @staticmethod
     def _pick(var):
