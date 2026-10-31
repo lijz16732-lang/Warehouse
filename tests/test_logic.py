@@ -952,14 +952,19 @@ try:
           and 'CommonComponentRegistrar' in _mf
           and 'VisionCommonRegistrar' in _mf
           and 'TextRegistrar' in _mf)
-    # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」；
-    # 只允许自己的 PhotoProvider，ML Kit / androidx.startup 的 provider 一律不声明
-    check("启动期不注册额外 ContentProvider（防「点开就闪退」）",
-          "com.google.mlkit.common.internal.MlKitInitProvider" not in _mf
+    # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。
+    # v1.28.4 定案：MlKitInitProvider 必须声明——它是 ML Kit 官方初始化入口（onCreate
+    # 只调 MlKitContext.zza 做标准初始化，authority 硬断言必须一字不差），
+    # v1.28.0~v1.28.3 手动 initializeIfNeeded 一直报 MlKitContext has not been
+    # initialized 的根因就是缺它；androidx.startup 仍然禁止（lifecycle 版本错配闪退）。
+    check("ML Kit 官方初始化 Provider 已声明（authority 与 AAR 断言一字不差）",
+          'com.google.mlkit.common.internal.MlKitInitProvider' in _mf
+          and 'android:authorities="com.google.mlkit.common.mlkitinitprovider"' in _mf
           and 'androidx.startup.InitializationProvider' not in _mf
-          and _mf.count("<provider") == 1 and ".PhotoProvider" in _mf
+          and _mf.count("<provider") == 2 and ".PhotoProvider" in _mf
           and "MlKit.initialize" in _sj
-          and "import com.google.mlkit.common.MlKit;" in _sj)
+          and "import com.google.mlkit.common.MlKit;" in _sj
+          and "mlKitReady" in _sj)
     try:
         import re as _re
         import zipfile as _zip
@@ -973,8 +978,8 @@ try:
                 _cm = _z.read("AndroidManifest.xml").decode("utf-8", "ignore")
             for _nm in _re.findall(
                     r'<(?:provider|service|meta-data)[^>]*android:name="([^"]+)"', _cm):
-                if _nm.startswith("com.google.mlkit") and "MlKitInitProvider" not in _nm:
-                    _need.add(_nm)      # provider 是被刻意排除的（见上一条检查）
+                if _nm.startswith("com.google.mlkit"):
+                    _need.add(_nm)
         _missing = sorted(x for x in _need if x not in _mf)
         check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
               not _missing, "缺少: %s" % _missing[:4])

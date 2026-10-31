@@ -8,8 +8,8 @@
      「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="29"
-    android:versionName="1.28.3">
+    android:versionCode="30"
+    android:versionName="1.28.4">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -59,12 +59,21 @@
         android:grantUriPermissions="true"/>
 
     <!-- ==== 以下来自 libs/*.aar 的清单，Gradle 会自动合并，手写打包必须手工补 ==== -->
+    <!-- 0) ML Kit 官方初始化入口（common-18.11.0.aar 清单原样，占位符 ${applicationId}
+         在 Gradle 合并时替换为该库自身包名 com.google.mlkit.common，attachInfo 对
+         authority 有硬断言，必须一字不差）。进程启动时系统实例化该 Provider，onCreate
+         只调 MlKitContext.zza(context) 做标准初始化——这是所有正常打包 App 的初始化路径。
+         v1.28.0~v1.28.3 手动调 initializeIfNeeded 一直报 MlKitContext has not been
+         initialized，根因就是缺了它。 -->
+    <provider
+        android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+        android:authorities="com.google.mlkit.common.mlkitinitprovider"
+        android:exported="false"
+        android:initOrder="99"/>
+
     <!-- 1) 组件发现：识别器（Registrar）在这里注册，缺了引擎找不到任何识别能力。
-         注意：这里只放「纯声明」的东西（service / meta-data）——它们不会在启动时执行
-         任何代码，因此不影响 App 启动。反过来，任何 ContentProvider 都会在进程启动
-         时被系统实例化，ML Kit 的 MlKitInitProvider 和 androidx.startup 的
-         InitializationProvider 都属于这一类，一旦版本/依赖对不上就是「点开就闪退」，
-         所以两者都不声明：ML Kit 改由 ScanActivity 调 MlKit.initialize() 按需初始化。 -->
+         （common-18.11.0 / vision-common-17.3.0 / play-services-mlkit-text-recognition-common
+         三个 AAR 清单里各声明一个 meta-data，这里合并成一条。） -->
     <service
         android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
         android:exported="false"

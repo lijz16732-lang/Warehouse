@@ -32,6 +32,44 @@ ABIS = ("arm64-v8a", "armeabi-v7a")        # 只打手机真机用的两种架�
 ICON_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
 
+def _ver_key(v):
+    """'2.5.1' → (2,5,1)，供版本号比较（非数字段当 0 处理）。"""
+    out = []
+    for p in v.split("."):
+        try:
+            out.append(int(p))
+        except ValueError:
+            out.append(0)
+    return tuple(out)
+
+
+def dedupe_libs():
+    """libs 里同一构件（artifactId）存在多个版本时只留最高版。
+
+    _fetch_mlkit.py 递归解析 POM 会把依赖树里不同分支带进来的新旧版本都下下来，
+    d8 遇到同名类重复定义直接报错（activity-1.0.0 vs activity-1.2.4 踩过）。
+    旧版移进 libs/_dup/ 备份，不删除。
+    """
+    dup = os.path.join(LIBS, "_dup")
+    groups = {}                                # artifactId → [(verkey, ver, fname)]
+    for name in sorted(os.listdir(LIBS)):
+        stem, ext = os.path.splitext(name)
+        if ext.lower() not in (".jar", ".aar") or "-" not in stem:
+            continue
+        art, _, ver = stem.rpartition("-")
+        if not art or not ver or not all(c.isdigit() or c == "." for c in ver):
+            continue
+        groups.setdefault(art, []).append((_ver_key(ver), ver, name))
+    for art, items in sorted(groups.items()):
+        if len(items) < 2:
+            continue
+        items.sort(key=lambda x: x[0])
+        os.makedirs(dup, exist_ok=True)
+        for _, _, name in items[:-1]:          # 除最高版外全部让位
+            shutil.move(os.path.join(LIBS, name), os.path.join(dup, name))
+            print("去重：%s → _dup/%s" % (name, name))
+
+
 def unpack_aars(work):
     """把 libs/*.aar 拆成 classes.jar（编译/转 dex 用）、jni 原生库、assets 资源。
 
@@ -133,6 +171,7 @@ def main():
 
     make_icons()
     ensure_keystore(env)
+    dedupe_libs()
 
     work = os.path.join(HERE, ".work")
     shutil.rmtree(work, ignore_errors=True)

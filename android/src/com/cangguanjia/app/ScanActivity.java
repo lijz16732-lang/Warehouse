@@ -360,7 +360,8 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             crop.recycle();
             String msg = brief(t);
             if (initErr != null) msg = "init:" + initErr + " / " + msg;
-            status.setText("识别引擎没能启动（" + msg + "），点「识别」重试");
+            status.setText("识别引擎没能启动 v" + verName()
+                    + "（" + msg + "），点「识别」重试");
         }
     }
 
@@ -382,25 +383,55 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         return sRecognizer;
     }
 
-    /** 手动初始化 ML Kit（与 AAR 里 MlKitInitProvider 内部调用等价）。
-     *  不声明那个 provider 是为了避免它 attachInfo 的 authority 断言在启动时崩 App。
-     *  优先走显式 Registrar（动态模块同款官方路径，不依赖清单 meta-data 发现，
-     *  也避开 zza 里 TaskExecutors.MAIN_THREAD 的类初始化）；失败再退回 MlKit.initialize。
-     *  两条路都失败时记录原因，点识别时展示出来——绝不静默吞掉。 */
+    /** 当前 APK 版本名，失败提示里带上，便于确认手机上跑的是哪个包。 */
+    private String verName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** ML Kit 是否已就绪（MlKitContext 全局单例非空）。 */
+    private static boolean mlKitReady() {
+        try {
+            MlKitContext.getInstance();
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 确保 ML Kit 已初始化，三条路按序兜底，哪条成功都算数：
+     *  ① 清单里的 MlKitInitProvider 在进程启动时已经初始化过（官方标准路径），
+     *     getInstance() 直接通过，什么都不用做；
+     *  ② MlKitContext.initializeIfNeeded + 显式 Registrar（动态模块同款官方路径，
+     *     不依赖清单 meta-data 发现）；
+     *  ③ MlKit.initialize（等价于 MlKitInitProvider 内部调用）。
+     *  每一步之后都用 getInstance() 实测验证，不凭「没抛异常」下结论；
+     *  全部失败时把原因记进 initErr，点识别时展示出来——绝不静默吞掉。 */
     private void ensureMlKit() {
         initErr = null;
+        if (mlKitReady()) return;               // 路径①：provider 已经在启动时干完了
+
         try {
             MlKitContext.initializeIfNeeded(getApplicationContext(),
                     Arrays.asList(new CommonComponentRegistrar(),
                                   new VisionCommonRegistrar(),
                                   new TextRegistrar()));
-            return;
+            if (mlKitReady()) return;           // 路径②：成功
         } catch (Throwable t) {
             initErr = brief(t);
         }
+
         try {
             MlKit.initialize(getApplicationContext());
-            initErr = null;
+            if (mlKitReady()) {                 // 路径③：成功
+                initErr = null;
+                return;
+            }
+            initErr = (initErr == null ? "" : initErr + " / ")
+                    + "MlKit.initialize 后仍未初始化";
         } catch (Throwable t) {
             initErr = (initErr == null ? "" : initErr + " / ") + brief(t);
         }
