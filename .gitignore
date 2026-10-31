@@ -23,6 +23,7 @@ backups/
 .tmpdbg/
 *.log
 android/.work/
+android/.work_*/
 
 # ---- 第三方二进制（用 android/fetch_libs.py 下载）----
 android/libs/*.aar
