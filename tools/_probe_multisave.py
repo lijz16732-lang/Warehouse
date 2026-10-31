@@ -68,6 +68,25 @@ def main():
     root.update()
 
     names = app.store.photos_list("item", code)
+    # 库里照片不足 3 张时，用已有照片重压缩出不同内容补足（只动副本库；
+    # photo_add 按 md5 去重，必须生成不同字节）
+    if len(names) < 3:
+        import base64 as _b
+        import io as _io
+        from PIL import Image as _Image
+        raw0 = _b.b64decode(app.store.photo_data("item", code, names[0]))
+        q = 95
+        while len(names) < 3:
+            buf = _io.BytesIO()
+            _Image.open(_io.BytesIO(raw0)).convert("RGB").save(
+                buf, "JPEG", quality=q)
+            data = buf.getvalue()
+            if data != raw0:
+                nm = "_probe_fill_%d.jpg" % len(names)
+                app.store.photo_add("item", code, data)
+                names = app.store.photos_list("item", code)
+            q -= 10
+        print("filled to", len(names))
     n0 = len(names)
     print("photos:", n0)
     assert n0 >= 3, "至少需要 3 张照片才能完整验证"
@@ -97,16 +116,16 @@ def main():
 
     assert "0 / %d" % n0 in stat_text(), "默认计数应为 0: %s" % stat_text()
 
-    # 单击选中第一张
+    # 单击选中第一张（立即生效，无延迟）
     ms["click"](names[0])
-    time.sleep(0.35)
     root.update()
     fr0, cap0 = ms["cells"][names[0]]
     assert fr0.cget("highlightbackground") == constants.CLR_ACCENT, \
         "单击后应选中"
     assert "1 / %d" % n0 in stat_text(), "计数应为 1"
 
-    # 双击第二张 → 放大预览，选中状态不变
+    # 双击第二张 → 放大预览；真实双击序列 = 第一次单击(切换) + 双击(撤销)
+    ms["click"](names[1])
     ms["dblclick"](names[1])
     time.sleep(0.1)
     root.update()
@@ -124,7 +143,6 @@ def main():
 
     # 多选删除：再加选第二张 → 点「删除选中」→ 确认框 mock 通过
     ms["click"](names[1])
-    time.sleep(0.35)
     root.update()
     orig_ask = photos_mod.messagebox.askyesno
     photos_mod.messagebox.askyesno = lambda *a, **kw: True

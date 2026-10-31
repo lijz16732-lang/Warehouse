@@ -369,23 +369,14 @@ class PhotoStrip(tk.Frame):
                 paint(n)
                 repaint_all()          # 同步「已选 n 张」计数与按钮状态
 
-            # 双击会吞掉第二次 <Button-1>：单击延迟生效，双击先取消待定
-            # 切换再放大，保证「双击细看」不会误改选中状态
-            pend = {}                 # name -> after id
-
+            # 双击会先触发一次 <Button-1>：单击立即切换（响应快），
+            # 双击时先把第一次单击的切换撤销回来再放大，保证「双击细看」
+            # 不误改选中状态
             def click(n):
-                def do():
-                    pend.pop(n, None)
-                    toggle(n)
-                pend[n] = win.after(260, do)
+                toggle(n)
 
             def dblclick(n):
-                if n in pend:
-                    try:
-                        win.after_cancel(pend[n])
-                    except Exception:
-                        pass
-                    pend.pop(n, None)
+                toggle(n)             # 撤销双击吞掉的那次单击切换
                 preview(n)
 
             def build():
