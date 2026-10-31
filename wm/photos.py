@@ -245,7 +245,8 @@ class PhotoStrip(tk.Frame):
             messagebox.showwarning("添加照片", err, parent=self.winfo_toplevel())
 
     def view(self, name):
-        """大图查看窗：左右翻页、删除、Esc 关闭。"""
+        """照片管理窗：缩略图网格，单击选中/取消，双击放大细看；
+        可多选删除、多选保存、添加照片。"""
         if self.pending:
             names = [n for n, _r in self.pending_list]
         else:
@@ -264,76 +265,9 @@ class PhotoStrip(tk.Frame):
         win.grab_set()
         apply_window_icon(win)
 
-        state = {"idx": names.index(name)}
-        lbl = tk.Label(win, bg=CLR_BG)
-        lbl.pack(expand=True, fill="both", padx=8, pady=(8, 0))
-        lbl_cnt = tk.Label(win, bg=CLR_BG, fg=CLR_MUTED, font=(self.app.fam, 9))
-        lbl_cnt.pack(pady=(4, 2))
-        row = tk.Frame(win, bg=CLR_BG)
-        row.pack(pady=(2, 10))
-
-        def show():
-            n = names[state["idx"]]
-            im = self._pil(n)
-            if im is not None:
-                sw = max(1, win.winfo_screenwidth())
-                sh = max(1, win.winfo_screenheight())
-                big = im.copy()
-                big.thumbnail((int(sw * 0.55), int(sh * 0.55)))
-                fg = ImageTk.PhotoImage(big)
-                # 查看窗自己持有引用（关键）：从表格 📷 打开时，Treeview 类绑定
-                # 会在实例绑定之后再次触发选中 → set_code 清空 self._imgs，
-                # 只挂 _imgs 的 PhotoImage 被回收 → 首屏白屏、翻页才恢复
-                win._held_img = fg
-                self._imgs["__view__"] = fg
-                lbl.configure(image=fg, text="")
-            else:
-                lbl.configure(image="", text="照片加载失败")
-            lbl_cnt.configure(text="%d / %d" % (state["idx"] + 1, len(names)))
-            for w in row.winfo_children():
-                w.destroy()
-            ttk.Button(row, text="‹ 上一张",
-                       state="normal" if state["idx"] > 0 else "disabled",
-                       command=lambda: step(-1)).pack(side="left", padx=4)
-            ttk.Button(row, text="删除这张", style="Danger.TButton",
-                       command=do_del).pack(side="left", padx=4)
-            ttk.Button(row, text="下一张 ›",
-                       state="normal" if state["idx"] < len(names) - 1 else "disabled",
-                       command=lambda: step(1)).pack(side="left", padx=4)
-            ttk.Button(row, text="保存图片", style="Ghost.TButton",
-                       command=do_save).pack(side="left", padx=4)
-            ttk.Button(row, text="多选保存", style="Ghost.TButton",
-                       command=do_save_multi).pack(side="left", padx=4)
-            if not self.pending:
-                ttk.Button(row, text="添加照片", style="Ghost.TButton",
-                           command=do_add).pack(side="left", padx=4)
-
-        def do_save():
-            """把当前照片另存为图片文件（原图字节，不重新压缩）。"""
-            n = names[state["idx"]]
-            stem, ext = os.path.splitext(n)
-            default = "%s_%s%s" % (self.code, stem, ext or ".jpg")
-            path = filedialog.asksaveasfilename(
-                parent=win, title="保存图片", initialfile=default,
-                defaultextension=ext or ".jpg",
-                filetypes=[("图片", "*.jpg *.jpeg *.png"), ("所有文件", "*.*")])
-            if not path:
-                return
-            raw = self._bytes_of(n)
-            if not raw:
-                messagebox.showerror("保存图片", "照片数据读取失败", parent=win)
-                return
-            try:
-                with open(path, "wb") as f:
-                    f.write(raw)
-            except OSError as e:
-                messagebox.showerror("保存失败", str(e)[:100], parent=win)
-                return
-            self.app._status("图片已保存：%s" % path)
-
-        def _safe_target(folder, name, used):
+        def _safe_target(folder, fname, used):
             """目标文件名：编号_原名，重名自动追加 (2)、(3)……"""
-            stem, ext = os.path.splitext(name)
+            stem, ext = os.path.splitext(fname)
             base = "%s_%s%s" % (self.code, stem, ext or ".jpg")
             target, i = base, 1
             while target in used or os.path.exists(os.path.join(folder, target)):
@@ -343,176 +277,129 @@ class PhotoStrip(tk.Frame):
             used.add(target)
             return os.path.join(folder, target)
 
-        def do_save_multi():
-            """多选保存：缩略图单击选中/取消，双击放大细看，批量写出原图。"""
-            if not names:
-                return
-            dlg = tk.Toplevel(win)
-            dlg.title("多选保存")
-            dlg.configure(bg=CLR_BG)
-            dlg.resizable(False, False)
-            dlg.transient(win)
-            dlg.grab_set()
-            apply_window_icon(dlg)
+        sel = {}                      # name -> bool / BooleanVar
+        held = {}                     # name -> PhotoImage（防 GC）
 
-            sel = {}                      # name -> bool / BooleanVar
-            held = {}                     # name -> PhotoImage（防 GC）
+        def _on(n):
+            v = sel[n]
+            return v.get() if isinstance(v, tk.BooleanVar) else bool(v)
 
-            def _on(n):
+        def set_all(val):
+            for n in names:
                 v = sel[n]
-                return v.get() if isinstance(v, tk.BooleanVar) else bool(v)
+                if isinstance(v, tk.BooleanVar):
+                    v.set(val)
+                else:
+                    sel[n] = val
+            repaint_all()
 
-            def set_all(val):
+        tk.Label(win, text="单击图片选中 / 取消，双击放大细看",
+                 bg=CLR_BG, fg=CLR_TEXT,
+                 font=(self.app.fam, 10, "bold")).pack(
+            anchor="w", padx=14, pady=(12, 6))
+
+        repaint_cells = None          # PIL 分支注入：重刷所有单元选中态
+        build = None                  # 分支注入：增删后重建网格
+
+        stat = tk.Label(win, text="", bg=CLR_BG, fg=CLR_MUTED,
+                        font=(self.app.fam, 8))
+        tip = tk.Label(win, text="", bg=CLR_BG, fg=CLR_DANGER,
+                       font=(self.app.fam, 8))
+
+        if not HAS_PIL:
+            # 无 PIL 降级：文件名勾选列表
+            box = tk.Frame(win, bg=CLR_BG)
+            box.pack(padx=16, pady=(0, 8))
+
+            def build():
+                for w in box.winfo_children():
+                    w.destroy()
                 for n in names:
-                    v = sel[n]
-                    if isinstance(v, tk.BooleanVar):
-                        v.set(val)
-                    else:
-                        sel[n] = val
-                repaint_all()
+                    if n not in sel:
+                        sel[n] = tk.BooleanVar(value=False)
+                    tk.Checkbutton(box, text=n, variable=sel[n],
+                                   bg=CLR_BG, fg=CLR_TEXT, anchor="w",
+                                   font=(self.app.fam, 9),
+                                   command=repaint_all).pack(anchor="w",
+                                                             fill="x")
+        else:
+            COLS, TH, CW, CH = 4, 88, 110, 132
+            outer = tk.Frame(win, bg=CLR_BG)
+            outer.pack(padx=14, pady=(0, 4))
+            cv = tk.Canvas(outer, bg=CLR_BG, highlightthickness=0,
+                           width=COLS * CW)
+            vs = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+            cv.configure(yscrollcommand=vs.set)
+            vs.pack(side="right", fill="y")
+            cv.pack(side="left")
+            grid = tk.Frame(cv, bg=CLR_BG)
+            cv.create_window((0, 0), window=grid, anchor="nw")
+            grid.bind("<Configure>",
+                      lambda e: cv.configure(scrollregion=cv.bbox("all")))
 
-            if not HAS_PIL:
-                # 无 PIL 降级：退回文件名勾选列表
-                tk.Label(dlg, text="勾选要保存的照片（默认全选）：",
-                         bg=CLR_BG, fg=CLR_TEXT,
-                         font=(self.app.fam, 10, "bold")).pack(
-                    anchor="w", padx=16, pady=(14, 6))
-                box = tk.Frame(dlg, bg=CLR_BG)
-                box.pack(padx=16, pady=(0, 8))
-                for n in names:
-                    v = tk.BooleanVar(value=True)
-                    sel[n] = v
-                    tk.Checkbutton(box, text=n, variable=v, bg=CLR_BG, fg=CLR_TEXT,
-                                   anchor="w", font=(self.app.fam, 9),
-                                   command=repaint_all).pack(anchor="w", fill="x")
-            else:
-                tk.Label(dlg, text="单击图片选中 / 取消，双击放大（默认全选）：",
-                         bg=CLR_BG, fg=CLR_TEXT,
-                         font=(self.app.fam, 10, "bold")).pack(
-                    anchor="w", padx=14, pady=(12, 6))
+            def _wheel(e):
+                cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
+            for w in (cv, grid):
+                w.bind("<MouseWheel>", _wheel)
 
-                COLS, TH, CW, CH = 4, 88, 110, 132
-                rows = (len(names) + COLS - 1) // COLS
-                outer = tk.Frame(dlg, bg=CLR_BG)
-                outer.pack(padx=14, pady=(0, 4))
-                cv = tk.Canvas(outer, bg=CLR_BG, highlightthickness=0,
-                               width=COLS * CW,
-                               height=min(rows, 4) * CH + 8)
-                vs = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
-                cv.configure(yscrollcommand=vs.set)
-                vs.pack(side="right", fill="y")
-                cv.pack(side="left")
-                grid = tk.Frame(cv, bg=CLR_BG)
-                cv.create_window((0, 0), window=grid, anchor="nw")
-                grid.bind("<Configure>",
-                          lambda e: cv.configure(scrollregion=cv.bbox("all")))
+            cells = {}                # name -> (frame, cap)
 
-                def _wheel(e):
-                    cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
-                for w in (cv, grid):
-                    w.bind("<MouseWheel>", _wheel)
+            def short(n):
+                stem, ext = os.path.splitext(n)
+                s = stem if len(stem) <= 10 else stem[:9] + "…"
+                return (s + ext)[:16]
 
-                def preview(n):
-                    """双击放大细看：大图 + 左右翻页，Esc 关闭。"""
-                    pv = tk.Toplevel(dlg)
-                    pv.title(n)
-                    pv.configure(bg=CLR_BG)
-                    pv.transient(dlg)
-                    pv.grab_set()
-                    apply_window_icon(pv)
-                    idx = {"i": names.index(n)}
-                    held2 = {}
-                    lbl = tk.Label(pv, bg=CLR_BG)
-                    lbl.pack(expand=True, fill="both", padx=10, pady=(10, 0))
-                    cnt = tk.Label(pv, bg=CLR_BG, fg=CLR_MUTED,
-                                   font=(self.app.fam, 9))
-                    cnt.pack(pady=(4, 2))
-                    bar = tk.Frame(pv, bg=CLR_BG)
-                    bar.pack(pady=(2, 10))
+            def paint(n):
+                fr, cap = cells[n]
+                if _on(n):
+                    fr.configure(highlightbackground=CLR_ACCENT,
+                                 highlightcolor=CLR_ACCENT)
+                    cap.configure(text="✓ " + short(n), fg=CLR_ACCENT)
+                else:
+                    fr.configure(highlightbackground=CLR_BORDER,
+                                 highlightcolor=CLR_BORDER)
+                    cap.configure(text=short(n), fg=CLR_MUTED)
 
-                    def pshow():
-                        nn = names[idx["i"]]
-                        im = self._pil(nn)
-                        if im is not None:
-                            sw = max(1, pv.winfo_screenwidth())
-                            sh = max(1, pv.winfo_screenheight())
-                            big = im.copy()
-                            big.thumbnail((int(sw * 0.5), int(sh * 0.5)))
-                            fg = ImageTk.PhotoImage(big)
-                            held2["im"] = fg
-                            lbl.configure(image=fg, text="")
-                        else:
-                            lbl.configure(image="", text="照片加载失败")
-                        cnt.configure(text="%d / %d" % (idx["i"] + 1, len(names)))
-                        bprev.configure(state="normal" if idx["i"] > 0 else "disabled")
-                        bnext.configure(state="normal"
-                                        if idx["i"] < len(names) - 1 else "disabled")
+            def toggle(n):
+                v = sel[n]
+                if isinstance(v, tk.BooleanVar):
+                    v.set(not v.get())
+                else:
+                    sel[n] = not v
+                paint(n)
+                repaint_all()          # 同步「已选 n 张」计数与按钮状态
 
-                    def pstep(d):
-                        idx["i"] = max(0, min(len(names) - 1, idx["i"] + d))
-                        pshow()
+            # 双击会吞掉第二次 <Button-1>：单击延迟生效，双击先取消待定
+            # 切换再放大，保证「双击细看」不会误改选中状态
+            pend = {}                 # name -> after id
 
-                    bprev = ttk.Button(bar, text="‹ 上一张",
-                                       command=lambda: pstep(-1))
-                    bprev.pack(side="left", padx=4)
-                    bnext = ttk.Button(bar, text="下一张 ›",
-                                       command=lambda: pstep(1))
-                    bnext.pack(side="left", padx=4)
-                    pv.bind("<Escape>", lambda e: pv.destroy())
-                    pv.bind("<Left>", lambda e: pstep(-1))
-                    pv.bind("<Right>", lambda e: pstep(1))
-                    pv.withdraw()
-                    pshow()
-                    center_window(pv, dlg, force=True)
-                    pv.deiconify()
+            def click(n):
+                def do():
+                    pend.pop(n, None)
+                    toggle(n)
+                pend[n] = win.after(260, do)
 
-                def short(n):
-                    stem, ext = os.path.splitext(n)
-                    s = stem if len(stem) <= 10 else stem[:9] + "…"
-                    return (s + ext)[:16]
+            def dblclick(n):
+                if n in pend:
+                    try:
+                        win.after_cancel(pend[n])
+                    except Exception:
+                        pass
+                    pend.pop(n, None)
+                preview(n)
 
-                cells = {}                # name -> (frame, cap)
-
-                def paint(n):
-                    fr, cap = cells[n]
-                    if _on(n):
-                        fr.configure(highlightbackground=CLR_ACCENT,
-                                     highlightcolor=CLR_ACCENT)
-                        cap.configure(text="✓ " + short(n), fg=CLR_ACCENT)
-                    else:
-                        fr.configure(highlightbackground=CLR_BORDER,
-                                     highlightcolor=CLR_BORDER)
-                        cap.configure(text=short(n), fg=CLR_MUTED)
-
-                def toggle(n):
-                    v = sel[n]
-                    if isinstance(v, tk.BooleanVar):
-                        v.set(not v.get())
-                    else:
-                        sel[n] = not v
-                    paint(n)
-
-                # 双击会吞掉第二次 <Button-1>：单击延迟生效，双击先取消待定
-                # 切换再放大，保证「双击细看」不会误改选中状态
-                pend = {}             # name -> after id
-
-                def click(n):
-                    def do():
-                        pend.pop(n, None)
-                        toggle(n)
-                    pend[n] = dlg.after(260, do)
-
-                def dblclick(n):
-                    if n in pend:
-                        try:
-                            dlg.after_cancel(pend[n])
-                        except Exception:
-                            pass
-                        pend.pop(n, None)
-                    preview(n)
-
+            def build():
+                for w in grid.winfo_children():
+                    w.destroy()
+                held.clear()
+                cells.clear()
+                for n in list(sel):
+                    if n not in names:
+                        sel.pop(n)        # 删掉的照片不再保留选中态
+                rows = (len(names) + COLS - 1) // COLS or 1
+                cv.configure(height=min(rows, 4) * CH + 8)
                 for i, n in enumerate(names):
-                    sel[n] = True
+                    sel.setdefault(n, False)      # 默认不选
                     fr = tk.Frame(grid, bg=CLR_CARD, highlightthickness=2,
                                   highlightbackground=CLR_BORDER,
                                   highlightcolor=CLR_BORDER, cursor="hand2")
@@ -523,10 +410,12 @@ class PhotoStrip(tk.Frame):
                         th.thumbnail((TH, TH))
                         fg = ImageTk.PhotoImage(th)
                         held[n] = fg
-                        lbl = tk.Label(fr, image=fg, bg=CLR_CARD, cursor="hand2")
+                        lbl = tk.Label(fr, image=fg, bg=CLR_CARD,
+                                       cursor="hand2")
                     else:
-                        lbl = tk.Label(fr, text="🖼", bg=CLR_CARD, fg=CLR_MUTED,
-                                       width=10, height=4, cursor="hand2")
+                        lbl = tk.Label(fr, text="🖼", bg=CLR_CARD,
+                                       fg=CLR_MUTED, width=10, height=4,
+                                       cursor="hand2")
                     lbl.pack(padx=2, pady=(2, 0))
                     cap = tk.Label(fr, text="", bg=CLR_CARD,
                                    font=(self.app.fam, 7))
@@ -538,145 +427,272 @@ class PhotoStrip(tk.Frame):
                                lambda e, nn=n: dblclick(nn))
                     paint(n)
 
-                # 测试句柄：event_generate 模拟点击有假阳性，探针走程序化调用
-                dlg._msel = {"sel": sel, "cells": cells, "paint": paint,
-                             "click": click, "dblclick": dblclick}
+            def repaint_cells():
+                for n in names:
+                    if n in cells:
+                        paint(n)
 
-                # 缩略图在窗口映射前创建 → 映射后部分系统不重绘（白块），
-                # 与查看窗首帧白屏同根因：映射后强制重设一次图像
-                def repaint_imgs(_e=None):
-                    for n in names:
-                        fg = held.get(n)
-                        if fg is None:
-                            continue
-                        lbl = cells[n][0].winfo_children()[0]
+            def preview(n):
+                """双击放大细看：大图 + 左右翻页 + 删除/另存，Esc 关闭。"""
+                pv = tk.Toplevel(win)
+                pv.title(n)
+                pv.configure(bg=CLR_BG)
+                pv.transient(win)
+                pv.grab_set()
+                apply_window_icon(pv)
+                idx = {"i": names.index(n)}
+                held2 = {}
+                lbl = tk.Label(pv, bg=CLR_BG)
+                lbl.pack(expand=True, fill="both", padx=10, pady=(10, 0))
+                cnt = tk.Label(pv, bg=CLR_BG, fg=CLR_MUTED,
+                               font=(self.app.fam, 9))
+                cnt.pack(pady=(4, 2))
+                bar = tk.Frame(pv, bg=CLR_BG)
+                bar.pack(pady=(2, 10))
+
+                def pshow():
+                    nn = names[idx["i"]]
+                    im = self._pil(nn)
+                    if im is not None:
+                        sw = max(1, pv.winfo_screenwidth())
+                        sh = max(1, pv.winfo_screenheight())
+                        big = im.copy()
+                        big.thumbnail((int(sw * 0.5), int(sh * 0.5)))
+                        fg = ImageTk.PhotoImage(big)
+                        held2["im"] = fg
+                        lbl.configure(image=fg, text="")
+                    else:
+                        lbl.configure(image="", text="照片加载失败")
+                    cnt.configure(text="%d / %d" % (idx["i"] + 1, len(names)))
+                    bprev.configure(state="normal"
+                                    if idx["i"] > 0 else "disabled")
+                    bnext.configure(state="normal"
+                                    if idx["i"] < len(names) - 1
+                                    else "disabled")
+
+                def pstep(d):
+                    idx["i"] = max(0, min(len(names) - 1, idx["i"] + d))
+                    pshow()
+
+                def p_del():
+                    nn = names[idx["i"]]
+                    if not messagebox.askyesno(
+                            "删除照片", "确定删除这张照片吗？", parent=pv):
+                        return
+                    if self.pending:
+                        self.pending_list = [(x, r) for x, r in
+                                             self.pending_list if x != nn]
+                    else:
+                        try:
+                            self.app.store.photo_del(self.kind, self.code, nn)
+                        except Exception as e:
+                            messagebox.showerror("删除失败", str(e), parent=pv)
+                            return
+                        self._cache.pop((self.code, nn), None)
+                        try:
+                            self.app._photo_codes_changed(self.kind, self.code)
+                        except Exception:
+                            pass
+                    names.remove(nn)
+                    sel.pop(nn, None)
+                    self.set_code(self.code)      # 底部缩略图同步
+                    if not names:
+                        pv.destroy()
+                        win.destroy()
+                        return
+                    if build is not None:
+                        build()
+                    repaint_all()
+                    idx["i"] = min(idx["i"], len(names) - 1)
+                    pshow()
+
+                def p_save():
+                    """当前大图另存为图片文件（原图字节，不重新压缩）。"""
+                    nn = names[idx["i"]]
+                    stem, ext = os.path.splitext(nn)
+                    default = "%s_%s%s" % (self.code, stem, ext or ".jpg")
+                    path = filedialog.asksaveasfilename(
+                        parent=pv, title="保存图片", initialfile=default,
+                        defaultextension=ext or ".jpg",
+                        filetypes=[("图片", "*.jpg *.jpeg *.png"),
+                                   ("所有文件", "*.*")])
+                    if not path:
+                        return
+                    raw = self._bytes_of(nn)
+                    if not raw:
+                        messagebox.showerror("保存图片", "照片数据读取失败",
+                                             parent=pv)
+                        return
+                    try:
+                        with open(path, "wb") as f:
+                            f.write(raw)
+                    except OSError as e:
+                        messagebox.showerror("保存失败", str(e)[:100],
+                                             parent=pv)
+                        return
+                    self.app._status("图片已保存：%s" % path)
+
+                bprev = ttk.Button(bar, text="‹ 上一张",
+                                   command=lambda: pstep(-1))
+                bprev.pack(side="left", padx=4)
+                ttk.Button(bar, text="删除这张", style="Danger.TButton",
+                           command=p_del).pack(side="left", padx=4)
+                bnext = ttk.Button(bar, text="下一张 ›",
+                                   command=lambda: pstep(1))
+                bnext.pack(side="left", padx=4)
+                ttk.Button(bar, text="保存图片", style="Ghost.TButton",
+                           command=p_save).pack(side="left", padx=4)
+                pv.bind("<Escape>", lambda e: pv.destroy())
+                pv.bind("<Left>", lambda e: pstep(-1))
+                pv.bind("<Right>", lambda e: pstep(1))
+                pv.withdraw()
+                pshow()
+                center_window(pv, win, force=True)
+                pv.deiconify()
+
+                # 大图在映射前创建 → 映射后可能不重绘（白屏），强制重设
+                def _prep(_e=None):
+                    fg = held2.get("im")
+                    if fg is not None:
                         try:
                             lbl.configure(image=fg)
                         except Exception:
                             pass
-                dlg.bind("<Map>", repaint_imgs)
-                dlg.after(120, repaint_imgs)
+                pv.bind("<Map>", _prep)
+                pv.after(80, _prep)
 
-            stat = tk.Label(dlg, text="", bg=CLR_BG, fg=CLR_MUTED,
-                            font=(self.app.fam, 8))
+            # 测试句柄：event_generate 模拟点击有假阳性，探针走程序化调用
+            win._msel = {"sel": sel, "cells": cells, "paint": paint,
+                         "click": click, "dblclick": dblclick}
 
-            def repaint_all():
-                if HAS_PIL and all(not isinstance(sel[n], tk.BooleanVar)
-                                   for n in names):
-                    for n in names:
-                        paint(n)      # noqa: F821（HAS_PIL 分支内定义）
-                stat.configure(text="已选 %d / %d 张"
-                               % (sum(1 for n in names if _on(n)), len(names)))
-
-            stat.pack(pady=(0, 2))
-            brow = tk.Frame(dlg, bg=CLR_BG)
-            brow.pack(pady=(0, 4))
-            ttk.Button(brow, text="全选", style="Ghost.TButton",
-                       command=lambda: set_all(True)).pack(side="left", padx=4)
-            ttk.Button(brow, text="全不选", style="Ghost.TButton",
-                       command=lambda: set_all(False)).pack(side="left", padx=4)
-            tip = tk.Label(dlg, text="", bg=CLR_BG, fg=CLR_DANGER,
-                           font=(self.app.fam, 8))
-            tip.pack()
-
-            def confirm():
-                picked = [n for n in names if _on(n)]
-                if not picked:
-                    tip.configure(text="请至少选中一张照片")
-                    return
-                folder = filedialog.askdirectory(
-                    parent=dlg, title="选择保存位置", mustexist=True)
-                if not folder:
-                    return
-                used = set()
-                ok, err = 0, ""
-                for n in picked:
-                    raw = self._bytes_of(n)
-                    if not raw:
-                        err = "%s 数据读取失败" % n
+            # 缩略图在窗口映射前创建 → 映射后部分系统不重绘（白块），
+            # 与查看窗首帧白屏同根因：映射后强制重设一次图像
+            def repaint_imgs(_e=None):
+                for n in names:
+                    fg = held.get(n)
+                    if fg is None or n not in cells:
                         continue
+                    lbl = cells[n][0].winfo_children()[0]
                     try:
-                        with open(_safe_target(folder, n, used), "wb") as f:
-                            f.write(raw)
-                        ok += 1
-                    except OSError as e:
-                        err = str(e)[:100]
-                        break
-                dlg.destroy()
-                if ok:
-                    self.app._status("已保存 %d 张图片到 %s" % (ok, folder))
-                if err:
-                    messagebox.showwarning("多选保存", err, parent=win)
+                        lbl.configure(image=fg)
+                    except Exception:
+                        pass
+            win.bind("<Map>", repaint_imgs)
+            win.after(120, repaint_imgs)
 
-            frow = tk.Frame(dlg, bg=CLR_BG)
-            frow.pack(pady=(4, 14))
-            ttk.Button(frow, text="取消", style="Ghost.TButton",
-                       command=dlg.destroy).pack(side="left", padx=4)
-            ttk.Button(frow, text="保存", style="Accent.TButton",
-                       command=confirm).pack(side="left", padx=4)
-            repaint_all()
-            dlg.withdraw()
-            center_window(dlg, win, force=True)
-            dlg.deiconify()
+        def repaint_all():
+            k = sum(1 for n in names if _on(n))
+            stat.configure(text="已选 %d / %d 张" % (k, len(names)))
+            st = "normal" if k else "disabled"
+            btn_del.configure(state=st)
+            btn_save.configure(state=st)
+            if repaint_cells is not None:
+                repaint_cells()
 
-        def step(d):
-            state["idx"] = max(0, min(len(names) - 1, state["idx"] + d))
-            show()
-
-        def do_add():
-            """查看窗里直接补照片：关掉查看窗再走添加流程。"""
-            win.destroy()
-            self.add_photos()
-
-        def do_del():
-            n = names[state["idx"]]
-            if not messagebox.askyesno("删除照片", "确定删除这张照片吗？", parent=win):
+        def do_del_multi():
+            picked = [n for n in names if _on(n)]
+            if not picked:
+                tip.configure(text="请先单击选中要删除的照片")
                 return
+            if not messagebox.askyesno(
+                    "删除照片", "确定删除选中的 %d 张照片吗？" % len(picked),
+                    parent=win):
+                return
+            err, failed = "", []
             if self.pending:
-                self.pending_list = [(nn, r) for nn, r in self.pending_list if nn != n]
-                names.pop(state["idx"])
-                self.set_code(self.code)
-                if not names:
-                    win.destroy()
-                    return
-                state["idx"] = min(state["idx"], len(names) - 1)
-                show()
-                return
-            try:
-                self.app.store.photo_del(self.kind, self.code, n)
-            except Exception as e:
-                messagebox.showerror("删除失败", str(e), parent=win)
-                return
-            try:
-                self.app._photo_codes_changed(self.kind, self.code)
-            except Exception:
-                pass
-            self._cache.pop((self.code, n), None)
-            names.pop(state["idx"])
-            self.set_code(self.code)         # 底部缩略图同步刷新
+                self.pending_list = [(nn, r) for nn, r in self.pending_list
+                                     if nn not in picked]
+            else:
+                for n in picked:
+                    try:
+                        self.app.store.photo_del(self.kind, self.code, n)
+                        self._cache.pop((self.code, n), None)
+                    except Exception as e:
+                        failed.append(n)
+                        err = str(e)[:100]
+                try:
+                    self.app._photo_codes_changed(self.kind, self.code)
+                except Exception:
+                    pass
+            for n in picked:
+                if n in failed:
+                    continue
+                if n in names:
+                    names.remove(n)
+                sel.pop(n, None)
+            self.set_code(self.code)          # 底部缩略图同步刷新
+            if err:
+                messagebox.showerror("删除失败", err, parent=win)
             if not names:
                 win.destroy()
                 return
-            state["idx"] = min(state["idx"], len(names) - 1)
-            show()
+            if build is not None:
+                build()
+            repaint_all()
 
+        def do_save_multi():
+            picked = [n for n in names if _on(n)]
+            if not picked:
+                tip.configure(text="请先单击选中要保存的照片")
+                return
+            folder = filedialog.askdirectory(
+                parent=win, title="选择保存位置", mustexist=True)
+            if not folder:
+                return
+            used = set()
+            ok, err = 0, ""
+            for n in picked:
+                raw = self._bytes_of(n)
+                if not raw:
+                    err = "%s 数据读取失败" % n
+                    continue
+                try:
+                    with open(_safe_target(folder, n, used), "wb") as f:
+                        f.write(raw)
+                    ok += 1
+                except OSError as e:
+                    err = str(e)[:100]
+                    break
+            if ok:
+                self.app._status("已保存 %d 张图片到 %s" % (ok, folder))
+            if err:
+                messagebox.showwarning("多选保存", err, parent=win)
+
+        def do_add():
+            """窗口里直接补照片：关掉管理窗再走添加流程（完成后自动刷新）。"""
+            win.destroy()
+            self.add_photos()
+
+        stat.pack(pady=(0, 2))
+        brow = tk.Frame(win, bg=CLR_BG)
+        brow.pack(pady=(0, 4))
+        ttk.Button(brow, text="全选", style="Ghost.TButton",
+                   command=lambda: set_all(True)).pack(side="left", padx=4)
+        ttk.Button(brow, text="全不选", style="Ghost.TButton",
+                   command=lambda: set_all(False)).pack(side="left", padx=4)
+        tip.pack()
+        frow = tk.Frame(win, bg=CLR_BG)
+        frow.pack(pady=(4, 14))
+        if not self.pending:
+            ttk.Button(frow, text="添加照片", style="Ghost.TButton",
+                       command=do_add).pack(side="left", padx=4)
+        btn_del = ttk.Button(frow, text="删除选中", style="Danger.TButton",
+                             command=do_del_multi)
+        btn_del.pack(side="left", padx=4)
+        btn_save = ttk.Button(frow, text="保存选中", style="Accent.TButton",
+                              command=do_save_multi)
+        btn_save.pack(side="left", padx=4)
+        ttk.Button(frow, text="关闭", style="Ghost.TButton",
+                   command=win.destroy).pack(side="left", padx=4)
+
+        if build is not None:
+            build()
+        repaint_all()
         win.bind("<Escape>", lambda e: win.destroy())
         # 先隐藏→定位→再显示：映射后再居中会「先在左上角闪一下」
         win.withdraw()
-        show()
         center_window(win, self.winfo_toplevel(), force=True)
         win.deiconify()
         win.lift()
         win.focus_force()
 
-        # 首帧图像在窗口映射前就设置好了，部分系统映射后不会自动重绘，
-        # 表现为「第一张打开老是白屏、翻页后正常」。映射后强制重设一次图像。
-        def _repaint(_e=None):
-            fg = getattr(win, "_held_img", None) or self._imgs.get("__view__")
-            if fg is not None:
-                try:
-                    lbl.configure(image=fg)
-                except Exception:
-                    pass
-        win.bind("<Map>", _repaint)
-        win.after(80, _repaint)
