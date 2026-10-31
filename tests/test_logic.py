@@ -922,19 +922,29 @@ try:
     with open(os.path.join(_android_dir, "src", "com", "cangguanjia", "app",
                            "MainActivity.java"), encoding="utf-8") as _f:
         _mj = _f.read()
-    check("扫一扫用相机实时取景（不拍照、不选图）",
+    check("二维码扫码仍是实时取景（不拍照、不选图）",
           "Camera.open" in _sj and "setPreviewCallbackWithBuffer" in _sj
-          and "ACTION_IMAGE_CAPTURE" not in _sj and "ACTION_GET_CONTENT" not in _sj)
-    check("识别在手机本地跑（Tesseract，无网络请求）",
-          "TessBaseAPI" in _sj and "http" not in _sj.lower())
+          and "decodeQr" in _sj)
+    check("型号识别改为拍照+框选（全分辨率照片比实时预览帧更清晰）",
+          "ACTION_IMAGE_CAPTURE" in _sj and "EXTRA_OUTPUT" in _sj
+          and "CropView" in _sj and "normalizedRect" in _sj)
+    check("识别在手机本地跑（ML Kit 中文捆绑版，无网络请求、不依赖 GMS、无 Tesseract）",
+          "ChineseTextRecognizerOptions" in _sj and "InputImage" in _sj
+          and "TextRecognizer" in _sj and "TessBaseAPI" not in _sj
+          and "http" not in _sj.lower())
+    check("照片即拍即用即删（不占存储）+ 采样解码与 EXIF 摆正控内存",
+          "scan_tmp.jpg" in _sj and "inSampleSize" in _sj and "ExifInterface" in _sj)
     check("扫一扫会申请相机权限", "permission.CAMERA" in _sj and "android.permission.CAMERA" in _mf)
     check("扫一扫 Activity 已注册且竖屏", '.ScanActivity' in _mf
           and 'android:screenOrientation="portrait"' in _mf)
     check("页面 → 原生桥（AndroidOcr）与回填回调",
           'addJavascriptInterface' in _mj and '"AndroidOcr"' in _mj
           and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
-    check("中文识别模型随 App 打包（chi_sim）",
-          os.path.isfile(os.path.join(_android_dir, "assets", "tessdata", "chi_sim.traineddata")))
+    check("ML Kit 中文识别模型随 App 打包（Tesseract 引擎与模型已移除）",
+          os.path.isfile(os.path.join(_android_dir, "libs",
+                                      "text-recognition-chinese-16.0.1.aar"))
+          and not os.path.isfile(os.path.join(_android_dir, "assets",
+                                              "tessdata", "chi_sim.traineddata")))
     check("Android 壳不显示系统标题栏（黑色「仓管家」条）",
           'Theme.Material.Light.NoActionBar' in _mf)
     # v1.20.1 修黑屏：必须等 surface 就绪再 setPreviewDisplay，且有无帧看门狗
@@ -946,17 +956,11 @@ try:
     check("相机打不开/预览失败有提示与自动重试",
           "正在重试" in _sj and "相机打不开" in _sj
           and "releaseCamera();" in _sj and "startCamera();" in _sj)
-    # v1.27.5 靠近模糊 + OCR 乱跳/识别慢：点按对焦 + 周期重新对焦 + 跨帧投票防跳
+    # v1.28.0 对焦：二维码实时模式保留点按对焦 + 周期重新对焦兜底
     check("扫一扫支持点按对焦与近距对焦兜底",
           "tapFocus" in _sj and "setFocusAreas" in _sj
           and "FOCUS_MODE_MACRO" in _sj and "pickFocusMode" in _sj
           and "refocus" in _sj and "resumeContinuous" in _sj)
-    check("OCR 跨帧投票防候选乱跳（不再单帧替换）",
-          "votes" in _sj and "LinkedHashMap" in _sj
-          and "finishWith(best.getKey())" in _sj and "clearCandidates" in _sj)
-    check("OCR 前灰度+对比度拉伸与 DPI 声明",
-          "enhance" in _sj and "user_defined_dpi" in _sj
-          and "createScaledBitmap" in _sj)
     # v1.21.0 扫电脑二维码自动连接
     check("设置页有「扫电脑二维码，自动连接」按钮",
           'id="btnQrConn"' in _app_html and "扫电脑二维码" in _app_html)

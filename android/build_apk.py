@@ -26,19 +26,25 @@ PLATFORM = os.path.join(SDK, "platforms", "android-34", "android.jar")
 KS = os.path.join(HERE, "cgm-release.keystore")
 KS_PASS = "cgm12345"
 
-LIBS = os.path.join(HERE, "libs")          # 第三方 AAR（离线 OCR：tesseract4android）
+LIBS = os.path.join(HERE, "libs")          # 第三方 AAR（离线 OCR：ML Kit 中文捆绑版 + ZXing）
 ABIS = ("arm64-v8a", "armeabi-v7a")        # 只打手机真机用的两种架构（省体积）
 
 ICON_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
 
 def unpack_aars(work):
-    """把 libs/*.aar 拆成 classes.jar（编译/转 dex 用）和 jni 原生库（打进 APK）。"""
+    """把 libs/*.aar 拆成 classes.jar（编译/转 dex 用）、jni 原生库、assets 资源。
+
+    注意：ML Kit 的识别模型就放在 AAR 的 assets/mlkit-google-ocr-models/ 里，
+    必须一起合并进 APK，否则运行时找不到模型（能打开但识别必失败）。
+    """
     jars, natives = [], []
     if not os.path.isdir(LIBS):
         return jars, natives
     out = os.path.join(work, "aar")
     os.makedirs(out, exist_ok=True)
+    aar_assets = os.path.join(work, "aarassets")
+    os.makedirs(aar_assets, exist_ok=True)
     for name in sorted(os.listdir(LIBS)):
         if name.lower().endswith(".jar"):        # 纯 Java 库（如 zxing-core）
             jars.append(os.path.join(LIBS, name))
@@ -62,6 +68,12 @@ def unpack_aars(work):
                     with open(dst, "wb") as f:
                         f.write(z.read(n))
                     natives.append((parts[1], dst))
+                elif len(parts) > 2 and parts[0] == "assets" and not n.endswith("/"):
+                    dst = os.path.join(aar_assets, *parts[1:])
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    if not os.path.exists(dst):
+                        with open(dst, "wb") as f:
+                            f.write(z.read(n))
     return jars, natives
 
 
@@ -137,17 +149,32 @@ def main():
     # 1. 编译资源
     res_zip = os.path.join(work, "res.zip")
     run(env, [aapt2, "compile", "--dir", os.path.join(HERE, "res"), "-o", res_zip])
-    # 2. 链接资源 + 清单 + assets（App 自带界面）→ 未装代码的 apk
+    # 2. 链接资源 + 清单 + assets（App 自带界面 + 各 AAR 的 assets 模型）→ 未装代码的 apk
     base = os.path.join(work, "base.apk")
     assets_dir = os.path.join(HERE, "assets")
+    jars, natives = unpack_aars(work)
+    merged_assets = os.path.join(work, "assets")
+    if os.path.isdir(assets_dir):
+        shutil.copytree(assets_dir, merged_assets)
+    else:
+        os.makedirs(merged_assets, exist_ok=True)
+    aar_assets = os.path.join(work, "aarassets")
+    if os.path.isdir(aar_assets):
+        for dirpath, _, names in os.walk(aar_assets):
+            rel = os.path.relpath(dirpath, aar_assets)
+            dst_dir = merged_assets if rel == "." else os.path.join(merged_assets, rel)
+            os.makedirs(dst_dir, exist_ok=True)
+            for n in names:
+                dst = os.path.join(dst_dir, n)
+                if not os.path.exists(dst):        # 工程自己的 assets 优先
+                    shutil.copy2(os.path.join(dirpath, n), dst)
     link_cmd = [aapt2, "link", "-o", base, "-I", PLATFORM,
                 "--manifest", os.path.join(HERE, "AndroidManifest.xml"),
                 "-R", res_zip, "--auto-add-overlay"]
-    if os.path.isdir(assets_dir):
-        link_cmd += ["-A", assets_dir]
+    if os.path.isdir(merged_assets):
+        link_cmd += ["-A", merged_assets]
     run(env, link_cmd)
     # 3. 编译 Java → class → dex（含第三方 AAR 的 classes.jar）
-    jars, natives = unpack_aars(work)
     srcs = []
     for dirpath, _, names in os.walk(os.path.join(HERE, "src")):
         srcs += [os.path.join(dirpath, n) for n in names if n.endswith(".java")]
@@ -157,7 +184,14 @@ def main():
     classes = []
     for dirpath, _, names in os.walk(obj):
         classes += [os.path.join(dirpath, n) for n in names if n.endswith(".class")]
-    run(env, [d8, "--release", "--lib", PLATFORM, "--output", dex] + classes + jars)
+    # 依赖多了命令行会超 Windows 8191 字符上限 → 走 d8 的 @argfile
+    d8_args = ["--release", "--min-api", "24", "--lib", PLATFORM,
+               "--output", dex] + classes + jars
+    argfile = os.path.join(work, "d8args.txt")
+    with open(argfile, "w", encoding="utf-8") as f:
+        for a in d8_args:
+            f.write(a + "\n")               # d8 argfile：每行一个参数，不加引号
+    run(env, [d8, "@" + argfile])
     # 4. classes*.dex + native 库塞进 apk
     with zipfile.ZipFile(base, "a") as z:
         for n in sorted(os.listdir(dex)):
