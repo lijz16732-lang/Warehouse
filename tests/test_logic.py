@@ -953,15 +953,13 @@ try:
           and 'VisionCommonRegistrar' in _mf
           and 'TextRegistrar' in _mf)
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。
-    # v1.28.4 定案：MlKitInitProvider 必须声明——它是 ML Kit 官方初始化入口（onCreate
-    # 只调 MlKitContext.zza 做标准初始化，authority 硬断言必须一字不差），
-    # v1.28.0~v1.28.3 手动 initializeIfNeeded 一直报 MlKitContext has not been
-    # initialized 的根因就是缺它；androidx.startup 仍然禁止（lifecycle 版本错配闪退）。
-    check("ML Kit 官方初始化 Provider 已声明（authority 与 AAR 断言一字不差）",
-          'com.google.mlkit.common.internal.MlKitInitProvider' in _mf
-          and 'android:authorities="com.google.mlkit.common.mlkitinitprovider"' in _mf
+    # v1.28.4 曾加回 MlKitInitProvider 走官方初始化 → 用户实测「打不开」，v1.28.5 撤掉；
+    # 改为 Activity 内按需初始化 + CgmApp 记录启动崩溃（下次打开弹堆栈，可截图定位）。
+    check("启动期只允许 PhotoProvider，且崩溃自证（CgmApp）已就位",
+          "com.google.mlkit.common.internal.MlKitInitProvider" not in _mf
           and 'androidx.startup.InitializationProvider' not in _mf
-          and _mf.count("<provider") == 2 and ".PhotoProvider" in _mf
+          and _mf.count("<provider") == 1 and ".PhotoProvider" in _mf
+          and 'android:name=".CgmApp"' in _mf
           and "MlKit.initialize" in _sj
           and "import com.google.mlkit.common.MlKit;" in _sj
           and "mlKitReady" in _sj)
@@ -978,8 +976,8 @@ try:
                 _cm = _z.read("AndroidManifest.xml").decode("utf-8", "ignore")
             for _nm in _re.findall(
                     r'<(?:provider|service|meta-data)[^>]*android:name="([^"]+)"', _cm):
-                if _nm.startswith("com.google.mlkit"):
-                    _need.add(_nm)
+                if _nm.startswith("com.google.mlkit") and "MlKitInitProvider" not in _nm:
+                    _need.add(_nm)      # provider 是被刻意排除的（见上一条检查）
         _missing = sorted(x for x in _need if x not in _mf)
         check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
               not _missing, "缺少: %s" % _missing[:4])

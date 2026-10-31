@@ -8,8 +8,8 @@
      「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="30"
-    android:versionName="1.28.4">
+    android:versionCode="31"
+    android:versionName="1.28.5">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -26,6 +26,7 @@
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
   <application
+      android:name=".CgmApp"
       android:label="仓管家"
       android:icon="@mipmap/ic_launcher"
       android:theme="@android:style/Theme.Material.Light.NoActionBar"
@@ -59,17 +60,11 @@
         android:grantUriPermissions="true"/>
 
     <!-- ==== 以下来自 libs/*.aar 的清单，Gradle 会自动合并，手写打包必须手工补 ==== -->
-    <!-- 0) ML Kit 官方初始化入口（common-18.11.0.aar 清单原样，占位符 ${applicationId}
-         在 Gradle 合并时替换为该库自身包名 com.google.mlkit.common，attachInfo 对
-         authority 有硬断言，必须一字不差）。进程启动时系统实例化该 Provider，onCreate
-         只调 MlKitContext.zza(context) 做标准初始化——这是所有正常打包 App 的初始化路径。
-         v1.28.0~v1.28.3 手动调 initializeIfNeeded 一直报 MlKitContext has not been
-         initialized，根因就是缺了它。 -->
-    <provider
-        android:name="com.google.mlkit.common.internal.MlKitInitProvider"
-        android:authorities="com.google.mlkit.common.mlkitinitprovider"
-        android:exported="false"
-        android:initOrder="99"/>
+    <!-- 0) 不声明 MlKitInitProvider（v1.28.4 试过，装上打不开）。
+         ContentProvider 会在进程启动时实例化并执行代码，它一旦在 onCreate 里抛异常
+         就是「点开闪退」且 Application 都拦不住。ML Kit 初始化改在 ScanActivity 里
+         按需做（三条路兜底 + 每步 getInstance() 实测 + 异常回显到状态栏）。
+         崩溃有 CgmApp 统一记录，下次启动显示，不再无迹可查。 -->
 
     <!-- 1) 组件发现：识别器（Registrar）在这里注册，缺了引擎找不到任何识别能力。
          （common-18.11.0 / vision-common-17.3.0 / play-services-mlkit-text-recognition-common

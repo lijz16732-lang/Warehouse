@@ -27,7 +27,10 @@ KS = os.path.join(HERE, "cgm-release.keystore")
 KS_PASS = "cgm12345"
 
 LIBS = os.path.join(HERE, "libs")          # 第三方 AAR（离线 OCR：ML Kit 中文捆绑版 + ZXing）
-ABIS = ("arm64-v8a", "armeabi-v7a")        # 只打手机真机用的两种架构（省体积）
+# 只打手机真机用的两种架构（省体积）；跑模拟器实测时用 CGM_ABIS=x86_64 出测试包
+ABIS = tuple(a for a in os.environ.get(
+    "CGM_ABIS", "arm64-v8a,armeabi-v7a").split(",") if a)
+APK_NAME = os.environ.get("CGM_APK_NAME", "仓管家手机版.apk")
 
 ICON_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 
@@ -242,7 +245,7 @@ def main():
     # 5. 对齐（-p：按页对齐未压缩的 .so，AGP 同款做法）+ 签名
     aligned = os.path.join(work, "aligned.apk")
     run(env, [zipalign, "-p", "-f", "4", base, aligned])
-    out = os.path.join(OUT_DIR, "仓管家手机版.apk")
+    out = os.path.join(OUT_DIR, APK_NAME)
     run(env, [apksigner, "sign", "--ks", KS, "--ks-pass", "pass:" + KS_PASS,
               "--key-pass", "pass:" + KS_PASS, "--ks-key-alias", "cgm",
               "--out", out, aligned])

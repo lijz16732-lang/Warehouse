@@ -71,9 +71,29 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         try {
             buildUi(savedInstanceState);
+            showLastCrash();            // 上次若闪退过，把堆栈摆出来（可长按复制）
         } catch (Throwable t) {
             showStartupError(t);        // 宁可显示一行报错，也不要静默闪退
         }
+    }
+
+    /** 上次进程崩溃的堆栈（CgmApp 在 attachBaseContext 里记录），显示后即删除。 */
+    private void showLastCrash() {
+        final String txt = CgmApp.takeCrash(this);
+        if (txt == null) return;
+        AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle("上次启动异常（长按可复制，发给开发者即可定位）")
+                .setMessage(txt)
+                .setPositiveButton("知道了", null)
+                .create();
+        d.setOnShowListener(x -> {
+            android.widget.TextView tv = d.findViewById(android.R.id.message);
+            if (tv != null) {
+                tv.setTextIsSelectable(true);
+                tv.setTextSize(10);
+            }
+        });
+        d.show();
     }
 
     /** 启动失败时把异常直接显示在屏幕上（截图即可定位），避免用户只看到「闪退」。 */
