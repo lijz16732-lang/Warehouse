@@ -129,16 +129,13 @@ class PhoneTab(ttk.Frame):
         self._filter_label(bar_i, "状态")
         self.cb_state = self._filter_combo(
             bar_i, self.var_f_state, 9, values=("全部", "待转入", "已转入"))
-
-        # 第二行：同步时间（手机上传进电脑的时间）+ 本月/今天快捷键
-        bar_i2 = self._filter_bar(self.frm_items, pady=(6, 0))
-        self._filter_label(bar_i2, "同步时间")
-        self.ent_sync_from = self._filter_entry(bar_i2, self.var_f_sync_from)
-        self._filter_label(bar_i2, "起", pad=(2, 6))
-        self.ent_sync_to = self._filter_entry(bar_i2, self.var_f_sync_to)
-        self._filter_label(bar_i2, "止", pad=(2, 6))
+        self._filter_label(bar_i, "同步时间")
+        self.ent_sync_from = self._filter_entry(bar_i, self.var_f_sync_from)
+        self._filter_label(bar_i, "起", pad=(2, 6))
+        self.ent_sync_to = self._filter_entry(bar_i, self.var_f_sync_to)
+        self._filter_label(bar_i, "止", pad=(2, 6))
         self.qb_sync_month, self.qb_sync_today = self._quick_buttons(
-            bar_i2, "var_f_sync_from", "var_f_sync_to")
+            bar_i, "var_f_sync_from", "var_f_sync_to")
 
         # 出售：类型 / 买家 / 出售时间区间（支持到时分）+ 本月/今天快捷键
         self.var_f_type = tk.StringVar(value=self._ALL)
