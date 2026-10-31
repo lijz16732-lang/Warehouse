@@ -137,6 +137,13 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 自检入口（adb: am start -n 包名/.ScanActivity --ez diag true）：
+        // 不开相机、不拍照，自己画一张含型号文字的图，跑完整「初始化→getClient→识别」
+        // 链路并把每步结果打到 logcat(CGMDIAG) 与屏幕——用来分辨是引擎没起来还是识别不准。
+        if (getIntent().getBooleanExtra("diag", false)) {
+            runDiag();
+            return;
+        }
         isQr = MODE_QR.equals(getIntent().getStringExtra(EXTRA_MODE));
         if (isQr) {
             Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
@@ -155,6 +162,75 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             // 相机不在这里开：等 surfaceCreated / 权限回调，避免 surface 未就绪导致黑屏
         } else {
             startShootFlow();
+        }
+    }
+
+    // ------------------------------------------------------------- 自检入口
+
+    /** 不开相机、不拍照的自检：造一张含型号文字的图，跑「初始化→getClient→识别」，
+     *  每步结果打到 logcat 标签 CGMDIAG 并显示在屏幕上（截图即可）。 */
+    private void runDiag() {
+        final TextView tv = new TextView(this);
+        tv.setTextSize(11);
+        tv.setTextIsSelectable(true);
+        tv.setPadding(dp(16), dp(48), dp(16), dp(16));
+        tv.setText("自检中…");
+        setContentView(tv);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final StringBuilder sb = new StringBuilder();
+                try {
+                    sb.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS[0]).append('\n');
+                    sb.append("CL: ").append(ScanActivity.class.getClassLoader()).append('\n');
+                    for (String cn : new String[]{
+                            "com.google.android.datatransport.runtime.TransportRuntime",
+                            "com.google.android.datatransport.runtime.dagger.internal.Factory",
+                            "com.google.android.datatransport.runtime.DaggerTransportRuntimeComponent",
+                            "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery",
+                            "com.google.mlkit.common.internal.MlKitInitProvider",
+                    }) {
+                        sb.append("forName ").append(cn.substring(cn.lastIndexOf('.') + 1))
+                                .append(": ").append(tryForName(cn)).append('\n');
+                    }
+                    ensureMlKit();
+                    sb.append("getInstance: ").append(mlKitReady() ? "OK" : "FAIL")
+                            .append(initErr == null ? "" : " | " + initErr).append('\n');
+                    TextRecognizer rec = TextRecognition.getClient(
+                            new ChineseTextRecognizerOptions.Builder().build());
+                    sb.append("getClient: OK\n");
+                    Bitmap bmp = Bitmap.createBitmap(900, 240, Bitmap.Config.ARGB_8888);
+                    Canvas cv = new Canvas(bmp);
+                    cv.drawColor(Color.WHITE);
+                    Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    p.setColor(Color.BLACK);
+                    p.setTextSize(72);
+                    p.setTypeface(Typeface.DEFAULT_BOLD);
+                    cv.drawText("SEREAM T40 59633", 24, 150, p);
+                    Task<Text> task = rec.process(InputImage.fromBitmap(bmp, 0));
+                    Text r = com.google.android.gms.tasks.Tasks.await(task);
+                    sb.append("识别结果: ").append(r.getText()).append('\n');
+                    sb.append("块数: ").append(r.getTextBlocks().size()).append('\n');
+                } catch (Throwable t) {
+                    sb.append("FAILED: ").append(android.util.Log.getStackTraceString(t));
+                }
+                android.util.Log.i("CGMDIAG", sb.toString());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        tv.setText(sb.toString());
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private static String tryForName(String cn) {
+        try {
+            Class.forName(cn);
+            return "OK";
+        } catch (Throwable t) {
+            return t.getClass().getSimpleName() + ": " + t.getMessage();
         }
     }
 
@@ -360,7 +436,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             crop.recycle();
             String msg = brief(t);
             if (initErr != null) msg = "init:" + initErr + " / " + msg;
-            status.setText("识别引擎没能启动 v" + verName()
+            // 分清阶段：引擎本身没起来 vs 引擎起来了但识别器创建失败（多为缺依赖类）
+            String head = mlKitReady() ? "识别器启动失败" : "识别引擎没能启动";
+            status.setText(head + " v" + verName()
                     + "（" + msg + "），点「识别」重试");
         }
     }

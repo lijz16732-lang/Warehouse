@@ -8,8 +8,8 @@
      「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="31"
-    android:versionName="1.28.5">
+    android:versionCode="32"
+    android:versionName="1.28.6">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 

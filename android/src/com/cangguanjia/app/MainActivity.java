@@ -72,6 +72,12 @@ public class MainActivity extends Activity {
         try {
             buildUi(savedInstanceState);
             showLastCrash();            // 上次若闪退过，把堆栈摆出来（可长按复制）
+            // 自检转发：adb am start -n 包名/.MainActivity --ez diag true
+            // （ScanActivity 不导出，只能由本 App 自己拉起）
+            if (getIntent().getBooleanExtra("diag", false)) {
+                startActivity(new Intent(this, ScanActivity.class)
+                        .putExtra("diag", true));
+            }
         } catch (Throwable t) {
             showStartupError(t);        // 宁可显示一行报错，也不要静默闪退
         }

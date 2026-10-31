@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -176,8 +177,9 @@ def main():
     ensure_keystore(env)
     dedupe_libs()
 
-    work = os.path.join(HERE, ".work")
-    shutil.rmtree(work, ignore_errors=True)
+    # 每次构建用独立工作目录：不删除旧目录（整目录删除可能被安全策略拦截，
+    # 且旧目录留着便于排查上一次构建产物）
+    work = os.path.join(HERE, ".work_" + time.strftime("%m%d_%H%M%S"))
     obj = os.path.join(work, "obj"); os.makedirs(obj)
     dex = os.path.join(work, "dex"); os.makedirs(dex)
     os.makedirs(OUT_DIR, exist_ok=True)

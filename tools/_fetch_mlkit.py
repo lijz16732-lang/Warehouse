@@ -10,10 +10,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 BASE = "https://dl.google.com/android/maven2/"
+# Maven Central：javax.inject 等非 Google 依赖不在 dl.google.com，必须另找
+CENTRAL = "https://repo1.maven.org/maven2/"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIBS = os.path.join(ROOT, "android", "libs")
 TOP = [
     ("com.google.mlkit", "text-recognition-chinese", "16.0.1"),
+    # dagger/transport 的父接口 Provider 在这里；缺了它 ML Kit 创建识别器时
+    # NoClassDefFoundError: javax/inject/Provider → 表现为「识别引擎没能启动」
+    ("javax.inject", "javax.inject", "1"),
 ]
 NS = "{http://maven.apache.org/POM/4.0.0}"
 
@@ -24,6 +29,13 @@ def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "cgm-fetch/1.0"})
     with opener.open(req, timeout=60) as r:
         return r.read()
+
+
+def repos(g):
+    """该 groupId 该去哪找：Google 自家在 dl.google.com，其余优先 Central。"""
+    if g.startswith(("com.google", "androidx")):
+        return [BASE, CENTRAL]
+    return [CENTRAL, BASE]
 
 
 def pom_path(g, a, v):
@@ -69,25 +81,35 @@ def main():
         if key in seen:
             continue
         seen.add(key)
-        try:
-            pom = fetch(BASE + pom_path(g, a, v))
-        except Exception as e:
-            print("!! POM 拉取失败 %s:%s:%s → %s" % (g, a, v, e))
+        pom = None
+        for repo in repos(g):
+            try:
+                pom = fetch(repo + pom_path(g, a, v))
+                break
+            except Exception as e:
+                last = e
+        if pom is None:
+            print("!! POM 拉取失败 %s:%s:%s → %s" % (g, a, v, last))
             continue
         pkg = pom_packaging(pom)
         ext = "aar" if pkg.lower() == "aar" else "jar"
         fname = "%s-%s.%s" % (a, v, ext)
         dst = os.path.join(LIBS, fname)
         if not os.path.exists(dst):
-            url = "%s%s/%s/%s/%s" % (BASE, g.replace(".", "/"), a, v, fname)
-            try:
-                data = fetch(url)
-                with open(dst, "wb") as f:
-                    f.write(data)
-                print("+ %-8s %-60s %6.1f KB" % (ext, fname, len(data) / 1024.0))
-            except Exception as e:
-                print("!! 下载失败 %s → %s" % (url, e))
+            data, used = None, None
+            for repo in repos(g):
+                url = "%s%s/%s/%s/%s" % (repo, g.replace(".", "/"), a, v, fname)
+                try:
+                    data, used = fetch(url), url
+                    break
+                except Exception as e:
+                    last = e
+            if data is None:
+                print("!! 下载失败 %s:%s:%s → %s" % (g, a, v, last))
                 continue
+            with open(dst, "wb") as f:
+                f.write(data)
+            print("+ %-8s %-60s %6.1f KB" % (ext, fname, len(data) / 1024.0))
         else:
             print("  已有   %s" % fname)
         for dep in parse_deps(pom):

@@ -945,6 +945,13 @@ try:
                                       "text-recognition-chinese-16.0.1.aar"))
           and not os.path.isfile(os.path.join(_android_dir, "assets",
                                               "tessdata", "chi_sim.traineddata")))
+    # v1.28.6 真机/模拟器实测出的真根因：dagger 的 Factory 实现 javax.inject.Provider，
+    # 缺这个 Maven Central 的小 jar → 创建识别器时 NoClassDefFoundError（被误读成
+    # 「引擎没初始化」）。它不在 dl.google.com，只能从 Central 抓，必须锁死在 libs。
+    check("javax.inject 已随包（dagger/transport 的父接口，缺了识别器创建必失败）",
+          os.path.isfile(os.path.join(_android_dir, "libs", "javax.inject-1.jar")))
+    check("打包脚本带了缺失类扫描工具（换库后先跑它再出包）",
+          os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
     # v1.28.1 用户实测「界面正常、识别失败」：手写打包不合并 AAR 清单，
     # ML Kit 初始化入口与识别器注册全在 AAR 清单里，必须手工搬到 App 清单
     check("ML Kit 识别器注册已手工声明（缺了必「识别失败」）",
