@@ -44,7 +44,7 @@ main { flex:1; overflow:auto; padding:12px; }
 .frow { display:flex; gap:10px; }
 .fcol { flex:1; margin-bottom:10px; }
 .fcol label { display:block; font-size:12px; color:var(--soft); margin-bottom:4px; }
-/* 带「扫一扫」的标签行 */
+/* 带「拍照识别」的标签行 */
 label.lbl-io { display:flex; align-items:center; }
 label.lbl-io button { margin-left:auto; padding:3px 10px; font-size:12px; line-height:1.6; }
 /* 分段 */
@@ -144,7 +144,7 @@ tr:active { background:var(--active); }
         <div class="fcol"><label>品类</label><input id="aCate"></div>
       </div>
       <div class="frow">
-        <div class="fcol"><label class="lbl-io">型号<button type="button" class="gray small" id="btnScanModel">扫一扫</button></label><input id="aModel"></div>
+        <div class="fcol"><label class="lbl-io">型号<button type="button" class="gray small" id="btnScanModel">拍照识别</button></label><input id="aModel"></div>
         <div class="fcol"><label>成色</label><input id="aCond"></div>
       </div>
       <div class="frow">
@@ -1129,7 +1129,7 @@ function openEdit(r) {
       l.className = 'lbl-io';
       l.appendChild(document.createTextNode(label));
       var sb = document.createElement('button');
-      sb.type = 'button'; sb.className = 'gray small'; sb.textContent = '扫一扫';
+      sb.type = 'button'; sb.className = 'gray small'; sb.textContent = '拍照识别';
       sb.onclick = function () { startScan('edit'); };
       l.appendChild(sb);
     } else {
@@ -1191,7 +1191,7 @@ function openEdit(r) {
 }
 $('shClose').onclick = function () { $('mask').classList.add('hide'); };
 
-/* ================= 扫一扫识别型号 =================
+/* ================= 拍照识别型号 =================
    相机实时取景，本机离线 OCR（模型随 App 打包），识别到的文字点一下就填进型号框。
    完全在手机上跑，不需要电脑、不需要网络。 */
 var ocrTarget = 'add';
@@ -1199,13 +1199,13 @@ function startScan(target) {
   ocrTarget = target || 'add';
   var b = window.AndroidOcr;
   if (!b || typeof b.scan !== 'function') {
-    toast('扫一扫需要仓管家手机 App（用手机浏览器打开时不可用）');
+    toast('拍照识别需要仓管家手机 App（用手机浏览器打开时不可用）');
     return;
   }
   try {
     b.scan();
   } catch (e) {
-    toast('打不开扫一扫：' + (e.message || e));
+    toast('打不开拍照识别：' + (e.message || e));
   }
 }
 window.__ocrFill = function (text) {

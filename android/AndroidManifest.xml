@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 仓管家手机 App：WebView 壳 + 本机离线 OCR（扫一扫识别型号）。
-     usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。 -->
+<!-- 仓管家手机 App：WebView 壳 + 本机离线 OCR（拍照识别型号）。
+     usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。
+
+     注意：本工程用 build_apk.py 手工打包（无 Gradle），不会自动合并 libs/*.aar 的
+     AndroidManifest。ML Kit 的初始化入口与识别器注册全靠 AAR 清单里的
+     MlKitInitProvider / MlKitComponentDiscoveryService 的 meta-data，缺了就会
+     「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="26"
-    android:versionName="1.28.0">
+    android:versionCode="27"
+    android:versionName="1.28.1">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -52,5 +57,42 @@
         android:authorities="com.cangguanjia.app.photos"
         android:exported="false"
         android:grantUriPermissions="true"/>
+
+    <!-- ==== 以下来自 libs/*.aar 的清单，Gradle 会自动合并，手写打包必须手工补 ==== -->
+    <!-- 1) 组件发现：识别器（Registrar）在这里注册，缺了引擎找不到任何识别能力。
+         注意：AAR 里的 MlKitInitProvider 故意不声明——它在 attachInfo 里对 authority
+         有硬断言，声明后一旦不匹配就是「App 一启动就崩」；初始化改由 ScanActivity
+         调 MlKit.initialize() 完成（与 provider 内部同一个 MlKitContext.zza 调用，
+         效果等价，失败也只影响这一次识别，不会拖垮整个 App）。 -->
+    <service
+        android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
+        android:exported="false"
+        android:directBootAware="true">
+      <meta-data
+          android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar"
+          android:value="com.google.firebase.components.ComponentRegistrar"/>
+      <meta-data
+          android:name="com.google.firebase.components:com.google.mlkit.vision.common.internal.VisionCommonRegistrar"
+          android:value="com.google.firebase.components.ComponentRegistrar"/>
+      <meta-data
+          android:name="com.google.firebase.components:com.google.mlkit.vision.text.internal.TextRegistrar"
+          android:value="com.google.firebase.components.ComponentRegistrar"/>
+    </service>
+
+    <!-- 2) 生命周期初始化（androidx.startup，lifecycle-process AAR 声明） -->
+    <provider
+        android:name="androidx.startup.InitializationProvider"
+        android:authorities="com.cangguanjia.app.androidx-startup"
+        android:exported="false">
+      <meta-data
+          android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+          android:value="androidx.startup"/>
+    </provider>
+
+    <!-- 3) GMS 版本声明（play-services-basement 声明，值取自其 res 的
+         integer/google_play_services_version = 12451000；手写打包不合并 AAR 资源故写死） -->
+    <meta-data
+        android:name="com.google.android.gms.version"
+        android:value="12451000"/>
   </application>
 </manifest>

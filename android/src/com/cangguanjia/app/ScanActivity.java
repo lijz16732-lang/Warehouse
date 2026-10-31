@@ -39,6 +39,7 @@ import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
+import com.google.mlkit.common.MlKit;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
@@ -64,7 +65,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 扫一扫识别型号（v1.28.0 重构）：拍照 → 框选 → ML Kit 本地离线识别。
+ * 拍照识别型号（v1.28.0 重构）：拍照 → 框选 → ML Kit 本地离线识别。
  *
  * 为什么不用实时预览帧识别（v1.27.x 及以前的做法）：
  *   实时预览流分辨率低（≤1600px）、连续对焦近距常不收敛，识别率差还费电；
@@ -96,7 +97,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private boolean isQr = false;
     private final MultiFormatReader qrReader = new MultiFormatReader();
 
-    /** 识别引擎全局复用：第二次进入扫一扫不用重新创建。 */
+    /** 识别引擎全局复用：第二次进入拍照识别不用重新创建。 */
     private static TextRecognizer sRecognizer;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -159,7 +160,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 .setTitle("需要相机权限")
                 .setMessage(isQr
                         ? "扫二维码需要使用相机取景。画面仅在手机本地处理，不保存、不上传。"
-                        : "扫一扫识别型号需要拍一张照片，识别完全在手机本地完成（离线 OCR）；"
+                        : "拍照识别型号需要拍一张照片，识别完全在手机本地完成（离线 OCR）；"
                           + "照片不保存到相册、不上传，识别完立即删除。")
                 .setCancelable(false)
                 .setPositiveButton("去允许",
@@ -175,7 +176,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         new android.content.DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(android.content.DialogInterface d, int w) {
-                                toast("没有相机权限，无法扫一扫（可在系统设置里允许）");
+                                toast("没有相机权限，无法拍照识别（可在系统设置里允许）");
                                 setResult(RESULT_CANCELED);
                                 finish();
                             }
@@ -339,8 +340,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                         @Override
                         public void onFailure(Exception e) {
                             setActionsEnabled(true);
-                            status.setText("识别失败：" + e.getClass().getSimpleName()
-                                    + "，点「识别」重试");
+                            status.setText("识别失败：" + brief(e) + "，点「识别」重试");
                         }
                     })
                     .addOnCompleteListener(new OnCompleteListener<Text>() {
@@ -352,17 +352,37 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         } catch (Throwable t) {
             setActionsEnabled(true);
             crop.recycle();
-            status.setText("识别失败，点「识别」重试");
+            status.setText("识别引擎没能启动（" + brief(t)
+                    + "），点「识别」重试");
         }
+    }
+
+    /** 异常压成一小段可读文字，方便用户反馈时截图。 */
+    private String brief(Throwable t) {
+        String m = t.getMessage();
+        if (m == null || m.trim().isEmpty()) return t.getClass().getSimpleName();
+        m = m.replace('\n', ' ').trim();
+        return m.length() > 60 ? m.substring(0, 60) + "…" : m;
     }
 
     private TextRecognizer getRecognizer() {
         if (sRecognizer == null) {
             status.setText("正在准备识别引擎…");
+            ensureMlKit();
             sRecognizer = TextRecognition.getClient(
                     new ChineseTextRecognizerOptions.Builder().build());
         }
         return sRecognizer;
+    }
+
+    /** 手动初始化 ML Kit（与 AAR 里 MlKitInitProvider 内部调用等价）。
+     *  不声明那个 provider 是为了避免它 attachInfo 的 authority 断言在启动时崩 App。 */
+    private void ensureMlKit() {
+        try {
+            MlKit.initialize(getApplicationContext());
+        } catch (Throwable ignored) {
+            // 已初始化 / 组件注册异常都落到这里，交给 getClient 暴露具体原因
+        }
     }
 
     /** 从识别结果里挑出像型号/说明的行（去空、去符号行、去重）。 */
@@ -449,7 +469,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 launchCameraIntent();
             }
         } else {
-            toast("没有相机权限，无法扫一扫（可在系统设置里允许）");
+            toast("没有相机权限，无法拍照识别（可在系统设置里允许）");
             setResult(RESULT_CANCELED);
             finish();
         }

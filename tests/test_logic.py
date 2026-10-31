@@ -898,10 +898,10 @@ try:
           all(x in _app_src for x in
               ("操作日志", "_build_log_tab", "_load_log", "_export_log",
                "oplog_list", "oplog_clear")))
-    # v1.20.0 扫一扫识别型号（手机本地离线 OCR）
-    check("型号框有「扫一扫」按钮",
-          'id="btnScanModel"' in _app_html and "扫一扫" in _app_html)
-    check("扫一扫调用本机能力并回填型号",
+    # v1.20.0 拍照识别型号（手机本地离线 OCR）
+    check("型号框有「拍照识别」按钮",
+          'id="btnScanModel"' in _app_html and "拍照识别" in _app_html)
+    check("拍照识别调用本机能力并回填型号",
           "AndroidOcr" in _ajs and "function startScan" in _ajs
           and "window.__ocrFill" in _ajs
           and "$('btnScanModel').onclick" in _ajs)
@@ -909,11 +909,11 @@ except ImportError:
     check("App 自带页面 JS 语法可解析（esprima）", True, "esprima 未安装，跳过")
 except Exception as _e:
     check("App 自带页面 JS 语法可解析（esprima）", False, str(_e)[:100])
-# ---- 扫一扫：原生相机 + 离线 OCR（不需要电脑/网络）----
+# ---- 拍照识别：原生相机 + 离线 OCR（不需要电脑/网络）----
 _android_dir = os.path.dirname(os.path.dirname(_app_path))     # android/（页面在 assets/ 下）
 _scan_java = os.path.join(_android_dir, "src", "com", "cangguanjia", "app", "ScanActivity.java")
 _manifest = os.path.join(_android_dir, "AndroidManifest.xml")
-check("扫一扫界面存在（ScanActivity.java）", os.path.isfile(_scan_java), _scan_java)
+check("拍照识别界面存在（ScanActivity.java）", os.path.isfile(_scan_java), _scan_java)
 try:
     with open(_scan_java, encoding="utf-8") as _f:
         _sj = _f.read()
@@ -934,8 +934,8 @@ try:
           and "http" not in _sj.lower())
     check("照片即拍即用即删（不占存储）+ 采样解码与 EXIF 摆正控内存",
           "scan_tmp.jpg" in _sj and "inSampleSize" in _sj and "ExifInterface" in _sj)
-    check("扫一扫会申请相机权限", "permission.CAMERA" in _sj and "android.permission.CAMERA" in _mf)
-    check("扫一扫 Activity 已注册且竖屏", '.ScanActivity' in _mf
+    check("拍照识别会申请相机权限", "permission.CAMERA" in _sj and "android.permission.CAMERA" in _mf)
+    check("拍照识别 Activity 已注册且竖屏", '.ScanActivity' in _mf
           and 'android:screenOrientation="portrait"' in _mf)
     check("页面 → 原生桥（AndroidOcr）与回填回调",
           'addJavascriptInterface' in _mj and '"AndroidOcr"' in _mj
@@ -945,6 +945,39 @@ try:
                                       "text-recognition-chinese-16.0.1.aar"))
           and not os.path.isfile(os.path.join(_android_dir, "assets",
                                               "tessdata", "chi_sim.traineddata")))
+    # v1.28.1 用户实测「界面正常、识别失败」：手写打包不合并 AAR 清单，
+    # ML Kit 初始化入口与识别器注册全在 AAR 清单里，必须手工搬到 App 清单
+    check("ML Kit 识别器注册已手工声明（缺了必「识别失败」）",
+          'MlKitComponentDiscoveryService' in _mf
+          and 'CommonComponentRegistrar' in _mf
+          and 'VisionCommonRegistrar' in _mf
+          and 'TextRegistrar' in _mf
+          and 'androidx.startup.InitializationProvider' in _mf
+          and 'ProcessLifecycleInitializer' in _mf)
+    check("不声明 MlKitInitProvider（其 authority 硬断言会在启动时崩 App），改手动初始化",
+          'com.google.mlkit.common.internal.MlKitInitProvider' not in _mf
+          and "MlKit.initialize" in _sj and "import com.google.mlkit.common.MlKit;" in _sj)
+    try:
+        import re as _re
+        import zipfile as _zip
+        _need, _libs = set(), os.path.join(_android_dir, "libs")
+        for _n in sorted(os.listdir(_libs)):
+            if not _n.endswith(".aar"):
+                continue
+            with _zip.ZipFile(os.path.join(_libs, _n)) as _z:
+                if "AndroidManifest.xml" not in _z.namelist():
+                    continue
+                _cm = _z.read("AndroidManifest.xml").decode("utf-8", "ignore")
+            for _nm in _re.findall(
+                    r'<(?:provider|service|meta-data)[^>]*android:name="([^"]+)"', _cm):
+                if _nm.startswith("com.google.mlkit") and "MlKitInitProvider" not in _nm:
+                    _need.add(_nm)      # provider 是被刻意排除的（见上一条检查）
+        _missing = sorted(x for x in _need if x not in _mf)
+        check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
+              not _missing, "缺少: %s" % _missing[:4])
+    except Exception as _e2:
+        check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
+              False, str(_e2)[:100])
     check("Android 壳不显示系统标题栏（黑色「仓管家」条）",
           'Theme.Material.Light.NoActionBar' in _mf)
     # v1.20.1 修黑屏：必须等 surface 就绪再 setPreviewDisplay，且有无帧看门狗
@@ -957,7 +990,7 @@ try:
           "正在重试" in _sj and "相机打不开" in _sj
           and "releaseCamera();" in _sj and "startCamera();" in _sj)
     # v1.28.0 对焦：二维码实时模式保留点按对焦 + 周期重新对焦兜底
-    check("扫一扫支持点按对焦与近距对焦兜底",
+    check("拍照识别支持点按对焦与近距对焦兜底",
           "tapFocus" in _sj and "setFocusAreas" in _sj
           and "FOCUS_MODE_MACRO" in _sj and "pickFocusMode" in _sj
           and "refocus" in _sj and "resumeContinuous" in _sj)
@@ -1021,7 +1054,7 @@ try:
     check("二维码只有地址时也不报错（连接码留空）",
           _qrb2 == "http://10.0.0.8:8765" and _qrc2 == "", (_qrb2, _qrc2))
 except Exception as _e:
-    check("扫一扫原生代码可检查", False, str(_e)[:100])
+    check("拍照识别原生代码可检查", False, str(_e)[:100])
 # 手机页面 JS 语法校验（esprima 纯 Python 解析，防转义/语法坏页）
 try:
     import esprima  # noqa: E402

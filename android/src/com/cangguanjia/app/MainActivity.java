@@ -95,7 +95,7 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
-        // 页面调用本机「扫一扫」识别文字（完全离线，不走电脑）
+        // 页面调用本机「拍照识别」识别文字（完全离线，不走电脑）
         web.addJavascriptInterface(new ScanBridge(), "AndroidOcr");
         // 页面调用本机「拍照/相册」加照片（原生读取+压缩，回传 base64）
         web.addJavascriptInterface(new PhotoBridge(), "AndroidPhotos");
@@ -196,7 +196,7 @@ public class MainActivity extends Activity {
             + "本应用不连接任何云服务器，不在云端留存任何数据。\n\n"
             + "2. 局域网同步：仅当您主动开启「数据共享到电脑端」时，应用才会与同一局域网内"
             + "您自己的电脑直接通信；数据不经互联网传输，也不经过任何第三方。\n\n"
-            + "3. 相机权限：仅用于 ① 拍照添加商品照片 ② 扫一扫识别型号文字 / 二维码。"
+            + "3. 相机权限：仅用于 ① 拍照添加商品照片 ② 拍照识别型号文字 / 二维码。"
             + "相机画面只在手机本地处理，不拍摄存储无关内容、不上传互联网。\n\n"
             + "4. 照片：您添加的商品照片经压缩后保存在本机；开启共享后仅同步到您自己的电脑，"
             + "删除记录时照片一并删除。\n\n"
