@@ -592,12 +592,47 @@ class Store(object):
         out = [dict(r) for r in rows]
         return [r for r in out if self._m_kw_match(r, kw)]
 
+    # 行颜色标记：meta["phone_colors"]（JSON）{"item:<lid>"/"sale:<lid>": "#RRGGBB"}
+    PHONE_COLORS_KEY = "phone_colors"
+
+    def m_colors(self):
+        """手机数据行颜色标记 {key: "#RRGGBB"}。key = "item:<lid>" 或 "sale:<lid>"。"""
+        import json as _json
+        try:
+            raw = _json.loads(
+                self.get_meta(self.PHONE_COLORS_KEY, "") or "{}")
+        except (ValueError, TypeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            return {}
+        out = {}
+        for k, v in raw.items():
+            s = str(v).strip()
+            if (":" in str(k) and s.startswith("#")
+                    and len(s) in (7, 9)):
+                out[str(k)] = s
+        return out
+
+    def m_set_color(self, key, color):
+        """设置/取消一条手机记录的行颜色（color 为 None/空 → 取消）。"""
+        import json as _json
+        cur = self.m_colors()
+        s = str(color or "").strip()
+        if s.startswith("#") and len(s) in (7, 9):
+            cur[str(key)] = s
+        else:
+            cur.pop(str(key), None)
+        self.set_meta(self.PHONE_COLORS_KEY,
+                      _json.dumps(cur, ensure_ascii=False) if cur else "")
+        return cur
+
     def m_del_item(self, lid):
         with self._lock:
             row = self.conn.execute("SELECT code, model FROM phone_items WHERE lid = ?",
                                     (int(lid),)).fetchone()
             self.conn.execute("DELETE FROM phone_items WHERE lid = ?", (int(lid),))
         self.conn.commit()
+        self.m_set_color("item:%d" % int(lid), None)     # 颜色标记一并清理
         d = dict(row) if row else {}
         if d.get("code"):                    # 手机区商品照片一并清理
             self.photos_wipe("phone", d["code"])
@@ -609,6 +644,7 @@ class Store(object):
                                     (int(lid),)).fetchone()
             self.conn.execute("DELETE FROM phone_sales WHERE lid = ?", (int(lid),))
         self.conn.commit()
+        self.m_set_color("sale:%d" % int(lid), None)     # 颜色标记一并清理
         self.log_op("手机删除出售", dict(row)["code"] if row else "", "手机区出售记录")
 
     def m_clear(self):
@@ -618,6 +654,7 @@ class Store(object):
             self.conn.execute("DELETE FROM phone_items")
             self.conn.execute("DELETE FROM phone_sales")
         self.conn.commit()
+        self.set_meta(self.PHONE_COLORS_KEY, "")         # 颜色标记一并清理
         self.photos_wipe_kind("phone")       # 手机区照片一并清理
         self.log_op("清空手机数据", "", "%d 条手机区记录" % n)
 

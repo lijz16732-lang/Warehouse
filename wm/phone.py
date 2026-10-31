@@ -38,6 +38,14 @@ _PHONE_ANCHOR = {"code": "w", "brand": "center", "category": "center",
                  "out_type": "center"}
 _LEFT = ("brand", "model", "remark", "shelf", "buyer")   # 可横向拉伸的列
 
+# 行颜色标记色板（右键 → 标记颜色）：先注册的 tag 优先级高（Treeview 规则），
+# 颜色标记需盖过「已转入」淡绿和斑马纹，故在 done/odd 之前 tag_configure
+_MARK_COLORS = (
+    ("红", "#FADBD8"), ("橙", "#FAE5C3"), ("黄", "#FCF3CF"),
+    ("绿", "#D5F5E3"), ("蓝", "#D4E6F1"), ("紫", "#E8DAEF"),
+    ("灰", "#E5E7E9"),
+)
+
 
 class PhoneTab(ttk.Frame):
     """主窗口「手机数据」页签：手机库存 + 手机出售记录。"""
@@ -49,6 +57,7 @@ class PhoneTab(ttk.Frame):
         self.item_rows = []
         self.sale_rows = []
         self._maps = {}           # tree → {iid: 记录}（两表各自独立，防覆盖）
+        self._hovers = {}         # tree → RowHover（划过高亮，复制取悬停行用）
         self._kw_debounce = None
         self._build()
 
@@ -158,18 +167,46 @@ class PhoneTab(ttk.Frame):
         # 滚动条先占位（pack 顺序坑：expand 的表格先 pack 会把滚动条挤掉）
         vs.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
+        for _name, _hex in _MARK_COLORS:     # 颜色标记优先级最高
+            tree.tag_configure("mark_%s" % _hex.lstrip("#"),
+                               background=_hex)
         tree.tag_configure("done", background="#F0F7F0")   # 已转入：淡绿底
         tree.tag_configure("odd", background="#F7FAFD")
-        RowHover(tree, self.app.root)
+        self._hovers[tree] = RowHover(tree, self.app.root)
         tree.bind("<Delete>", lambda e: self.delete_selected())
-        # 右键菜单：删除选中 / 转入库存（仅手机库存表）
+        # 划过高亮行上 Ctrl+C：复制鼠标所指单元格（不在表格上则复制选中行）
+        tree.bind("<Control-c>", lambda e, t=tree: self._copy_hover(t))
+        # 右键菜单：复制 / 删除选中 / 转入库存（仅手机库存表）
         menu = tk.Menu(tree, tearoff=0)
+        menu.add_command(label="复制此格",
+                         command=lambda t=tree: self._copy_menu_cell(t))
+        menu.add_command(label="复制整行",
+                         command=lambda t=tree: self._copy_menu_row(t))
+        menu.add_separator()
         menu.add_command(label="删除选中", command=self.delete_selected)
         if is_items:
             menu.add_command(label="转入库存", command=self.transfer_selected)
+        if is_items:
+            mkind = "item"
+        else:
+            mkind = "sale"
+        cmenu = tk.Menu(menu, tearoff=0)
+        for _name, _hex in _MARK_COLORS:
+            cmenu.add_command(
+                label=_name, command=lambda h=_hex, k=mkind, t=tree:
+                self.mark_color(t, k, h))
+        cmenu.add_separator()
+        cmenu.add_command(
+            label="自定义颜色…", command=lambda k=mkind, t=tree:
+            self.mark_color(t, k, None))
+        cmenu.add_command(
+            label="取消标记", command=lambda k=mkind, t=tree:
+            self.mark_color(t, k, ""))
+        menu.add_cascade(label="标记颜色", menu=cmenu)
         menu.add_command(label="刷新", command=self.refresh_rows)
 
         def _popup(ev):
+            tree._rb_x, tree._rb_y = ev.x, ev.y   # 右键位置（复制此格用）
             # 空白处右键也弹菜单（此时保留原有选中，不动选择）
             iid = tree.identify_row(ev.y)
             if iid and iid not in tree.selection():
@@ -218,8 +255,10 @@ class PhoneTab(ttk.Frame):
             return
         self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS,
                    self._item_state,
-                   photo_codes=self._store().photo_codes("phone"))
-        self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS)
+                   photo_codes=self._store().photo_codes("phone"),
+                   kind="item")
+        self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS,
+                   kind="sale")
         self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
                                    % (len(self.item_rows), len(self.sale_rows)))
 
@@ -227,10 +266,12 @@ class PhoneTab(ttk.Frame):
     def _item_state(r):
         return "已转入库存" if r.get("transferred") else "待转入"
 
-    def _fill(self, tree, rows, cols_def, extra=None, photo_codes=None):
+    def _fill(self, tree, rows, cols_def, extra=None, photo_codes=None,
+              kind=None):
         tree.delete(*tree.get_children())
         mapping = {}                       # 每个 tree 独立映射（共用会互相覆盖）
         self._maps[tree] = mapping
+        colors = self._store().m_colors() if kind else {}
         for i, r in enumerate(rows):
             vals = []
             for key, _t, _w in cols_def:
@@ -245,12 +286,54 @@ class PhoneTab(ttk.Frame):
             if photo_codes is not None:
                 vals.append("📷" if (r.get("code") or "") in photo_codes else "")
             tags = []
+            ckey = "%s:%s" % (kind, int(r.get("lid") or 0)) if kind else ""
+            cval = colors.get(ckey)
+            if cval:
+                tags.append("mark_%s" % cval.lstrip("#"))
             if extra and r.get("transferred"):
                 tags.append("done")
             if i % 2 == 1:
                 tags.append("odd")
             iid = tree.insert("", "end", values=vals, tags=tags)
             mapping[iid] = r
+
+    def mark_color(self, tree, kind, color=None):
+        """给选中行标记颜色（color=None 打开取色器；"" 取消标记）。"""
+        mapping = self._maps.get(tree) or {}
+        sels = tree.selection()
+        if not sels:
+            messagebox.showinfo("标记颜色", "请先选中要标记的行。",
+                                parent=self.root())
+            return
+        if color is None:                  # 自定义：系统取色器
+            try:
+                from tkinter import colorchooser
+                picked = colorchooser.askcolor(
+                    color="#FCF3CF", title="选择标记颜色",
+                    parent=self.root())
+                color = picked[1] if picked and picked[1] else ""
+            except Exception:
+                color = ""
+            if not color:
+                return                     # 取色器被取消 → 不改动
+        keys = []
+        for iid in sels:
+            r = mapping.get(iid)
+            if r and r.get("lid"):
+                keys.append("%s:%d" % (kind, int(r["lid"])))
+        if not keys:
+            return
+        try:
+            for k in keys:
+                self._store().m_set_color(k, color)
+        except Exception as e:
+            messagebox.showerror("标记失败", str(e), parent=self.root())
+            return
+        self.refresh_rows()
+        if color:
+            self._status("已标记 %d 行颜色" % len(keys))
+        else:
+            self._status("已取消 %d 行的颜色标记" % len(keys))
 
     def _debounce(self, _ev=None):
         if self._kw_debounce is not None:
@@ -374,6 +457,71 @@ class PhoneTab(ttk.Frame):
                 self.app._open_folder(os.path.dirname(path))
             except Exception:
                 pass
+
+    # ------------------------------------------------------------ 复制
+    def _clip(self, text):
+        r = self.root()
+        r.clipboard_clear()
+        r.clipboard_append(text)
+
+    def _cell_text(self, tree, x, y):
+        """(x, y) 处单元格文本；不在数据单元格上返回 None。"""
+        try:
+            if tree.identify_region(x, y) != "cell":
+                return None
+            row = tree.identify_row(y)
+            cidx = int(str(tree.identify_column(x)).replace("#", "")) - 1
+        except (TypeError, ValueError):
+            return None
+        if not row or cidx < 0:
+            return None
+        vals = tree.item(row, "values")
+        if cidx >= len(vals):
+            return None
+        return str(vals[cidx])
+
+    def _copy_hover(self, tree):
+        """Ctrl+C：划过高亮行上 → 复制鼠标所指单元格；否则复制选中行。"""
+        hv = self._hovers.get(tree)
+        iid = hv.row if hv else None
+        px, py = tree.winfo_pointerxy()
+        x, y = px - tree.winfo_rootx(), py - tree.winfo_rooty()
+        if iid and tree.identify_row(y) == iid:
+            text = self._cell_text(tree, x, y)
+            if text:
+                self._clip(text)
+                self._status("已复制：%s" % text[:60])
+                return
+        sels = tree.selection()
+        if sels:
+            lines = ["\t".join(str(v) for v in tree.item(s, "values"))
+                     for s in sels]
+            self._clip("\n".join(lines))
+            self._status("已复制 %d 行" % len(sels))
+
+    def _copy_menu_cell(self, tree):
+        x = getattr(tree, "_rb_x", None)
+        y = getattr(tree, "_rb_y", None)
+        if x is None:
+            return
+        text = self._cell_text(tree, x, y)
+        if text:
+            self._clip(text)
+            self._status("已复制：%s" % text[:60])
+
+    def _copy_menu_row(self, tree):
+        x = getattr(tree, "_rb_x", None)
+        y = getattr(tree, "_rb_y", None)
+        if x is None:
+            return
+        row = tree.identify_row(y) if y is not None else None
+        if not row:
+            sels = tree.selection()
+            row = sels[0] if sels else None
+        if row:
+            vals = tree.item(row, "values")
+            self._clip("\t".join(str(v) for v in vals))
+            self._status("已复制整行")
 
     # ------------------------------------------------------------ 小工具
     def root(self):

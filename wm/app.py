@@ -1690,8 +1690,34 @@ class App(object):
     def _on_ctrl_c(self, _event=None):
         if self._drag_block:
             self.copy_block()
-        else:
-            self.copy_selected()
+            return "break"
+        # 划过高亮行上 Ctrl+C：直接复制鼠标所指的那个单元格（不用先点击）
+        hover_iid = getattr(self.hover, "row", None)
+        if hover_iid:
+            px, py = self.tree.winfo_pointerxy()
+            x = px - self.tree.winfo_rootx()
+            y = py - self.tree.winfo_rooty()
+            try:
+                on_cell = (0 <= x < self.tree.winfo_width()
+                           and 0 <= y < self.tree.winfo_height()
+                           and self.tree.identify_region(x, y) == "cell"
+                           and self.tree.identify_row(y) == str(hover_iid))
+            except Exception:
+                on_cell = False
+            if on_cell:
+                cols = self._cols()
+                try:
+                    cidx = int(str(self.tree.identify_column(x))
+                               .replace("#", "")) - 1
+                except (TypeError, ValueError):
+                    cidx = None
+                rec = self.by_id.get(str(hover_iid))
+                if (cidx is not None and 0 <= cidx < len(cols) and rec):
+                    col = cols[cidx]
+                    self._clip(self.fmt(col, rec),
+                               "已复制「%s」" % FIELD_LABEL.get(col, col))
+                    return "break"
+        self.copy_selected()
         return "break"
 
     def _copy_shortcut(self, _event=None):

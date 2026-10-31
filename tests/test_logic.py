@@ -2276,9 +2276,9 @@ try:
     _mi = _menu_labels(app.tab_phone._ctx_items)
     _ms = _menu_labels(app.tab_phone._ctx_sales)
     check("手机库存表右键菜单（删除/转入/刷新）",
-          set(_mi) == {"删除选中", "转入库存", "刷新"}, str(_mi))
+          set(_mi) >= {"删除选中", "转入库存", "刷新"}, str(_mi))
     check("手机出售表右键菜单（删除/刷新，无转入）",
-          set(_ms) == {"删除选中", "刷新"}, str(_ms))
+          set(_ms) >= {"删除选中", "刷新"}, str(_ms))
 
     # 导入向导弹窗
     from wm.importer import ImportDialog

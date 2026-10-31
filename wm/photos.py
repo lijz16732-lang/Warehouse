@@ -433,28 +433,96 @@ class PhotoStrip(tk.Frame):
                 apply_window_icon(pv)
                 idx = {"i": names.index(n)}
                 held2 = {}
-                lbl = tk.Label(pv, bg=CLR_BG)
-                lbl.pack(expand=True, fill="both", padx=10, pady=(10, 0))
+                cv = tk.Canvas(pv, bg=CLR_BG, highlightthickness=0)
+                cv.pack(expand=True, fill="both", padx=10, pady=(10, 0))
                 cnt = tk.Label(pv, bg=CLR_BG, fg=CLR_MUTED,
                                font=(self.app.fam, 9))
                 cnt.pack(pady=(4, 2))
                 bar = tk.Frame(pv, bg=CLR_BG)
                 bar.pack(pady=(2, 10))
 
+                # 缩放状态：fit = 适配屏幕的基础尺寸，zoom 相对它缩放
+                st = {"zoom": 1.0, "src": None, "fit": (1, 1),
+                      "w": 1, "h": 1}
+
+                def _render(_e=None):
+                    """按当前 zoom 重画图像（鼠标锚点缩放由调用方处理）。"""
+                    src = st["src"]
+                    if src is None:
+                        return
+                    z = st["zoom"]
+                    w = max(1, int(st["fit"][0] * z))
+                    h = max(1, int(st["fit"][1] * z))
+                    # 防极端缩放耗尽内存：总像素封顶
+                    if w * h > 16000000:
+                        k = (16000000.0 / (w * h)) ** 0.5
+                        w, h = int(w * k), int(h * k)
+                    big = src.resize((w, h), Image.LANCZOS)
+                    fg = ImageTk.PhotoImage(big)
+                    held2["im"] = fg
+                    st["w"], st["h"] = w, h
+                    vw = max(1, cv.winfo_width())
+                    vh = max(1, cv.winfo_height())
+                    cv.delete("all")
+                    if w <= vw and h <= vh:
+                        # 图比视口小 → 居中，无需滚动
+                        cv.create_image((vw - w) // 2, (vh - h) // 2,
+                                        image=fg, anchor="nw")
+                        cv.configure(scrollregion=(0, 0, vw, vh))
+                    else:
+                        cv.create_image(0, 0, image=fg, anchor="nw")
+                        cv.configure(scrollregion=(0, 0, w, h))
+                    cnt.configure(text="%d / %d · %d%%"
+                                  % (idx["i"] + 1, len(names),
+                                     int(round(z * 100))))
+
+                def _wheel(e):
+                    """滚轮缩放，以鼠标所在点为锚（点看哪就放大哪）。"""
+                    old = st["zoom"]
+                    new = min(8.0, max(0.2, old * (1.2 if e.delta > 0
+                                                   else 1 / 1.2)))
+                    if abs(new - old) < 1e-9:
+                        return
+                    ow, oh = st["w"], st["h"]
+                    # 鼠标下的图像坐标（旧尺度）
+                    px = cv.canvasx(e.x)
+                    py = cv.canvasy(e.y)
+                    st["zoom"] = new
+                    _render()
+                    # 让同一点缩放后仍留在鼠标位置下
+                    try:
+                        cv.xview_moveto(max(0, px * new / max(1, ow)
+                                            - e.x) / max(1, st["w"]))
+                        cv.yview_moveto(max(0, py * new / max(1, oh)
+                                            - e.y) / max(1, st["h"]))
+                    except Exception:
+                        pass
+
+                def _reset(_e=None):
+                    st["zoom"] = 1.0
+                    _render()
+
                 def pshow():
                     nn = names[idx["i"]]
                     im = self._pil(nn)
+                    st["zoom"] = 1.0
                     if im is not None:
                         sw = max(1, pv.winfo_screenwidth())
                         sh = max(1, pv.winfo_screenheight())
-                        big = im.copy()
-                        big.thumbnail((int(sw * 0.5), int(sh * 0.5)))
-                        fg = ImageTk.PhotoImage(big)
-                        held2["im"] = fg
-                        lbl.configure(image=fg, text="")
+                        fit = im.copy()
+                        fit.thumbnail((int(sw * 0.5), int(sh * 0.5)))
+                        st["src"] = im
+                        st["fit"] = fit.size
+                        _render()
                     else:
-                        lbl.configure(image="", text="照片加载失败")
-                    cnt.configure(text="%d / %d" % (idx["i"] + 1, len(names)))
+                        st["src"] = None
+                        cv.delete("all")
+                        cv.create_text(
+                            cv.winfo_width() // 2 or 200,
+                            cv.winfo_height() // 2 or 150,
+                            text="照片加载失败", fill=CLR_MUTED)
+                        cnt.configure(text="%d / %d"
+                                      % (idx["i"] + 1, len(names)))
                     bprev.configure(state="normal"
                                     if idx["i"] > 0 else "disabled")
                     bnext.configure(state="normal"
@@ -533,9 +601,13 @@ class PhotoStrip(tk.Frame):
                 bnext.pack(side="left", padx=4)
                 ttk.Button(bar, text="保存图片", style="Ghost.TButton",
                            command=p_save).pack(side="left", padx=4)
+                cv.bind("<MouseWheel>", _wheel)
+                cv.bind("<Double-Button-1>", _reset)
+                cv.bind("<Configure>", _render)
                 pv.bind("<Escape>", lambda e: pv.destroy())
                 pv.bind("<Left>", lambda e: pstep(-1))
                 pv.bind("<Right>", lambda e: pstep(1))
+                pv.bind("<Home>", _reset)
                 pv.withdraw()
                 pshow()
                 center_window(pv, win, force=True)
@@ -543,10 +615,9 @@ class PhotoStrip(tk.Frame):
 
                 # 大图在映射前创建 → 映射后可能不重绘（白屏），强制重设
                 def _prep(_e=None):
-                    fg = held2.get("im")
-                    if fg is not None:
+                    if held2.get("im") is not None and st["src"] is not None:
                         try:
-                            lbl.configure(image=fg)
+                            _render()
                         except Exception:
                             pass
                 pv.bind("<Map>", _prep)
