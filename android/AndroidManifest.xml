@@ -2,14 +2,14 @@
 <!-- 仓管家手机 App：WebView 壳 + 本机离线 OCR（拍照识别型号）。
      usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。
 
-     注意：本工程用 build_apk.py 手工打包（无 Gradle），不会自动合并 libs/*.aar 的
-     AndroidManifest。ML Kit 的初始化入口与识别器注册全靠 AAR 清单里的
-     MlKitInitProvider / MlKitComponentDiscoveryService 的 meta-data，缺了就会
-     「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
+     识别引擎：Tesseract（tesseract4android，libs 里一个 AAR + assets/tessdata 中文模型）。
+     v1.29.0 从 Google ML Kit 换回来：ML Kit 依赖 GMS 的 dynamite/datatransport/dagger 一整套
+     组件，手写打包（无 Gradle）要手工补清单注册，稍有遗漏就是「引擎起不来」；Tesseract
+     纯 JNI，不需要任何清单声明、不依赖 Google 服务，装上就能用。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="32"
-    android:versionName="1.28.6">
+    android:versionCode="33"
+    android:versionName="1.29.0">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -59,36 +59,9 @@
         android:exported="false"
         android:grantUriPermissions="true"/>
 
-    <!-- ==== 以下来自 libs/*.aar 的清单，Gradle 会自动合并，手写打包必须手工补 ==== -->
-    <!-- 0) 不声明 MlKitInitProvider（v1.28.4 试过，装上打不开）。
-         ContentProvider 会在进程启动时实例化并执行代码，它一旦在 onCreate 里抛异常
-         就是「点开闪退」且 Application 都拦不住。ML Kit 初始化改在 ScanActivity 里
-         按需做（三条路兜底 + 每步 getInstance() 实测 + 异常回显到状态栏）。
-         崩溃有 CgmApp 统一记录，下次启动显示，不再无迹可查。 -->
-
-    <!-- 1) 组件发现：识别器（Registrar）在这里注册，缺了引擎找不到任何识别能力。
-         （common-18.11.0 / vision-common-17.3.0 / play-services-mlkit-text-recognition-common
-         三个 AAR 清单里各声明一个 meta-data，这里合并成一条。） -->
-    <service
-        android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
-        android:exported="false"
-        android:directBootAware="true">
-      <meta-data
-          android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar"
-          android:value="com.google.firebase.components.ComponentRegistrar"/>
-      <meta-data
-          android:name="com.google.firebase.components:com.google.mlkit.vision.common.internal.VisionCommonRegistrar"
-          android:value="com.google.firebase.components.ComponentRegistrar"/>
-      <meta-data
-          android:name="com.google.firebase.components:com.google.mlkit.vision.text.internal.TextRegistrar"
-          android:value="com.google.firebase.components.ComponentRegistrar"/>
-    </service>
-
-    <!-- 2) GMS 版本声明（play-services-basement 声明，值取自其 res 的
-         integer/google_play_services_version = 12451000；手写打包不合并 AAR 资源故写死）。
-         纯 meta-data，不执行代码。 -->
-    <meta-data
-        android:name="com.google.android.gms.version"
-        android:value="12451000"/>
+    <!-- 说明：Tesseract 引擎只有 JNI 原生库（libtesseract/libleptonica/...），
+         不需要任何 service / meta-data / provider 声明，因此这里不再有 ML Kit 的
+         组件发现声明与 GMS 版本声明（v1.29.0 已全部移除）。
+         崩溃由 CgmApp 统一记录，下次启动显示，不会无迹可查。 -->
   </application>
 </manifest>

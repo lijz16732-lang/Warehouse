@@ -27,7 +27,7 @@ PLATFORM = os.path.join(SDK, "platforms", "android-34", "android.jar")
 KS = os.path.join(HERE, "cgm-release.keystore")
 KS_PASS = "cgm12345"
 
-LIBS = os.path.join(HERE, "libs")          # 第三方 AAR（离线 OCR：ML Kit 中文捆绑版 + ZXing）
+LIBS = os.path.join(HERE, "libs")          # 第三方库（离线 OCR：Tesseract + ZXing）
 # 只打手机真机用的两种架构（省体积）；跑模拟器实测时用 CGM_ABIS=x86_64 出测试包
 ABIS = tuple(a for a in os.environ.get(
     "CGM_ABIS", "arm64-v8a,armeabi-v7a").split(",") if a)
@@ -50,7 +50,7 @@ def _ver_key(v):
 def dedupe_libs():
     """libs 里同一构件（artifactId）存在多个版本时只留最高版。
 
-    _fetch_mlkit.py 递归解析 POM 会把依赖树里不同分支带进来的新旧版本都下下来，
+    同一库多版本并存时（历史上抓依赖脚本重跑会留下新旧两份），
     d8 遇到同名类重复定义直接报错（activity-1.0.0 vs activity-1.2.4 踩过）。
     旧版移进 libs/_dup/ 备份，不删除。
     """
@@ -77,8 +77,8 @@ def dedupe_libs():
 def unpack_aars(work):
     """把 libs/*.aar 拆成 classes.jar（编译/转 dex 用）、jni 原生库、assets 资源。
 
-    注意：ML Kit 的识别模型就放在 AAR 的 assets/mlkit-google-ocr-models/ 里，
-    必须一起合并进 APK，否则运行时找不到模型（能打开但识别必失败）。
+    注意：有些 AAR 会把模型/配置放在自己的 assets 里，必须一起合并进 APK，
+    否则运行时找不到（例如 Tesseract 的模型我们改放在工程 assets/tessdata，直接打包）。
     """
     jars, natives = [], []
     if not os.path.isdir(LIBS):

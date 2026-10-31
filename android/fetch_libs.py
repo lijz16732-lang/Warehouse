@@ -3,6 +3,7 @@
 
 产物：
   android/libs/tesseract4android-4.7.0.aar     离线 OCR 引擎（含各架构 .so）
+  android/libs/core-3.5.3.jar                  ZXing 二维码解码
   android/assets/tessdata/chi_sim.traineddata  中文识别模型
   android/assets/tessdata/eng.traineddata      英文/数字识别模型
 
@@ -24,6 +25,12 @@ AAR_URLS = [
     "https://repo1.maven.org/maven2/cz/adaptech/tesseract4android/tesseract4android/"
     "4.7.0/" + AAR_NAME,
 ]
+JAR_NAME = "core-3.5.3.jar"                     # ZXing（二维码解码），纯 Java
+JAR_URLS = [
+    "https://repo1.maven.org/maven2/com/google/zxing/core/3.5.3/" + JAR_NAME,
+    "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/com/google/"
+    "zxing/core/3.5.3/" + JAR_NAME,
+]
 TESS_URLS = [
     "https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_fast@main/%(n)s.traineddata",
     "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/%(n)s.traineddata",
@@ -38,8 +45,10 @@ def fetch(urls, dst, min_size=1024):
     for u in urls:
         try:
             print("下载 %s" % u)
+            # 沙箱代理对 maven/github 常返回 502，直连更稳
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             req = urllib.request.Request(u, headers={"User-Agent": "cgm-build"})
-            with urllib.request.urlopen(req, timeout=180) as r, open(dst, "wb") as f:
+            with op.open(req, timeout=180) as r, open(dst, "wb") as f:
                 data = r.read()
                 if len(data) < min_size:
                     raise IOError("文件太小（%d 字节）" % len(data))
@@ -59,6 +68,7 @@ def fetch(urls, dst, min_size=1024):
 def main():
     ok = True
     ok = fetch(AAR_URLS, os.path.join(LIBS, AAR_NAME), 1024 * 1024) and ok
+    ok = fetch(JAR_URLS, os.path.join(LIBS, JAR_NAME), 100 * 1024) and ok
     for name in ("chi_sim", "eng"):
         urls = [u % {"n": name} for u in TESS_URLS]
         ok = fetch(urls, os.path.join(TESS, name + ".traineddata"), 512 * 1024) and ok

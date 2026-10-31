@@ -9,6 +9,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
@@ -35,20 +37,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.google.android.gms.tasks.OnCompleteListener;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
-import com.google.android.gms.tasks.Task;
-import com.google.mlkit.common.MlKit;
-import com.google.mlkit.common.internal.CommonComponentRegistrar;
-import com.google.mlkit.common.sdkinternal.MlKitContext;
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.common.internal.VisionCommonRegistrar;
-import com.google.mlkit.vision.text.Text;
-import com.google.mlkit.vision.text.TextRecognition;
-import com.google.mlkit.vision.text.TextRecognizer;
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
-import com.google.mlkit.vision.text.internal.TextRegistrar;
+import com.googlecode.tesseract.android.TessBaseAPI;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
@@ -58,8 +47,8 @@ import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashSet;
@@ -77,8 +66,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   系统相机拍一张是全分辨率 + 自动对焦/HDR，配合手动框选排除背景干扰，
  *   只识别一次，又准又省电。照片走 cacheDir 临时文件，用完即删，不进相册。
  *
- * 识别引擎：Google ML Kit 文字识别 v2（中文捆绑版），模型随 App 打包，
- * 完全离线、不依赖 Google 服务框架、不联网。
+ * 识别引擎：Tesseract（tesseract4android 4.7.0 + assets/tessdata 的 chi_sim/eng 模型），
+ * 纯 JNI，不依赖 Google 服务框架、不联网、不需要任何清单声明。
+ *
+ * 为什么从 ML Kit 换回来（v1.29.0）：
+ *   ML Kit 走 GMS dynamite 机制，运行时还要 datatransport/dagger 一整套组件；
+ *   本工程用 build_apk.py 手工打包（无 Gradle），这些都得手工补清单与依赖，
+ *   任何一处对不上就是「引擎起不来」，且错误信息被笼统报成「未初始化」，极难定位。
+ *   Tesseract 只有一个 AAR + 一份模型，初始化就是 init(dataPath, lang)，稳定可预期。
  *
  * 二维码模式（扫电脑连接码）仍是实时取景 ZXing 解码。
  *
@@ -102,9 +97,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private boolean isQr = false;
     private final MultiFormatReader qrReader = new MultiFormatReader();
 
-    /** 识别引擎全局复用：第二次进入拍照识别不用重新创建。 */
-    private static TextRecognizer sRecognizer;
-    private String initErr = null;          // 初始化失败原因（暴露给状态栏便于定位）
+    /** 识别引擎全局复用：TessBaseAPI 初始化要读模型（首次约 1~2 秒），不要每次重建。
+     *  注意 TessBaseAPI 非线程安全——所有调用都在 worker 这个单线程里做。 */
+    private static TessBaseAPI sTess;
+    private static final String LANG = "chi_sim+eng";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -167,52 +163,68 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     // ------------------------------------------------------------- 自检入口
 
-    /** 不开相机、不拍照的自检：造一张含型号文字的图，跑「初始化→getClient→识别」，
-     *  每步结果打到 logcat 标签 CGMDIAG 并显示在屏幕上（截图即可）。 */
+    /** 不开相机、不拍照的自检：造一张含型号文字的图，跑「初始化→识别」并把每步结果
+     *  显示在屏幕上（截图即可）。若外部私有目录里放了 cgm_test.jpg 还会顺带识别它，
+     *  用来验证真实照片的识别效果（adb push 到 /sdcard/Android/data/包名/files/）。
+     *  入口：长按「识别」按钮，或 adb am start ... --ez diag true。 */
     private void runDiag() {
         final TextView tv = new TextView(this);
         tv.setTextSize(11);
         tv.setTextIsSelectable(true);
         tv.setPadding(dp(16), dp(48), dp(16), dp(16));
+        tv.setBackgroundColor(Color.WHITE);
+        tv.setTextColor(Color.BLACK);
         tv.setText("自检中…");
         setContentView(tv);
-        new Thread(new Runnable() {
+        worker.execute(new Runnable() {
             @Override
             public void run() {
                 final StringBuilder sb = new StringBuilder();
+                sb.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS[0]).append('\n');
+                sb.append("版本: v").append(verName()).append('\n');
+                TessBaseAPI api = null;
                 try {
-                    sb.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS[0]).append('\n');
-                    sb.append("CL: ").append(ScanActivity.class.getClassLoader()).append('\n');
-                    for (String cn : new String[]{
-                            "com.google.android.datatransport.runtime.TransportRuntime",
-                            "com.google.android.datatransport.runtime.dagger.internal.Factory",
-                            "com.google.android.datatransport.runtime.DaggerTransportRuntimeComponent",
-                            "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery",
-                            "com.google.mlkit.common.internal.MlKitInitProvider",
-                    }) {
-                        sb.append("forName ").append(cn.substring(cn.lastIndexOf('.') + 1))
-                                .append(": ").append(tryForName(cn)).append('\n');
-                    }
-                    ensureMlKit();
-                    sb.append("getInstance: ").append(mlKitReady() ? "OK" : "FAIL")
-                            .append(initErr == null ? "" : " | " + initErr).append('\n');
-                    TextRecognizer rec = TextRecognition.getClient(
-                            new ChineseTextRecognizerOptions.Builder().build());
-                    sb.append("getClient: OK\n");
-                    Bitmap bmp = Bitmap.createBitmap(900, 240, Bitmap.Config.ARGB_8888);
-                    Canvas cv = new Canvas(bmp);
-                    cv.drawColor(Color.WHITE);
-                    Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-                    p.setColor(Color.BLACK);
-                    p.setTextSize(72);
-                    p.setTypeface(Typeface.DEFAULT_BOLD);
-                    cv.drawText("SEREAM T40 59633", 24, 150, p);
-                    Task<Text> task = rec.process(InputImage.fromBitmap(bmp, 0));
-                    Text r = com.google.android.gms.tasks.Tasks.await(task);
-                    sb.append("识别结果: ").append(r.getText()).append('\n');
-                    sb.append("块数: ").append(r.getTextBlocks().size()).append('\n');
+                    api = ensureTess();
+                    sb.append("引擎: OK (").append(LANG).append(")\n");
                 } catch (Throwable t) {
-                    sb.append("FAILED: ").append(android.util.Log.getStackTraceString(t));
+                    sb.append("引擎: FAIL\n").append(android.util.Log.getStackTraceString(t));
+                }
+                for (String lang : new String[]{"chi_sim", "eng"}) {   // 初始化后模型已解出
+                    File f = new File(new File(getFilesDir(), "tessdata"),
+                            lang + ".traineddata");
+                    sb.append("模型 ").append(lang).append(": ")
+                            .append(f.isFile() ? (f.length() / 1024 + " KB") : "缺失").append('\n');
+                }
+                if (api != null) {
+                    try {                                   // ① 自绘图（纯印刷体）
+                        Bitmap bmp = Bitmap.createBitmap(900, 240, Bitmap.Config.ARGB_8888);
+                        Canvas cv = new Canvas(bmp);
+                        cv.drawColor(Color.WHITE);
+                        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                        p.setColor(Color.BLACK);
+                        p.setTextSize(72);
+                        p.setTypeface(Typeface.DEFAULT_BOLD);
+                        cv.drawText("SEREAM T40 59633", 24, 150, p);
+                        sb.append("自绘图: ").append(ocr(api, bmp)).append('\n');
+                        bmp.recycle();
+                    } catch (Throwable t) {
+                        sb.append("自绘图 FAILED: ").append(brief(t)).append('\n');
+                    }
+                    try {                                   // ② 真实照片（可选）
+                        File f = new File(getExternalFilesDir(null), "cgm_test.jpg");
+                        if (f.isFile()) {
+                            BitmapFactory.Options o = new BitmapFactory.Options();
+                            o.inSampleSize = 2;
+                            Bitmap ph = BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+                            sb.append("照片 ").append(f.length() / 1024).append("KB: ");
+                            sb.append(ph == null ? "解码失败" : ocr(api, ph)).append('\n');
+                            if (ph != null) ph.recycle();
+                        } else {
+                            sb.append("照片: 无 cgm_test.jpg，跳过\n");
+                        }
+                    } catch (Throwable t) {
+                        sb.append("照片 FAILED: ").append(brief(t)).append('\n');
+                    }
                 }
                 android.util.Log.i("CGMDIAG", sb.toString());
                 runOnUiThread(new Runnable() {
@@ -222,16 +234,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                     }
                 });
             }
-        }).start();
-    }
-
-    private static String tryForName(String cn) {
-        try {
-            Class.forName(cn);
-            return "OK";
-        } catch (Throwable t) {
-            return t.getClass().getSimpleName() + ": " + t.getMessage();
-        }
+        });
     }
 
     // ------------------------------------------------------------- 入口流
@@ -368,6 +371,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         actions.setVisibility(View.VISIBLE);
         status.setText("拖动四角框住要识别的文字，点「识别」");
+        warmUp();                               // 后台先把模型读进来，点识别时几乎不用等
         hintBig.setText("");
         hintBig.setTag(null);
         hintBig.setBackgroundColor(Color.TRANSPARENT);
@@ -378,6 +382,19 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         for (int i = 0; i < actions.getChildCount(); i++) {
             actions.getChildAt(i).setEnabled(on);
         }
+    }
+
+    /** 预热识别引擎：照片出来后就在后台把模型读进内存，点「识别」时基本立刻出结果。 */
+    private void warmUp() {
+        worker.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ensureTess();
+                } catch (Throwable ignored) {   // 失败留给点「识别」时报出来
+                }
+            }
+        });
     }
 
     /** 执行识别：只把框选区域交给引擎（排除背景干扰，识别更快更准）。 */
@@ -408,39 +425,103 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void runText(final Bitmap crop) {
+        worker.execute(new Runnable() {
+            @Override
+            public void run() {
+                String text = null;
+                String err = null;
+                try {
+                    text = ocr(ensureTess(), crop);
+                } catch (Throwable t) {
+                    err = brief(t);
+                } finally {
+                    crop.recycle();             // 识别完立即释放，内存不留峰值
+                }
+                final String res = text;
+                final String e = err;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (isFinishing()) return;
+                        setActionsEnabled(true);
+                        if (e != null) {
+                            status.setText("识别引擎不可用 v" + verName() + "（" + e
+                                    + "），长按「识别」看诊断");
+                            return;
+                        }
+                        showLines(cleanLines(res));
+                    }
+                });
+            }
+        });
+    }
+
+    /** 统一的一张图识别入口（含预处理）。TessBaseAPI 非线程安全：只在 worker 里调用。 */
+    private String ocr(TessBaseAPI api, Bitmap src) {
+        Bitmap pre = preprocess(src);
         try {
-            InputImage img = InputImage.fromBitmap(crop, 0);
-            getRecognizer().process(img)
-                    .addOnSuccessListener(new OnSuccessListener<Text>() {
-                        @Override
-                        public void onSuccess(Text text) {
-                            setActionsEnabled(true);
-                            showLines(extractLines(text));
-                        }
-                    })
-                    .addOnFailureListener(new OnFailureListener() {
-                        @Override
-                        public void onFailure(Exception e) {
-                            setActionsEnabled(true);
-                            status.setText("识别失败：" + brief(e) + "，点「识别」重试");
-                        }
-                    })
-                    .addOnCompleteListener(new OnCompleteListener<Text>() {
-                        @Override
-                        public void onComplete(Task<Text> task) {
-                            crop.recycle();     // 识别完立即释放，内存不留峰值
-                        }
-                    });
-        } catch (Throwable t) {
-            setActionsEnabled(true);
-            crop.recycle();
-            String msg = brief(t);
-            if (initErr != null) msg = "init:" + initErr + " / " + msg;
-            // 分清阶段：引擎本身没起来 vs 引擎起来了但识别器创建失败（多为缺依赖类）
-            String head = mlKitReady() ? "识别器启动失败" : "识别引擎没能启动";
-            status.setText(head + " v" + verName()
-                    + "（" + msg + "），点「识别」重试");
+            api.setImage(pre);
+            String t = api.getUTF8Text();
+            return t == null ? "" : t;
+        } finally {
+            if (pre != src) pre.recycle();
         }
+    }
+
+    /** 识别前处理：缩放到合适尺寸 + 去色 + 对比度拉伸。
+     *  手机拍的照片常偏灰、字偏小，直接喂引擎命中率低；这两步能明显提高识别率。 */
+    private Bitmap preprocess(Bitmap src) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        int longEdge = Math.max(w, h);
+        float scale = 1f;
+        if (longEdge < 1200) scale = 1200f / longEdge;          // 字太小：放大
+        else if (longEdge > 1800) scale = 1800f / longEdge;     // 太大：缩一点，省内存也更快
+
+        int dw = Math.max(1, Math.round(w * scale));
+        int dh = Math.max(1, Math.round(h * scale));
+        Bitmap out = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        Paint p = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        ColorMatrix cm = new ColorMatrix();
+        cm.setSaturation(0f);                                   // 去色：文字/背景对比更纯
+        p.setColorFilter(new ColorMatrixColorFilter(cm));
+        c.drawBitmap(src, null, new Rect(0, 0, dw, dh), p);
+        stretch(out);
+        return out;
+    }
+
+    /** 对比度线性拉伸（按 2%/98% 分位），把发灰的照片拉成黑白分明，引擎更认。 */
+    private void stretch(Bitmap bmp) {
+        int w = bmp.getWidth();
+        int h = bmp.getHeight();
+        int n = w * h;
+        if (n <= 0) return;
+        int[] px = new int[n];
+        bmp.getPixels(px, 0, w, 0, 0, w, h);
+        int[] hist = new int[256];
+        for (int i = 0; i < n; i++) {
+            hist[(px[i] >> 16) & 0xff]++;                       // 已去色，取 R 通道即可
+        }
+        int lo = 0, hi = 255, acc = 0;
+        int lowN = (int) (n * 0.02f), hiN = (int) (n * 0.98f);
+        for (int v = 0; v < 256; v++) {
+            acc += hist[v];
+            if (acc >= lowN) { lo = v; break; }
+        }
+        acc = 0;
+        for (int v = 0; v < 256; v++) {
+            acc += hist[v];
+            if (acc >= hiN) { hi = v; break; }
+        }
+        if (hi - lo < 16) return;                               // 本来就够对比，不动
+        float k = 255f / (hi - lo);
+        for (int i = 0; i < n; i++) {
+            int v = (int) ((((px[i] >> 16) & 0xff) - lo) * k);
+            v = v < 0 ? 0 : (v > 255 ? 255 : v);
+            px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
+        }
+        bmp.setPixels(px, 0, w, 0, 0, w, h);
     }
 
     /** 异常压成一小段可读文字，方便用户反馈时截图。 */
@@ -449,16 +530,6 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         if (m == null || m.trim().isEmpty()) return t.getClass().getSimpleName();
         m = m.replace('\n', ' ').trim();
         return m.length() > 60 ? m.substring(0, 60) + "…" : m;
-    }
-
-    private TextRecognizer getRecognizer() {
-        if (sRecognizer == null) {
-            status.setText("正在准备识别引擎…");
-            ensureMlKit();
-            sRecognizer = TextRecognition.getClient(
-                    new ChineseTextRecognizerOptions.Builder().build());
-        }
-        return sRecognizer;
     }
 
     /** 当前 APK 版本名，失败提示里带上，便于确认手机上跑的是哪个包。 */
@@ -470,65 +541,68 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
-    /** ML Kit 是否已就绪（MlKitContext 全局单例非空）。 */
-    private static boolean mlKitReady() {
+    /** 取（必要时初始化）识别引擎：模型放在 App 私有目录，首次从 assets 解出。
+     *  TessBaseAPI 非线程安全，调用方必须都在 worker 单线程里；synchronized 兜住自检线程。 */
+    private synchronized TessBaseAPI ensureTess() throws Exception {
+        if (sTess != null) return sTess;
         try {
-            MlKitContext.getInstance();
-            return true;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    /** 确保 ML Kit 已初始化，三条路按序兜底，哪条成功都算数：
-     *  ① 清单里的 MlKitInitProvider 在进程启动时已经初始化过（官方标准路径），
-     *     getInstance() 直接通过，什么都不用做；
-     *  ② MlKitContext.initializeIfNeeded + 显式 Registrar（动态模块同款官方路径，
-     *     不依赖清单 meta-data 发现）；
-     *  ③ MlKit.initialize（等价于 MlKitInitProvider 内部调用）。
-     *  每一步之后都用 getInstance() 实测验证，不凭「没抛异常」下结论；
-     *  全部失败时把原因记进 initErr，点识别时展示出来——绝不静默吞掉。 */
-    private void ensureMlKit() {
-        initErr = null;
-        if (mlKitReady()) return;               // 路径①：provider 已经在启动时干完了
-
-        try {
-            MlKitContext.initializeIfNeeded(getApplicationContext(),
-                    Arrays.asList(new CommonComponentRegistrar(),
-                                  new VisionCommonRegistrar(),
-                                  new TextRegistrar()));
-            if (mlKitReady()) return;           // 路径②：成功
-        } catch (Throwable t) {
-            initErr = brief(t);
-        }
-
-        try {
-            MlKit.initialize(getApplicationContext());
-            if (mlKitReady()) {                 // 路径③：成功
-                initErr = null;
-                return;
+            File dir = new File(getFilesDir(), "tessdata");
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                throw new IOException("无法创建模型目录");
             }
-            initErr = (initErr == null ? "" : initErr + " / ")
-                    + "MlKit.initialize 后仍未初始化";
+            for (String lang : new String[]{"chi_sim", "eng"}) {
+                File f = new File(dir, lang + ".traineddata");
+                if (f.isFile() && f.length() > 100 * 1024) continue;     // 已解压过
+                copyAsset("tessdata/" + lang + ".traineddata", f);
+            }
+            TessBaseAPI api = new TessBaseAPI();
+            if (!api.init(getFilesDir().getAbsolutePath(), LANG)) {
+                api.recycle();
+                throw new IllegalStateException("模型加载失败（tessdata 缺失或版本不符）");
+            }
+            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK);
+            api.setVariable(TessBaseAPI.VAR_CHAR_BLACKLIST, "|");
+            sTess = api;
+            return sTess;
         } catch (Throwable t) {
-            initErr = (initErr == null ? "" : initErr + " / ") + brief(t);
+            if (t instanceof Exception) throw (Exception) t;
+            throw new IllegalStateException(t);
         }
     }
 
-    /** 从识别结果里挑出像型号/说明的行（去空、去符号行、去重）。 */
-    private List<String> extractLines(Text text) {
+    /** 把 assets 里的模型拷到私有目录（Tesseract 只能读文件路径，不能读 assets）。 */
+    private void copyAsset(String name, File dst) throws Exception {
+        java.io.InputStream in = getAssets().open(name);
+        java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
+        try {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        } finally {
+            try {
+                in.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                out.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** 从识别文本里挑出像型号/说明的行（去空、去符号行、去重，最多 6 行）。 */
+    private List<String> cleanLines(String text) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         if (text != null) {
-            for (Text.TextBlock b : text.getTextBlocks()) {
-                for (Text.Line l : b.getLines()) {
-                    String s = l.getText() == null ? "" : l.getText().trim();
-                    if (s.length() < 2) continue;
-                    s = s.replaceAll("[ \\t]{2,}", " ");
-                    if (s.replaceAll("[^0-9A-Za-z\\u4e00-\\u9fa5]", "").length() < 2) {
-                        continue;
-                    }
-                    out.add(s);
+            for (String raw : text.split("\n")) {
+                String s = raw.replace('\f', ' ').trim();
+                if (s.length() < 2) continue;
+                s = s.replaceAll("[ \\t]{2,}", " ").trim();
+                if (s.replaceAll("[^0-9A-Za-z\\u4e00-\\u9fa5]", "").length() < 2) {
+                    continue;
                 }
+                out.add(s);
             }
         }
         List<String> list = new ArrayList<>(out);
@@ -728,6 +802,15 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void onClick(View v) {
                 onRecognizeClicked();
+            }
+        });
+        // 长按「识别」= 自检：不开相机，跑一遍「初始化引擎→识别样图」并把每步结果显示出来，
+        // 用户截图即可反馈问题（手机上没法看 logcat）。
+        ok.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                runDiag();
+                return true;
             }
         });
 

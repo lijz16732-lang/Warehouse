@@ -928,9 +928,9 @@ try:
     check("型号识别改为拍照+框选（全分辨率照片比实时预览帧更清晰）",
           "ACTION_IMAGE_CAPTURE" in _sj and "EXTRA_OUTPUT" in _sj
           and "CropView" in _sj and "normalizedRect" in _sj)
-    check("识别在手机本地跑（ML Kit 中文捆绑版，无网络请求、不依赖 GMS、无 Tesseract）",
-          "ChineseTextRecognizerOptions" in _sj and "InputImage" in _sj
-          and "TextRecognizer" in _sj and "TessBaseAPI" not in _sj
+    check("识别在手机本地跑（Tesseract 中文+英文模型，无网络请求、不依赖 GMS）",
+          "TessBaseAPI" in _sj and "chi_sim+eng" in _sj
+          and "MlKit" not in _sj and "TextRecognizer" not in _sj
           and "http" not in _sj.lower())
     check("照片即拍即用即删（不占存储）+ 采样解码与 EXIF 摆正控内存",
           "scan_tmp.jpg" in _sj and "inSampleSize" in _sj and "ExifInterface" in _sj)
@@ -940,57 +940,29 @@ try:
     check("页面 → 原生桥（AndroidOcr）与回填回调",
           'addJavascriptInterface' in _mj and '"AndroidOcr"' in _mj
           and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
-    check("ML Kit 中文识别模型随 App 打包（Tesseract 引擎与模型已移除）",
+    check("Tesseract 引擎与中文模型随 App 打包（离线、装机即用）",
           os.path.isfile(os.path.join(_android_dir, "libs",
-                                      "text-recognition-chinese-16.0.1.aar"))
-          and not os.path.isfile(os.path.join(_android_dir, "assets",
-                                              "tessdata", "chi_sim.traineddata")))
-    # v1.28.6 真机/模拟器实测出的真根因：dagger 的 Factory 实现 javax.inject.Provider，
-    # 缺这个 Maven Central 的小 jar → 创建识别器时 NoClassDefFoundError（被误读成
-    # 「引擎没初始化」）。它不在 dl.google.com，只能从 Central 抓，必须锁死在 libs。
-    check("javax.inject 已随包（dagger/transport 的父接口，缺了识别器创建必失败）",
-          os.path.isfile(os.path.join(_android_dir, "libs", "javax.inject-1.jar")))
+                                      "tesseract4android-4.7.0.aar"))
+          and os.path.isfile(os.path.join(_android_dir, "assets",
+                                          "tessdata", "chi_sim.traineddata"))
+          and os.path.isfile(os.path.join(_android_dir, "assets",
+                                          "tessdata", "eng.traineddata")))
+    check("识别前做尺寸归一 + 去色 + 对比度拉伸（照片发灰也能认）",
+          "private Bitmap preprocess(" in _sj and "setSaturation(0f)" in _sj
+          and "private void stretch(" in _sj and "inSampleSize" in _sj)
+    check("引擎起不来时会说明原因，且长按「识别」可自检（手机上看不到日志）",
+          "识别引擎不可用" in _sj and "setOnLongClickListener" in _sj
+          and "runDiag" in _sj and "CGMDIAG" in _sj)
     check("打包脚本带了缺失类扫描工具（换库后先跑它再出包）",
           os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
-    # v1.28.1 用户实测「界面正常、识别失败」：手写打包不合并 AAR 清单，
-    # ML Kit 初始化入口与识别器注册全在 AAR 清单里，必须手工搬到 App 清单
-    check("ML Kit 识别器注册已手工声明（缺了必「识别失败」）",
-          'MlKitComponentDiscoveryService' in _mf
-          and 'CommonComponentRegistrar' in _mf
-          and 'VisionCommonRegistrar' in _mf
-          and 'TextRegistrar' in _mf)
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。
-    # v1.28.4 曾加回 MlKitInitProvider 走官方初始化 → 用户实测「打不开」，v1.28.5 撤掉；
-    # 改为 Activity 内按需初始化 + CgmApp 记录启动崩溃（下次打开弹堆栈，可截图定位）。
+    # v1.29.0 换 Tesseract 后不再需要任何引擎侧清单声明，启动期只留自己的 PhotoProvider。
     check("启动期只允许 PhotoProvider，且崩溃自证（CgmApp）已就位",
-          "com.google.mlkit.common.internal.MlKitInitProvider" not in _mf
-          and 'androidx.startup.InitializationProvider' not in _mf
+          'androidx.startup.InitializationProvider' not in _mf
           and _mf.count("<provider") == 1 and ".PhotoProvider" in _mf
-          and 'android:name=".CgmApp"' in _mf
-          and "MlKit.initialize" in _sj
-          and "import com.google.mlkit.common.MlKit;" in _sj
-          and "mlKitReady" in _sj)
-    try:
-        import re as _re
-        import zipfile as _zip
-        _need, _libs = set(), os.path.join(_android_dir, "libs")
-        for _n in sorted(os.listdir(_libs)):
-            if not _n.endswith(".aar"):
-                continue
-            with _zip.ZipFile(os.path.join(_libs, _n)) as _z:
-                if "AndroidManifest.xml" not in _z.namelist():
-                    continue
-                _cm = _z.read("AndroidManifest.xml").decode("utf-8", "ignore")
-            for _nm in _re.findall(
-                    r'<(?:provider|service|meta-data)[^>]*android:name="([^"]+)"', _cm):
-                if _nm.startswith("com.google.mlkit") and "MlKitInitProvider" not in _nm:
-                    _need.add(_nm)      # provider 是被刻意排除的（见上一条检查）
-        _missing = sorted(x for x in _need if x not in _mf)
-        check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
-              not _missing, "缺少: %s" % _missing[:4])
-    except Exception as _e2:
-        check("libs 各 AAR 里的 ML Kit 组件都在 App 清单里（清单合并守卫）",
-              False, str(_e2)[:100])
+          and 'android:name=".CgmApp"' in _mf)
+    check("清单里不再残留 ML Kit / GMS 声明（换引擎后已清理）",
+          "mlkit" not in _mf.lower() and "gms.version" not in _mf)
     check("Android 壳不显示系统标题栏（黑色「仓管家」条）",
           'Theme.Material.Light.NoActionBar' in _mf)
     # v1.20.1 修黑屏：必须等 surface 就绪再 setPreviewDisplay，且有无帧看门狗
