@@ -894,6 +894,18 @@ try:
           all(x in _app_src for x in ("PhotoStrip", "photo_strip"))
           and "PhotoStrip" in open(os.path.join(_wm_dir, "phone.py"),
                                    encoding="utf-8").read())
+    # v1.29.2 手机数据页筛选，导出跟随筛选结果
+    _phone_src = open(os.path.join(_wm_dir, "phone.py"), encoding="utf-8").read()
+    check("手机数据页筛选：库存(品牌/品类/成色/状态/同步时间) + 出售(类型/买家/时间到分)",
+          all(x in _phone_src for x in
+              ("_match_item", "_match_sale", "_norm_dt", "_in_range",
+               "_fill_choices", "_any_filter", "var_f_brand", "var_f_state",
+               "var_f_buyer", "var_f_from", "var_f_sync_from")))
+    check("手机数据导出走筛选后的行（_export_to 用 item_rows/sale_rows）",
+          "_export_to" in _phone_src
+          and "xlsxio.export_phone_xlsx(path, self.item_rows, self.sale_rows)"
+          in _phone_src
+          and "raw_items" in _phone_src)   # 全量另存，清空/统计不受筛选影响
     check("电脑端操作日志页签（筛选/导出/清空）",
           all(x in _app_src for x in
               ("操作日志", "_build_log_tab", "_load_log", "_export_log",

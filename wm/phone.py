@@ -54,8 +54,10 @@ class PhoneTab(ttk.Frame):
         super().__init__(master)
         self.app = app
         self.fam = fam
-        self.item_rows = []
+        self.item_rows = []       # 当前表格里的行（= 搜索 + 筛选之后）
         self.sale_rows = []
+        self.raw_items = []       # 未筛选的全量（清空/统计用）
+        self.raw_sales = []
         self._maps = {}           # tree → {iid: 记录}（两表各自独立，防覆盖）
         self._hovers = {}         # tree → RowHover（划过行高亮）
         self._cell_hovers = {}    # tree → CellHover（划过单元格"选中"高亮）
@@ -107,6 +109,60 @@ class PhoneTab(ttk.Frame):
         self.frm_sales = ttk.Frame(self.nb)
         self.nb.add(self.frm_items, text="  手机库存  ")
         self.nb.add(self.frm_sales, text="  手机出售记录  ")
+
+        # ---- v1.29.2 筛选条（每张表各自一套，导出跟随筛选结果）----
+        # 库存：品牌 / 品类 / 成色 / 状态 + 同步时间区间
+        self.var_f_brand = tk.StringVar(value=self._ALL)
+        self.var_f_cat = tk.StringVar(value=self._ALL)
+        self.var_f_cond = tk.StringVar(value=self._ALL)
+        self.var_f_state = tk.StringVar(value=self._ALL)
+        self.var_f_sync_from = tk.StringVar()
+        self.var_f_sync_to = tk.StringVar()
+        bar_i = self._filter_bar(self.frm_items)
+        self._filter_label(bar_i, "品牌")
+        self.cb_brand = self._filter_combo(bar_i, self.var_f_brand, 12)
+        self._filter_label(bar_i, "品类")
+        self.cb_cat = self._filter_combo(bar_i, self.var_f_cat, 10)
+        self._filter_label(bar_i, "成色")
+        self.cb_cond = self._filter_combo(bar_i, self.var_f_cond, 8)
+        self._filter_label(bar_i, "状态")
+        self.cb_state = self._filter_combo(
+            bar_i, self.var_f_state, 9, values=("全部", "待转入", "已转入"))
+        ttk.Button(bar_i, text="清空筛选", style="Ghost.TButton", width=9,
+                   command=self.reset_filters).pack(side="left", padx=(12, 0))
+
+        # 第二行：同步时间（手机上传进电脑的时间）
+        bar_i2 = self._filter_bar(self.frm_items, pady=(6, 0))
+        self._filter_label(bar_i2, "同步时间")
+        self.ent_sync_from = self._filter_entry(bar_i2, self.var_f_sync_from)
+        tk.Label(bar_i2, text="→", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left", padx=3)
+        self.ent_sync_to = self._filter_entry(bar_i2, self.var_f_sync_to)
+        tk.Label(bar_i2, text="yyyy-mm-dd（可加 HH:MM），可只填一边",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(
+            side="left", padx=(6, 0))
+
+        # 出售：类型 / 买家 / 日期区间（支持到时分）
+        self.var_f_type = tk.StringVar(value=self._ALL)
+        self.var_f_buyer = tk.StringVar(value=self._ALL)
+        self.var_f_from = tk.StringVar()
+        self.var_f_to = tk.StringVar()
+        bar_s = self._filter_bar(self.frm_sales)
+        self._filter_label(bar_s, "类型")
+        self.cb_type = self._filter_combo(bar_s, self.var_f_type, 9)
+        self._filter_label(bar_s, "买家")
+        self.cb_buyer = self._filter_combo(bar_s, self.var_f_buyer, 11)
+        self._filter_label(bar_s, "出售时间")
+        self.ent_from = self._filter_entry(bar_s, self.var_f_from)
+        tk.Label(bar_s, text="→", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left", padx=3)
+        self.ent_to = self._filter_entry(bar_s, self.var_f_to)
+        tk.Label(bar_s, text="yyyy-mm-dd（可加 HH:MM），可只填一边",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(bar_s, text="清空筛选", style="Ghost.TButton", width=9,
+                   command=self.reset_filters).pack(side="left", padx=(12, 0))
+
         self.tree_items = self._make_tree(self.frm_items, PHONE_ITEM_COLS,
                                           is_items=True)
         self.tree_sales = self._make_tree(self.frm_sales, PHONE_SALE_COLS)
@@ -234,6 +290,126 @@ class PhoneTab(ttk.Frame):
             self._ctx_sales = menu
         return tree
 
+    # ------------------------------------------------------------ 筛选条
+    _ALL = "全部"
+
+    def _filter_bar(self, parent, pady=(10, 0)):
+        """子页签顶部的筛选条（在表格之前 pack，保证落在表格上方）。"""
+        bar = tk.Frame(parent, bg=CLR_BG)
+        bar.pack(fill="x", pady=pady)
+        return bar
+
+    def _filter_label(self, bar, text, pad=(0, 0)):
+        tk.Label(bar, text=text, bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left", padx=pad)
+
+    def _filter_combo(self, bar, var, width, values=None):
+        cb = ttk.Combobox(bar, textvariable=var, width=width, state="readonly",
+                          font=(self.fam, 9),
+                          values=values or (self._ALL,))
+        cb.pack(side="left", padx=(4, 10))
+        cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_rows())
+        return cb
+
+    def _filter_entry(self, bar, var, width=12):
+        ent = ttk.Entry(bar, textvariable=var, width=width, font=(self.fam, 9))
+        ent.pack(side="left", padx=(4, 0), ipady=1)
+        ent.bind("<KeyRelease>", self._debounce)
+        return ent
+
+    @staticmethod
+    def _pick(var):
+        """取筛选值：全部/空 → 空串（表示不限制）。"""
+        v = (var.get() or "").strip()
+        return "" if v in ("", PhoneTab._ALL, "-") else v
+
+    @staticmethod
+    def _norm_dt(s):
+        """时间输入归一：
+        '2026-10-31' / '20261031' → '2026-10-31'（按整天）
+        '2026-10-31 15:30' / '202610311530' → '2026-10-31 15:30'（精确到分）
+        无效返回空串（视为不限制）。"""
+        d = "".join(ch for ch in str(s or "") if ch.isdigit())
+        if len(d) == 8:
+            return "%s-%s-%s" % (d[:4], d[4:6], d[6:8])
+        if len(d) >= 12:
+            return "%s-%s-%s %s:%s" % (d[:4], d[4:6], d[6:8], d[8:10], d[10:12])
+        return ""
+
+    _norm_date = _norm_dt                 # 兼容旧名
+
+    @staticmethod
+    def _row_dt(v):
+        """行里的时间归一成 'yyyy-mm-dd HH:MM:SS'，便于与筛选项做前缀比较。"""
+        d = "".join(ch for ch in str(v or "") if ch.isdigit())
+        if len(d) < 8:
+            return ""
+        d = (d + "000000")[:14]
+        return "%s-%s-%s %s:%s:%s" % (d[:4], d[4:6], d[6:8],
+                                      d[8:10], d[10:12], d[12:14])
+
+    def _in_range(self, row_val, lo, hi):
+        """行时间是否落在 [lo, hi]：lo/hi 可只到日，也可到分（空=不限）。"""
+        v = self._row_dt(row_val)
+        if not v:
+            return True                   # 没有时间的记录不受时间筛选影响
+        if lo and v[:len(lo)] < lo:
+            return False
+        if hi and v[:len(hi)] > hi:
+            return False
+        return True
+
+    def _fill_choices(self, cb, var, rows, key):
+        """下拉项按当前数据刷新；已选项仍存在就保留，否则回到「全部」。"""
+        vals = sorted({str(r.get(key) or "").strip()
+                       for r in rows if str(r.get(key) or "").strip()})
+        cb.configure(values=(self._ALL,) + tuple(vals))
+        cur = (var.get() or "").strip()
+        if cur and cur != self._ALL and cur not in vals:
+            var.set(self._ALL)
+
+    def _match_item(self, r):
+        """库存行是否通过筛选（品牌/品类/成色/状态/同步时间）。"""
+        if self._pick(self.var_f_brand) and \
+                str(r.get("brand") or "").strip() != self._pick(self.var_f_brand):
+            return False
+        if self._pick(self.var_f_cat) and \
+                str(r.get("category") or "").strip() != self._pick(self.var_f_cat):
+            return False
+        if self._pick(self.var_f_cond) and \
+                str(r.get("condition") or "").strip() != self._pick(self.var_f_cond):
+            return False
+        st = self._pick(self.var_f_state)
+        if st == "待转入" and r.get("transferred"):
+            return False
+        if st == "已转入" and not r.get("transferred"):
+            return False
+        return self._in_range(r.get("synced_at"),
+                              self._norm_dt(self.var_f_sync_from.get()),
+                              self._norm_dt(self.var_f_sync_to.get()))
+
+    def _match_sale(self, r):
+        """出售行是否通过筛选（类型/买家/出售时间，时间可精确到分）。"""
+        if self._pick(self.var_f_type) and \
+                str(r.get("out_type") or "").strip() != self._pick(self.var_f_type):
+            return False
+        if self._pick(self.var_f_buyer) and \
+                str(r.get("buyer") or "").strip() != self._pick(self.var_f_buyer):
+            return False
+        return self._in_range(r.get("sale_date"),
+                              self._norm_dt(self.var_f_from.get()),
+                              self._norm_dt(self.var_f_to.get()))
+
+    def _any_filter(self):
+        """除关键字外，是否有生效的筛选条件（导出时据此提示 / 命名）。"""
+        return bool(self._pick(self.var_f_brand) or self._pick(self.var_f_cat)
+                    or self._pick(self.var_f_cond) or self._pick(self.var_f_state)
+                    or self._pick(self.var_f_type) or self._pick(self.var_f_buyer)
+                    or self._norm_dt(self.var_f_from.get())
+                    or self._norm_dt(self.var_f_to.get())
+                    or self._norm_dt(self.var_f_sync_from.get())
+                    or self._norm_dt(self.var_f_sync_to.get()))
+
     # ------------------------------------------------------------ 数据
     def _store(self):
         return self.app.store
@@ -249,20 +425,36 @@ class PhoneTab(ttk.Frame):
     def refresh_rows(self):
         kw = self.var_kw.get().strip()
         try:
-            self.item_rows = self._store().m_items(kw)
-            self.sale_rows = self._store().m_sales(kw)
+            raw_items = self._store().m_items(kw)
+            raw_sales = self._store().m_sales(kw)
         except Exception as e:
+            self.raw_items, self.raw_sales = [], []
             self.item_rows, self.sale_rows = [], []
             self.lbl_summary.configure(text="读取失败：%s" % e)
             return
+        self.raw_items, self.raw_sales = raw_items, raw_sales
+        # 下拉选项跟着数据走（品牌/品类/成色/类型/买家），已选项失效时回到「全部」
+        self._fill_choices(self.cb_brand, self.var_f_brand, raw_items, "brand")
+        self._fill_choices(self.cb_cat, self.var_f_cat, raw_items, "category")
+        self._fill_choices(self.cb_cond, self.var_f_cond, raw_items, "condition")
+        self._fill_choices(self.cb_type, self.var_f_type, raw_sales, "out_type")
+        self._fill_choices(self.cb_buyer, self.var_f_buyer, raw_sales, "buyer")
+        self.item_rows = [r for r in raw_items if self._match_item(r)]
+        self.sale_rows = [r for r in raw_sales if self._match_sale(r)]
         self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS,
                    self._item_state,
                    photo_codes=self._store().photo_codes("phone"),
                    kind="item")
         self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS,
                    kind="sale")
-        self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
-                                   % (len(self.item_rows), len(self.sale_rows)))
+        if self._any_filter():
+            self.lbl_summary.configure(
+                text="库存 %d/%d 条 · 出售 %d/%d 条 · 已筛选（导出只含筛出的）"
+                     % (len(self.item_rows), len(self.raw_items),
+                        len(self.sale_rows), len(self.raw_sales)))
+        else:
+            self.lbl_summary.configure(text="库存 %d 条 · 出售记录 %d 条"
+                                       % (len(self.item_rows), len(self.sale_rows)))
 
     @staticmethod
     def _item_state(r):
@@ -343,7 +535,22 @@ class PhoneTab(ttk.Frame):
         self._kw_debounce = self.after(280, self.refresh_rows)
 
     def reset_filters(self):
+        """清空关键字 + 全部筛选条件。"""
         self.var_kw.set("")
+        for var in (getattr(self, "var_f_brand", None),
+                    getattr(self, "var_f_cat", None),
+                    getattr(self, "var_f_cond", None),
+                    getattr(self, "var_f_state", None),
+                    getattr(self, "var_f_type", None),
+                    getattr(self, "var_f_buyer", None)):
+            if var is not None:
+                var.set(self._ALL)
+        for var in (getattr(self, "var_f_from", None),
+                    getattr(self, "var_f_to", None),
+                    getattr(self, "var_f_sync_from", None),
+                    getattr(self, "var_f_sync_to", None)):
+            if var is not None:
+                var.set("")
         self.refresh_rows()
 
     # ------------------------------------------------------------ 动作
@@ -415,15 +622,18 @@ class PhoneTab(ttk.Frame):
         self._status("已删除 %d 条手机数据" % len(lids))
 
     def clear_all(self):
-        if not self.item_rows and not self.sale_rows:
+        n_items = len(self.raw_items or self.item_rows)
+        n_sales = len(self.raw_sales or self.sale_rows)
+        if not n_items and not n_sales:
             messagebox.showinfo("清空手机数据", "当前没有手机数据。", parent=self.root())
             return
         if not messagebox.askyesno(
                 "清空手机数据",
                 "清空电脑上的全部手机数据（库存 %d 条 + 出售记录 %d 条）？\n\n"
                 "· 只清电脑上的手机数据副本，主库存不受影响\n"
-                "· 手机上的数据不受影响（但如果手机再次同步，会重新上传）"
-                % (len(self.item_rows), len(self.sale_rows)),
+                "· 手机上的数据不受影响（但如果手机再次同步，会重新上传）\n"
+                "· 清空的是全部数据，筛选条件不影响此操作"
+                % (n_items, n_sales),
                 parent=self.root()):
             return
         try:
@@ -435,30 +645,50 @@ class PhoneTab(ttk.Frame):
         self._status("手机数据已清空")
 
     def export(self):
-        if not self.item_rows and not self.sale_rows:
-            messagebox.showinfo("无数据", "当前没有可导出的手机数据。", parent=self.root())
+        """导出当前表格里的内容（= 搜索 + 筛选之后的结果，不是全量）。"""
+        items, sales = self.item_rows, self.sale_rows
+        filtered = self._any_filter() or bool(self.var_kw.get().strip())
+        if not items and not sales:
+            if filtered:
+                messagebox.showinfo(
+                    "无数据", "当前搜索/筛选条件下没有数据。\n\n"
+                              "点「清空筛选」可恢复全部再导出。", parent=self.root())
+            else:
+                messagebox.showinfo("无数据", "当前没有可导出的手机数据。",
+                                    parent=self.root())
             return
         from . import xlsxio
         from datetime import datetime
-        default = "手机数据_%s.xlsx" % datetime.now().strftime("%Y%m%d_%H%M")
+        default = "手机数据%s_%s.xlsx" % ("_筛选" if filtered else "",
+                                          datetime.now().strftime("%Y%m%d_%H%M"))
         path = filedialog.asksaveasfilename(
             title="导出手机数据", parent=self.root(), defaultextension=".xlsx",
             initialfile=default, filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
         try:
-            xlsxio.export_phone_xlsx(path, self.item_rows, self.sale_rows)
+            self._export_to(path)
         except Exception as e:
             messagebox.showerror("导出失败", str(e), parent=self.root())
             return
-        self._status("已导出手机数据到 %s" % os.path.basename(path))
-        if messagebox.askyesno("导出完成",
-                               "已导出到：\n%s\n\n是否打开所在文件夹？" % path,
-                               parent=self.root()):
+        tip = "已导出 库存 %d 条 / 出售 %d 条" % (len(items), len(sales))
+        if filtered:
+            tip += "（按当前筛选条件）"
+        self._status("%s → %s" % (tip, os.path.basename(path)))
+        if messagebox.askyesno(
+                "导出完成",
+                "%s\n\n已导出到：\n%s\n\n是否打开所在文件夹？" % (tip, path),
+                parent=self.root()):
             try:
                 self.app._open_folder(os.path.dirname(path))
             except Exception:
                 pass
+
+    def _export_to(self, path):
+        """把当前（已筛选）的行写进 xlsx；返回 (库存条数, 出售条数)。"""
+        from . import xlsxio
+        xlsxio.export_phone_xlsx(path, self.item_rows, self.sale_rows)
+        return len(self.item_rows), len(self.sale_rows)
 
     # ------------------------------------------------------------ 复制
     def _clip(self, text):
