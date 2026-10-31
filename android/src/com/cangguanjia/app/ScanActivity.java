@@ -40,11 +40,15 @@ import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 import com.google.mlkit.common.MlKit;
+import com.google.mlkit.common.internal.CommonComponentRegistrar;
+import com.google.mlkit.common.sdkinternal.MlKitContext;
 import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.common.internal.VisionCommonRegistrar;
 import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
+import com.google.mlkit.vision.text.internal.TextRegistrar;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
@@ -55,6 +59,7 @@ import com.google.zxing.common.HybridBinarizer;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashSet;
@@ -99,6 +104,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
 
     /** 识别引擎全局复用：第二次进入拍照识别不用重新创建。 */
     private static TextRecognizer sRecognizer;
+    private String initErr = null;          // 初始化失败原因（暴露给状态栏便于定位）
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -352,8 +358,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         } catch (Throwable t) {
             setActionsEnabled(true);
             crop.recycle();
-            status.setText("识别引擎没能启动（" + brief(t)
-                    + "），点「识别」重试");
+            String msg = brief(t);
+            if (initErr != null) msg = "init:" + initErr + " / " + msg;
+            status.setText("识别引擎没能启动（" + msg + "），点「识别」重试");
         }
     }
 
@@ -376,12 +383,26 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     /** 手动初始化 ML Kit（与 AAR 里 MlKitInitProvider 内部调用等价）。
-     *  不声明那个 provider 是为了避免它 attachInfo 的 authority 断言在启动时崩 App。 */
+     *  不声明那个 provider 是为了避免它 attachInfo 的 authority 断言在启动时崩 App。
+     *  优先走显式 Registrar（动态模块同款官方路径，不依赖清单 meta-data 发现，
+     *  也避开 zza 里 TaskExecutors.MAIN_THREAD 的类初始化）；失败再退回 MlKit.initialize。
+     *  两条路都失败时记录原因，点识别时展示出来——绝不静默吞掉。 */
     private void ensureMlKit() {
+        initErr = null;
+        try {
+            MlKitContext.initializeIfNeeded(getApplicationContext(),
+                    Arrays.asList(new CommonComponentRegistrar(),
+                                  new VisionCommonRegistrar(),
+                                  new TextRegistrar()));
+            return;
+        } catch (Throwable t) {
+            initErr = brief(t);
+        }
         try {
             MlKit.initialize(getApplicationContext());
-        } catch (Throwable ignored) {
-            // 已初始化 / 组件注册异常都落到这里，交给 getClient 暴露具体原因
+            initErr = null;
+        } catch (Throwable t) {
+            initErr = (initErr == null ? "" : initErr + " / ") + brief(t);
         }
     }
 
