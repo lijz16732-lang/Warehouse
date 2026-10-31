@@ -348,10 +348,22 @@ class CellHover:
     - 按住鼠标（框选 / 拖动）与点击后 350ms 冷却内不显示，避免贴片
       拦截第二次点击（双击开照片会被吞）
     - 滚动时隐藏（鼠标一动会重新出现）
+
+    v1.27.5 关键修复：贴片是个 Label，一旦盖在指针下面，tree 的
+    Motion/Enter/点击/右键/滚轮全会被它吃掉（实测症状：贴片不跟随、
+    右键菜单失灵、Ctrl+C 失灵）。两个手段：
+      1) 贴片收到的事件用 event_generate 原样转发生成到 tree 上，
+         页面处理器照常工作（同 wm.app._bind_overlay_events 思路）；
+      2) 指针在表格内时 150ms 轮询按真实指针位置刷新贴片，滚动条
+         拖动 / 事件丢失后也能自动归位。
     """
 
     BG = "#3584E4"
     FG = "#FFFFFF"
+
+    # 需要转发回 tree 的事件（指针类事件都带 x_root/y_root）
+    _FWD = ("<Motion>", "<Enter>", "<Leave>", "<Button-1>", "<B1-Motion>",
+            "<ButtonRelease-1>", "<Button-3>", "<MouseWheel>")
 
     def __init__(self, tree, style=None):
         self.tree = tree
@@ -370,6 +382,59 @@ class CellHover:
         tree.bind("<Button-1>", self._on_press, add="+")
         tree.bind("<ButtonRelease-1>", self._on_release, add="+")
         tree.bind("<MouseWheel>", lambda e: self.hide(), add="+")
+        # 贴片事件转发回 tree + 指针位置轮询兜底
+        self._poll_job = None
+        for seq in self._FWD:
+            self.lbl.bind(seq, lambda e, s=seq: self._forward(s, e), add="+")
+        self._ensure_poll()
+
+    # ----------------------------------------------------------------
+    def _forward(self, seq, e):
+        """把贴片收到的事件在 tree 上原样再生成一次（坐标换算成相对 tree）。"""
+        t = self.tree
+        try:
+            kw = {"x": int(e.x_root) - t.winfo_rootx(),
+                  "y": int(e.y_root) - t.winfo_rooty(),
+                  "rootx": int(e.x_root), "rooty": int(e.y_root)}
+            d = int(getattr(e, "delta", 0) or 0)
+            if d:
+                kw["delta"] = d
+            t.event_generate(seq, **kw)
+        except Exception:
+            pass
+        return "break"
+
+    def _ensure_poll(self):
+        if self._poll_job is not None:
+            return
+        try:
+            self._poll_job = self.tree.after(150, self._poll)
+        except Exception:
+            self._poll_job = None
+
+    def _poll(self):
+        """指针在表格内时按真实指针位置刷新贴片（不依赖事件是否可达）。"""
+        self._poll_job = None
+        t = self.tree
+        try:
+            if not t.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            px, py = t.winfo_pointerxy()
+            x = px - t.winfo_rootx()
+            y = py - t.winfo_rooty()
+            inside = (0 <= x < t.winfo_width() and 0 <= y < t.winfo_height())
+            if inside or self.cell:
+                ev = type("Ev", (), {})()
+                ev.x = x
+                ev.y = y
+                self._on_motion(ev)
+                self._ensure_poll()      # 指针还在表格里：继续盯
+            # 指针已离开且贴片已藏：停止轮询，等下次 Motion/Enter 重启
+        except Exception:
+            pass
 
     # ----------------------------------------------------------------
     def hide(self, _e=None):
@@ -396,6 +461,7 @@ class CellHover:
             self._cool = None
 
     def _on_motion(self, e):
+        self._ensure_poll()
         if self._pressed or self._cool is not None:
             return
         t = self.tree

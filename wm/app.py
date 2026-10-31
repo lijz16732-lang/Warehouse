@@ -988,7 +988,7 @@ class App(object):
         # 滚动/改变尺寸/键盘上下移动后，上色贴片要重新贴合单元格
         # 滚轮自己做主（见 _on_wheel）：Tk 自带滚动在实例绑定之后执行，
         # 交给它滚动的话贴片会停在滚动前的像素位置，颜色看起来就"没了"
-        self.tree.bind("<MouseWheel>", self._on_wheel)
+        self.tree.bind("<MouseWheel>", self._on_wheel, add="+")   # add: 别覆盖 CellHover 的滚轮隐藏
         self.tree.bind("<Configure>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyPress>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyRelease>", lambda e: self._after_scroll_soon(), add="+")

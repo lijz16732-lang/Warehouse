@@ -18,6 +18,7 @@ from wm.store import Store, blank_record  # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="wm_dbg_")
 wapp.app_dir = lambda: TMP
+wapp.resolve_data_dir = lambda: TMP   # 隔离数据目录（否则会连到项目 data/ 开发库）
 Store(os.path.join(TMP, "data", "warehouse.db")).close()
 
 root = tk.Tk()
