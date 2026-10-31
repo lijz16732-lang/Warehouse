@@ -456,16 +456,54 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
 
-    /** 统一的一张图识别入口（含预处理）。TessBaseAPI 非线程安全：只在 worker 里调用。 */
+    /** 统一的一张图识别入口（含预处理 + 自动转正）。
+     *  拍照时标签经常是倒的/横的（Tesseract 只认正的文字，倒着认全是乱码），
+     *  先按原方向识别，置信度不够高就自动转 90/180/270° 再认，取分最高的结果。
+     *  TessBaseAPI 非线程安全：只在 worker 里调用。 */
     private String ocr(TessBaseAPI api, Bitmap src) {
-        Bitmap pre = preprocess(src);
-        try {
-            api.setImage(pre);
-            String t = api.getUTF8Text();
-            return t == null ? "" : t;
-        } finally {
-            if (pre != src) pre.recycle();
+        String best = null;
+        int bestScore = -1;
+        for (int rot = 0; rot < 4; rot++) {
+            Bitmap in = preprocess(rot == 0 ? src : rotate(src, rot * 90));
+            String t;
+            try {
+                api.setImage(in);
+                t = api.getUTF8Text();
+                t = t == null ? "" : t.trim();
+            } finally {
+                in.recycle();
+            }
+            int score = scoreOcr(t, api.meanConfidence());
+            if (score > bestScore) {
+                bestScore = score;
+                best = t;
+            }
+            if (score >= 75) break;      // 已经很准，不用再试其他方向
         }
+        return best == null ? "" : best;
+    }
+
+    /** 识别结果打分（0~100）：置信度为主，字数太少/没一个字母数字的结果压分，
+     *  避免把「乱码但置信度虚高」的方向当成正方向。 */
+    private static int scoreOcr(String text, int meanConf) {
+        if (text == null || text.isEmpty()) return -1;
+        int alnum = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z') || c > 127) {
+                alnum++;
+            }
+        }
+        if (alnum < 2) return 0;
+        return Math.max(0, Math.min(100, meanConf));
+    }
+
+    /** 旋转位图（90/180/270）。 */
+    private static Bitmap rotate(Bitmap b, int deg) {
+        android.graphics.Matrix m = new android.graphics.Matrix();
+        m.postRotate(deg);
+        return Bitmap.createBitmap(b, 0, 0, b.getWidth(), b.getHeight(), m, true);
     }
 
     /** 识别前处理：缩放到合适尺寸 + 去色 + 对比度拉伸。
