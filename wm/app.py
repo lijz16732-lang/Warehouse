@@ -38,7 +38,7 @@ from .xlsxio import normalize_record
 from .store import Store, dedupe_records
 from .lan import DEFAULT_PORT, LanServer, local_ips
 from .remote import HostUnreachable, PermissionDenied, RemoteError, RemoteStore
-from .theme import RowHover, apply_theme, dot_check
+from .theme import CellHover, RowHover, apply_theme, dot_check
 
 PAGE_SIZES = ["100", "200", "500", "1000", "全部"]
 
@@ -967,6 +967,8 @@ class App(object):
         # 划过高亮最先建，才能盖住下架灰/低库存橙/斑马纹（v1.10.7）
         self.hover = RowHover(self.tree, self.root)
         self.hover.on_change = self._on_hover_change
+        # 划过单元格"文本选中"式高亮（蓝底白字贴片），配合 Ctrl+C 复制
+        self.cell_hover = CellHover(self.tree)
         # 下架（未上架）：淡灰底 + 灰字，与已上架一眼区分
         self.tree.tag_configure("unlisted", background=CLR_UNLISTED_BG, foreground=CLR_UNLISTED_FG)
         self.tree.tag_configure("low", background=CLR_LOW_BG, foreground=CLR_LOW_FG)

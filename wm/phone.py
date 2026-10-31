@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
                         CLR_TEXT)
 from .photos import PhotoStrip
-from .theme import RowHover
+from .theme import CellHover, RowHover
 
 # (key, 标题, 宽度)
 PHONE_ITEM_COLS = (
@@ -57,7 +57,8 @@ class PhoneTab(ttk.Frame):
         self.item_rows = []
         self.sale_rows = []
         self._maps = {}           # tree → {iid: 记录}（两表各自独立，防覆盖）
-        self._hovers = {}         # tree → RowHover（划过高亮，复制取悬停行用）
+        self._hovers = {}         # tree → RowHover（划过行高亮）
+        self._cell_hovers = {}    # tree → CellHover（划过单元格"选中"高亮）
         self._kw_debounce = None
         self._build()
 
@@ -173,6 +174,7 @@ class PhoneTab(ttk.Frame):
         tree.tag_configure("done", background="#F0F7F0")   # 已转入：淡绿底
         tree.tag_configure("odd", background="#F7FAFD")
         self._hovers[tree] = RowHover(tree, self.app.root)
+        self._cell_hovers[tree] = CellHover(tree)   # 划过单元格"选中"式高亮
         tree.bind("<Delete>", lambda e: self.delete_selected())
         # 划过高亮行上 Ctrl+C：复制鼠标所指单元格（不在表格上则复制选中行）
         tree.bind("<Control-c>", lambda e, t=tree: self._copy_hover(t))

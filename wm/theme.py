@@ -335,3 +335,91 @@ def make_menu(root, items):
         else:
             m.add_command(label=label, command=cmd)
     return m
+
+
+class CellHover:
+    """鼠标划过单元格 → "文本选中"式高亮（蓝底白字贴片盖在该格上）。
+
+    Treeview 的 tag 是行级的，没法只染一个格子；用同字号 Label 贴片模拟
+    文本划选效果，配合 Ctrl+C / 右键复制使用。
+
+    - 划到数据单元格 → 贴片盖上去（文字 = 该格内容）
+    - 表头 / 空白 / 📷 指示列 / 空内容 → 不显示
+    - 按住鼠标（框选 / 拖动）与点击后 350ms 冷却内不显示，避免贴片
+      拦截第二次点击（双击开照片会被吞）
+    - 滚动时隐藏（鼠标一动会重新出现）
+    """
+
+    BG = "#3584E4"
+    FG = "#FFFFFF"
+
+    def __init__(self, tree, style=None):
+        self.tree = tree
+        try:
+            font = (style or ttk.Style()).lookup("Treeview", "font") or None
+        except Exception:
+            font = None
+        self.lbl = tk.Label(tree, bg=self.BG, fg=self.FG, font=font,
+                            anchor="w", padx=5, bd=0, highlightthickness=0)
+        self.cell = None              # (row_iid, col_index) or None
+        self._pressed = False
+        self._cool = None
+        tree.bind("<Motion>", self._on_motion, add="+")
+        tree.bind("<Enter>", self._on_motion, add="+")
+        tree.bind("<Leave>", lambda e: self.hide(), add="+")
+        tree.bind("<Button-1>", self._on_press, add="+")
+        tree.bind("<ButtonRelease-1>", self._on_release, add="+")
+        tree.bind("<MouseWheel>", lambda e: self.hide(), add="+")
+
+    # ----------------------------------------------------------------
+    def hide(self, _e=None):
+        self.cell = None
+        try:
+            self.lbl.place_forget()
+        except Exception:
+            pass
+
+    def _on_press(self, _e):
+        self._pressed = True
+        self.hide()
+
+    def _on_release(self, _e):
+        self._pressed = False
+        if self._cool is not None:
+            try:
+                self.tree.after_cancel(self._cool)
+            except Exception:
+                pass
+        try:
+            self._cool = self.tree.after(350, lambda: setattr(self, "_cool", None))
+        except Exception:
+            self._cool = None
+
+    def _on_motion(self, e):
+        if self._pressed or self._cool is not None:
+            return
+        t = self.tree
+        try:
+            if t.identify_region(e.x, e.y) != "cell":
+                self.hide()
+                return
+            row = t.identify_row(e.y)
+            cidx = int(str(t.identify_column(e.x)).replace("#", "")) - 1
+        except (TypeError, ValueError):
+            self.hide()
+            return
+        if not row or cidx < 0:
+            self.hide()
+            return
+        vals = t.item(row, "values")
+        if cidx >= len(vals) or not str(vals[cidx]):
+            self.hide()
+            return
+        bbox = t.bbox(row, "#%d" % (cidx + 1))
+        if not bbox:
+            self.hide()
+            return
+        bx, by, bw, bh = bbox
+        self.lbl.configure(text=str(vals[cidx]))
+        self.lbl.place(x=bx, y=by, width=bw, height=bh)
+        self.cell = (row, cidx)
