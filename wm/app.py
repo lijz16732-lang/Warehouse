@@ -479,6 +479,9 @@ class App(object):
         dlg.resizable(False, False)
         dlg.configure(bg=CLR_BG)
         apply_window_icon(dlg)
+        # rebuild() 里有 update_idletasks（会把未映射窗口按默认位置显示），
+        # 先压住显示，等末尾 center_window 摆好位置再出现
+        dlg.withdraw()
         W = 470
 
         # ---- 头部 ----
@@ -649,11 +652,14 @@ class App(object):
         if fit["maxed"] or (self.settings.get("maxed") and not fit["compact"]):
             try:
                 self.root.state("zoomed")
+                # 启动期主窗口被 withdraw 防闪框，几何就绪后再显示
+                self.root.deiconify()
                 return
             except Exception:
                 pass
         self.root.geometry("%dx%d+%d+%d" % (fit["w"], fit["h"],
                                             fit["x"], fit["y"]))
+        self.root.deiconify()
 
     # ============================================================ 菜单
     def _build_menubar(self):
@@ -2600,7 +2606,6 @@ class App(object):
         win.configure(bg=CLR_BG)
         win.transient(self.root)
         apply_window_icon(win)
-        center_window(win, self.root, size=(760, 520))
 
         head = tk.Frame(win, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)

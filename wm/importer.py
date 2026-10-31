@@ -179,6 +179,8 @@ class ImportDialog(tk.Toplevel):
         self._refresh_hint()
 
     def _center(self, master):
+        # 先隐藏再量尺寸：update_idletasks 会把未映射窗口按默认位置（左上角）显示
+        self.withdraw()
         self.update_idletasks()
         w, h = max(880, self.winfo_reqwidth()), max(620, self.winfo_reqheight())
         self.geometry("%dx%d" % (w, h))

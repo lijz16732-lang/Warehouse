@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.26.7"
+APP_VERSION = "1.26.9"
 
 
 def app_icon_path():
@@ -48,7 +48,23 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
 
     居中基准是「桌面工作区」而不是整块屏幕：Win10 / Win11 任务栏高度不同，
     用工作区才不会让 730 高的弹窗压到任务栏下面或被裁掉。
+
+    防闪左上角：update_idletasks 会把尚未映射的 Toplevel 直接映射出来
+    （Windows 默认位置在左上角），随后设置 geometry 才跳到居中位置，
+    表现为「弹窗先跑左上、再居中」闪一下。所以对还没显示过的窗口：
+    先 withdraw 压住显示，摆好几何再 deiconify。已映射的窗口（重新居中）
+    不做隐藏，只平滑挪位置。
     """
+    was_mapped = False
+    try:
+        was_mapped = bool(win.winfo_ismapped())
+    except Exception:
+        pass
+    if not was_mapped:
+        try:
+            win.withdraw()
+        except Exception:
+            pass
     try:
         win.update_idletasks()
         given = size is not None
@@ -93,6 +109,14 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
             win.geometry("+%d+%d" % (x, y))
     except Exception:
         pass
+    finally:
+        if not was_mapped:
+            # 我们在上面把它隐藏了，摆好位后恢复显示（调用方自己再
+            # deiconify 是幂等的，不会出问题）
+            try:
+                win.deiconify()
+            except Exception:
+                pass
 
 # --------------------------------------------------------------------------
 # 字段定义 (key, 中文名, 类型, 默认列宽, 对齐, 是否可参与筛选)

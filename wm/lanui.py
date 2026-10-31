@@ -33,6 +33,8 @@ class LanDialog(tk.Toplevel):
         self._build()
         # 窗口高度按实际内容计算（头部 + 卡片区 + 底部），1080p 上一屏显示完整；
         # 1366×768 笔记本上被屏幕限制时内容区自动出现滚动条，不会裁掉「关闭」按钮
+        # 先隐藏再量尺寸：update_idletasks 会把未映射窗口按默认位置（左上角）显示
+        self.withdraw()
         self.update_idletasks()
         need = (self.body.winfo_reqheight() + self._head.winfo_reqheight()
                 + self._foot.winfo_reqheight() + 24)

@@ -59,6 +59,10 @@ def main():
     while True:
         _apply_palette()          # 热切换主题/字体后按新设置重建界面
         root = tk.Tk()
+        # 先隐藏主窗口：App.__init__ 构建界面期间窗口还是默认小尺寸，
+        # 直接显示会在左上角闪现一个空白小框，等 _apply_geometry 设好
+        # 尺寸/最大化后再显示（deiconify）
+        root.withdraw()
         try:
             # 先设图标再构建界面，避免窗口/任务栏闪现默认图标
             try:
