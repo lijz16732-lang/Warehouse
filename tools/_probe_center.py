@@ -28,10 +28,12 @@ def main():
     d1 = tk.Toplevel(root)
     tk.Label(d1, text="hello", width=40, height=10).pack()
     assert d1.winfo_ismapped() == 0, "前置：新窗口应未映射"
-    # 记录「映射那一刻」的坐标：闪左上角 = 以默认位置(~0,0)被映射
+    # 记录「映射那一刻」的坐标与透明度：闪左上角 = 以默认位置(~0,0)、
+    # 不透明状态被映射。alpha 方案允许在透明状态先映射到 (0,0) 再挪位。
     map_pos = {}
     d1.bind("<Map>", lambda e: map_pos.update(
-        x=d1.winfo_x(), y=d1.winfo_y()))
+        x=d1.winfo_x(), y=d1.winfo_y(), alpha=d1.attributes("-alpha"))
+        if e.widget is d1 else None)
     center_window(d1, root)
     root.update()
     assert d1.winfo_ismapped() == 1, "事件循环后弹窗应已显示"
@@ -39,8 +41,9 @@ def main():
     bx, by = root.winfo_rootx(), root.winfo_rooty()
     x, y = d1.winfo_x(), d1.winfo_y()
     assert x > bx + 50 and y > 50, "弹窗应出现在居中位置而不是左上角: %d,%d" % (x, y)
-    assert map_pos["x"] > bx + 50, \
-        "映射时刻坐标 %s 说明弹窗先在左上角被映射（闪框）" % map_pos
+    visible_flash = map_pos["x"] <= bx + 50 and map_pos["alpha"] > 0
+    assert not visible_flash, \
+        "映射时刻以不透明状态落在 %s（闪左上角）" % map_pos
     print("case1 ok: mapped_at=%s final=(%d,%d)" % (map_pos, x, y))
 
     # ---- 用例 2：已映射窗口重新居中（不应消失再出现）----

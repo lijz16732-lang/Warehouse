@@ -28,6 +28,34 @@ def _apply_palette():
         C.apply_palette("light")
 
 
+def _install_noflash_toplevel():
+    """全局防闪左上角保险：所有 Toplevel 创建即隐藏。
+
+    弹窗的显示统一由 center_window（对未映射窗口 withdraw→摆几何→
+    deiconify）或调用方自己的 withdraw→center→deiconify 完成；这样无论
+    哪条代码路径中途泵了事件循环，弹窗都不可能以默认小尺寸先出现在
+    左上角。（已核对全部 tk.Toplevel 调用点：结尾都有 center_window /
+    deiconify，不会出现「创建后忘了显示」的弹窗；messagebox / filedialog
+    是原生 Windows 对话框，不受影响。）
+    """
+    import tkinter as tk
+    if getattr(tk, "_noflash_installed", False):
+        return
+
+    _OrigToplevel = tk.Toplevel
+
+    class _NoFlashToplevel(_OrigToplevel):
+        def __init__(self, master=None, cnf={}, **kw):
+            _OrigToplevel.__init__(self, master, cnf, **kw)
+            try:
+                self.withdraw()
+            except Exception:
+                pass
+
+    tk.Toplevel = _NoFlashToplevel
+    tk._noflash_installed = True
+
+
 def main():
     _bootstrap()
     # 开启 DPI 感知：Win10/Win11 笔记本常见 125%/150% 缩放，不开启会整窗发虚。
@@ -56,6 +84,10 @@ def main():
         return 1
 
     import tkinter as tk
+
+    # 全局防闪左上角保险（详见 _install_noflash_toplevel 文档）
+    _install_noflash_toplevel()
+
     while True:
         _apply_palette()          # 热切换主题/字体后按新设置重建界面
         root = tk.Tk()

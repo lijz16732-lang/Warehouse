@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.26.9"
+APP_VERSION = "1.27.0"
 
 
 def app_icon_path():
@@ -56,6 +56,7 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
     不做隐藏，只平滑挪位置。
     """
     was_mapped = False
+    _need_show = [False]
     try:
         was_mapped = bool(win.winfo_ismapped())
     except Exception:
@@ -107,14 +108,60 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
             win.geometry("%dx%d+%d+%d" % (fw, fh, x, y))
         else:
             win.geometry("+%d+%d" % (x, y))
+        # 记录：deiconify 后还需要一次 flush + 恢复不透明（见 finally）
+        _need_show[0] = True
+        _target = (x, y)
     except Exception:
-        pass
+        _target = None
     finally:
-        if not was_mapped:
-            # 我们在上面把它隐藏了，摆好位后恢复显示（调用方自己再
-            # deiconify 是幂等的，不会出问题）
+        if _need_show[0]:
+            # 关键：Canvas + create_window 内嵌内容的窗口，deiconify 瞬间会
+            # 先以默认位置 (0,0) 映射、几何在稍后的事件处理里才落到目标位置
+            # ——肉眼看就是「弹窗先跑左上角再居中」。update_idletasks 等
+            # 不到 WM 的映射通知，所以不能用「摆完再恢复显示」的简单办法。
+            # 解法：以 alpha=0（完全透明）完成映射和挪位，轮询到位置落定
+            # （或超时兜底）再恢复不透明，任何内容结构都无闪框。
+            try:
+                win.attributes("-alpha", 0.0)
+            except Exception:
+                pass                      # 不支持透明 → 退化为直接显示
             try:
                 win.deiconify()
+                win.update_idletasks()
+            except Exception:
+                pass
+            try:
+                _ticks = [0]
+
+                def _restore_alpha():
+                    try:
+                        if not win.winfo_exists():
+                            return
+                        # 两个条件都满足才算落定：窗口已映射（WM 通知已处理）
+                        # 且位置已离开默认 (0,0)（winfo_x 读的是请求坐标，
+                        # 映射前就会返回目标值，不能只看坐标）。1 秒兜底防止
+                        # 个别窗口管理器长期不放位置导致弹窗「隐身」。
+                        if (_ticks[0] >= 66 or
+                                (win.winfo_ismapped() and
+                                 (win.winfo_x(), win.winfo_y()) != (0, 0))):
+                            win.attributes("-alpha", 1.0)
+                            return
+                    except Exception:
+                        return
+                    _ticks[0] += 1
+                    try:
+                        win.after(15, _restore_alpha)
+                    except Exception:
+                        pass
+                win.after(15, _restore_alpha)
+            except Exception:
+                try:
+                    win.attributes("-alpha", 1.0)
+                except Exception:
+                    pass
+        elif not was_mapped:
+            try:
+                win.deiconify()           # 兜底：异常路径也要让窗口显示出来
             except Exception:
                 pass
 
