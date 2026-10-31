@@ -8,8 +8,8 @@
      「界面正常、点识别必失败」——因此下面这段必须手工维护，与 libs 里的 AAR 对应。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="27"
-    android:versionName="1.28.1">
+    android:versionCode="28"
+    android:versionName="1.28.2">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
@@ -60,10 +60,11 @@
 
     <!-- ==== 以下来自 libs/*.aar 的清单，Gradle 会自动合并，手写打包必须手工补 ==== -->
     <!-- 1) 组件发现：识别器（Registrar）在这里注册，缺了引擎找不到任何识别能力。
-         注意：AAR 里的 MlKitInitProvider 故意不声明——它在 attachInfo 里对 authority
-         有硬断言，声明后一旦不匹配就是「App 一启动就崩」；初始化改由 ScanActivity
-         调 MlKit.initialize() 完成（与 provider 内部同一个 MlKitContext.zza 调用，
-         效果等价，失败也只影响这一次识别，不会拖垮整个 App）。 -->
+         注意：这里只放「纯声明」的东西（service / meta-data）——它们不会在启动时执行
+         任何代码，因此不影响 App 启动。反过来，任何 ContentProvider 都会在进程启动
+         时被系统实例化，ML Kit 的 MlKitInitProvider 和 androidx.startup 的
+         InitializationProvider 都属于这一类，一旦版本/依赖对不上就是「点开就闪退」，
+         所以两者都不声明：ML Kit 改由 ScanActivity 调 MlKit.initialize() 按需初始化。 -->
     <service
         android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
         android:exported="false"
@@ -79,18 +80,9 @@
           android:value="com.google.firebase.components.ComponentRegistrar"/>
     </service>
 
-    <!-- 2) 生命周期初始化（androidx.startup，lifecycle-process AAR 声明） -->
-    <provider
-        android:name="androidx.startup.InitializationProvider"
-        android:authorities="com.cangguanjia.app.androidx-startup"
-        android:exported="false">
-      <meta-data
-          android:name="androidx.lifecycle.ProcessLifecycleInitializer"
-          android:value="androidx.startup"/>
-    </provider>
-
-    <!-- 3) GMS 版本声明（play-services-basement 声明，值取自其 res 的
-         integer/google_play_services_version = 12451000；手写打包不合并 AAR 资源故写死） -->
+    <!-- 2) GMS 版本声明（play-services-basement 声明，值取自其 res 的
+         integer/google_play_services_version = 12451000；手写打包不合并 AAR 资源故写死）。
+         纯 meta-data，不执行代码。 -->
     <meta-data
         android:name="com.google.android.gms.version"
         android:value="12451000"/>

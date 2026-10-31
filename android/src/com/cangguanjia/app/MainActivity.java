@@ -69,6 +69,24 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            buildUi(savedInstanceState);
+        } catch (Throwable t) {
+            showStartupError(t);        // 宁可显示一行报错，也不要静默闪退
+        }
+    }
+
+    /** 启动失败时把异常直接显示在屏幕上（截图即可定位），避免用户只看到「闪退」。 */
+    private void showStartupError(Throwable t) {
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setText("启动失败：" + t.getClass().getSimpleName() + "\n"
+                + t.getMessage() + "\n\n" + android.util.Log.getStackTraceString(t));
+        tv.setTextSize(11);
+        tv.setPadding(dp(16), dp(40), dp(16), dp(16));
+        setContentView(tv);
+    }
+
+    private void buildUi(Bundle savedInstanceState) {
         if (Build.VERSION.SDK_INT >= 21) {
             getWindow().setStatusBarColor(Color.parseColor("#1f6feb"));
         }

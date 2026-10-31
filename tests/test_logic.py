@@ -951,12 +951,15 @@ try:
           'MlKitComponentDiscoveryService' in _mf
           and 'CommonComponentRegistrar' in _mf
           and 'VisionCommonRegistrar' in _mf
-          and 'TextRegistrar' in _mf
-          and 'androidx.startup.InitializationProvider' in _mf
-          and 'ProcessLifecycleInitializer' in _mf)
-    check("不声明 MlKitInitProvider（其 authority 硬断言会在启动时崩 App），改手动初始化",
-          'com.google.mlkit.common.internal.MlKitInitProvider' not in _mf
-          and "MlKit.initialize" in _sj and "import com.google.mlkit.common.MlKit;" in _sj)
+          and 'TextRegistrar' in _mf)
+    # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」；
+    # 只允许自己的 PhotoProvider，ML Kit / androidx.startup 的 provider 一律不声明
+    check("启动期不注册额外 ContentProvider（防「点开就闪退」）",
+          "com.google.mlkit.common.internal.MlKitInitProvider" not in _mf
+          and 'androidx.startup.InitializationProvider' not in _mf
+          and _mf.count("<provider") == 1 and ".PhotoProvider" in _mf
+          and "MlKit.initialize" in _sj
+          and "import com.google.mlkit.common.MlKit;" in _sj)
     try:
         import re as _re
         import zipfile as _zip
