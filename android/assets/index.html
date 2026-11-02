@@ -205,6 +205,50 @@ tr:active td { background:var(--active) !important; }
 body.dark .fab { box-shadow:0 8px 22px rgba(0,0,0,.55); }
 /* 深色下顶栏用更深一档的蓝：浅蓝底 + 白字对比度不够（约 2.6:1） */
 body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,.45); }
+/* ---------- 设置页：分组 + 列表行 ----------
+   原来的问题是六张同样大小的卡片平铺，没有主次，表格列还占三屏。
+   现在按「连接 / 显示 / 数据」分三组，组内用列表行承载，箭头提示可点。 */
+.sec { margin-bottom:16px; }
+.sec + .sec { margin-top:24px; }
+.sec-t { font-size:var(--fs-sm); font-weight:600; letter-spacing:.8px;
+         color:var(--muted); margin:0 4px 8px; }
+.card.tight { padding:12px 16px; }
+.row { display:flex; align-items:center; gap:12px; padding:9px 0; }
+.row + .row { border-top:1px solid var(--line3); }
+.row > label { flex:none; width:76px; font-size:var(--fs-md); font-weight:500; color:var(--fg); }
+.row input { flex:1; min-width:0; }
+.row .seg { flex:1; margin:0; }
+.row-note { flex:1; font-size:var(--fs-sm); color:var(--muted); line-height:1.5; }
+.row-head { display:flex; align-items:center; gap:12px; padding:2px 0 10px; }
+.row-head > div:first-child { flex:1; min-width:0; }
+.row-t { font-size:var(--fs-lg); font-weight:700; letter-spacing:.2px; }
+.row-sub { font-size:var(--fs-sm); color:var(--muted); margin-top:4px; line-height:1.5; }
+.btnrow { display:flex; gap:10px; margin-top:12px; }
+.btnrow button { flex:1; }
+/* 行式按钮：整行可点、右侧箭头，比一排彩色块更像"设置" */
+.rowbtn { display:flex; width:100%; height:50px; padding:0 2px; background:none;
+          color:var(--fg); font-size:var(--fs-md); font-weight:500;
+          justify-content:flex-start; border-radius:0; box-shadow:none;
+          border-bottom:1px solid var(--line3); }
+.rowbtn::after { content:"\203A"; margin-left:auto; color:var(--muted);
+                 font-size:19px; line-height:1; }
+.rowbtn:active { background:var(--active); color:var(--accent); }
+/* 次要 / 危险操作：描边按钮，避免满屏实心色块 */
+.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent);
+         box-shadow:none; font-weight:600; }
+.ghost:active { background:var(--accent-soft); color:var(--accent-d); }
+.danger-ghost { background:transparent; color:var(--danger);
+                border:1px solid rgba(220,61,67,.45); box-shadow:none; font-weight:600; }
+.danger-ghost:active { background:rgba(220,61,67,.08); }
+/* 表格列：两列网格，一屏看完 */
+.colgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.colgrid .ckrow { border:1px solid var(--line); border-radius:10px; padding:11px 12px;
+                  font-size:var(--fs-sm); }
+.colgrid .ckrow input { accent-color:var(--accent); }
+/* :has() 要 Chrome 105+；老 WebView 不支持时靠 JS 打 .on 类兜底 */
+.colgrid .ckrow.on,
+.colgrid .ckrow:has(input:checked) { border-color:var(--accent); background:var(--active); }
+.colgrid .ckrow.dis { opacity:.55; }
 /* 无障碍：系统开了「减少动态效果」就关掉过渡 */
 @media (prefers-reduced-motion: reduce) {
   * { transition:none !important; animation:none !important; }
@@ -283,75 +327,98 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
   </div>
   <!-- 设置 -->
   <div id="pSet" class="hide">
-    <div class="card">
-      <h3>数据共享到电脑端</h3>
-      <div class="hint" style="margin:0 0 10px">手机数据照常存在手机里；开启后录入/出售会直接同步到电脑「手机数据」区（需电脑端已「开启共享」）。</div>
-      <button id="btnQrConn" style="width:100%;margin:0 0 10px">扫电脑二维码，自动连接</button>
-      <div class="fcol"><label>电脑地址（局域网共享 → 手机访问）</label>
-        <input id="shBase" placeholder="例如 192.168.1.5:8765" autocapitalize="off"></div>
-      <div class="fcol"><label>连接码</label>
-        <input id="shCode" type="password" inputmode="numeric" placeholder="电脑上显示的 6 位连接码"></div>
-      <div class="btnrow" style="display:flex;gap:10px">
-        <button id="btnShareConn" style="flex:1">连接电脑</button>
-        <button id="btnShareOff" class="gray" style="flex:1">断开</button>
+
+    <div class="sec">
+      <div class="sec-t">连接到电脑</div>
+      <div class="card">
+        <div class="hint" style="margin:0 0 12px">手机数据照常存在手机里；开启后录入 / 出售会直接同步到电脑「手机数据」区（电脑端需先「开启共享」）。</div>
+        <button id="btnQrConn" class="ghost" style="width:100%;margin-bottom:2px">扫码连接电脑</button>
+        <div class="row">
+          <label for="shBase">电脑地址</label>
+          <input id="shBase" placeholder="192.168.1.5:8765" autocapitalize="off">
+        </div>
+        <div class="row">
+          <label for="shCode">连接码</label>
+          <input id="shCode" type="password" inputmode="numeric" placeholder="电脑上的 6 位数字">
+        </div>
+        <div class="btnrow">
+          <button id="btnShareConn">连接电脑</button>
+          <button id="btnShareOff" class="gray">断开</button>
+        </div>
+        <div class="statline" id="shareStat"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button id="btnSync" class="gray">立即同步</button>
+          <button id="btnAuto" class="gray">自动同步：关</button>
+        </div>
+        <div class="stat" id="syncStat"></div>
       </div>
-      <div class="statline" id="shareStat"></div>
-      <div class="btnrow" style="display:flex;gap:10px;margin-top:6px">
-        <button id="btnSync" style="flex:1">立即同步到电脑</button>
-        <button id="btnAuto" class="gray" style="flex:1">自动同步：关</button>
-      </div>
-      <div class="stat" id="syncStat"></div>
     </div>
-    <div class="card">
-      <h3>编号前缀</h3>
-      <div class="frow">
-        <div class="fcol"><input id="inPrefix" placeholder="APP"></div>
-        <button id="btnPrefix" class="gray" style="flex:none">保存</button>
+
+    <div class="sec">
+      <div class="sec-t">显示与偏好</div>
+      <div class="card tight">
+        <div class="row">
+          <label for="inPrefix">编号前缀</label>
+          <input id="inPrefix" placeholder="APP">
+          <button id="btnPrefix" class="gray small">保存</button>
+        </div>
+        <div class="row">
+          <label>外观</label>
+          <div class="seg">
+            <div id="thLight">浅色</div>
+            <div id="thDark">深色</div>
+            <div id="thAuto">跟随系统</div>
+          </div>
+        </div>
+        <div class="stat" id="prefixStat"></div>
       </div>
-      <div class="stat" id="prefixStat"></div>
-    </div>
-    <div class="card">
-      <h3>外观</h3>
-      <div class="seg">
-        <div id="thLight">浅色</div>
-        <div id="thDark">深色</div>
-        <div id="thAuto">跟随系统</div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">库存表格列</div>
+            <div class="row-sub">勾选要在库存表里显示的列，编号始终显示</div>
+          </div>
+          <button id="btnColReset" class="gray small">恢复默认</button>
+        </div>
+        <div id="colList" class="colgrid"></div>
       </div>
-      <div class="stat" style="margin-top:0">深色模式晚上盘货不刺眼；「跟随系统」随手机昼夜自动切换。</div>
     </div>
-    <div class="card">
-      <h3>库存表格列</h3>
-      <div class="hint" style="margin:0 0 6px">勾选要在「库存」表格里显示的列（编号始终显示），改动立即生效。</div>
-      <div id="colList"></div>
-      <button id="btnColReset" class="gray small" style="margin-top:10px">恢复默认列</button>
-    </div>
-    <div class="card">
-      <h3>数据管理</h3>
-      <div class="statline" id="dataStat"></div>
-      <div class="btnrow" style="display:flex;gap:10px;margin-top:10px">
-        <button id="btnExport" style="flex:1">导出全部数据</button>
-        <button id="btnWipe" class="danger" style="flex:1">清空手机数据</button>
+
+    <div class="sec">
+      <div class="sec-t">数据与隐私</div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">数据管理</div>
+            <div class="row-sub" id="dataStat"></div>
+          </div>
+        </div>
+        <div class="btnrow">
+          <button id="btnExport" class="gray">导出全部数据</button>
+          <button id="btnWipe" class="danger-ghost">清空手机数据</button>
+        </div>
+        <div class="hint">导出为 JSON 备份，可存到电脑或转发给自己；清空只影响手机。</div>
       </div>
-      <div class="hint">导出的 JSON 备份含库存、出售记录与照片，可保存到电脑或转发给自己；
-        清空只影响手机，已同步到电脑的数据不受影响。</div>
-    </div>
-    <div class="card">
-      <h3>隐私与数据</h3>
-      <div class="statline" id="legalStat">隐私政策</div>
-      <div class="btnrow" style="display:flex;gap:10px;margin-top:10px">
-        <button id="btnPrivacy" class="gray" style="flex:1">《隐私政策》</button>
-        <button id="btnTerms" class="gray" style="flex:1">《用户协议》</button>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">隐私</div>
+            <div class="row-sub" id="legalStat">隐私政策</div>
+          </div>
+        </div>
+        <button id="btnPrivacy" class="rowbtn">隐私政策</button>
+        <button id="btnTerms" class="rowbtn">用户协议</button>
+        <button id="btnInfoList" class="rowbtn">个人信息收集使用清单</button>
+        <div class="row">
+          <label>启动验证</label>
+          <div class="row-note">用手机锁屏密码验证身份</div>
+          <button id="btnLock" class="gray small">关</button>
+        </div>
+        <button id="btnWithdraw" class="danger-ghost" style="width:100%;margin-top:10px">撤回同意并清除数据</button>
+        <div class="hint">撤回后本机数据会被删除并退出应用，撤回前建议先导出备份。</div>
       </div>
-      <button id="btnInfoList" class="gray" style="width:100%;margin-top:10px">个人信息收集使用清单</button>
-      <div class="frow" style="margin-top:14px">
-        <div class="fcol"><label>启动验证（用手机锁屏密码）</label></div>
-        <button id="btnLock" class="gray" style="flex:none">关</button>
-      </div>
-      <div class="hint" style="margin-top:0">开启后每次打开应用要先通过手机锁屏密码 / 指纹，
-        防止别人拿到手机直接看库存。</div>
-      <button id="btnWithdraw" class="danger" style="width:100%;margin-top:12px">撤回同意并清除数据</button>
-      <div class="hint">撤回后本机数据会被删除、应用退出；撤回前建议先导出备份。</div>
     </div>
+
   </div>
 </main>
 
@@ -1494,7 +1561,7 @@ function renderLegal() {
     ? ('已同意 · 隐私政策 v' + v)
     : '请在 App 内阅读并同意隐私政策';
   $('btnLock').textContent = on ? '开' : '关';
-  $('btnLock').className = on ? '' : 'gray';
+  $('btnLock').className = 'small' + (on ? '' : ' gray');
 }
 $('btnPrivacy').onclick = function () {
   var b = legal();
@@ -1630,7 +1697,8 @@ function renderColList() {
   var box = $('colList'); box.innerHTML = '';
   ALL_COLS.forEach(function (p) {
     var row = document.createElement('label');
-    row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '');
+    row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '') +
+                    (DB.locCols.indexOf(p[0]) >= 0 ? ' on' : '');
     var cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = DB.locCols.indexOf(p[0]) >= 0;
@@ -1644,6 +1712,7 @@ function renderColList() {
         if (DB.locCols.length <= 1) { cb.checked = true; toast('至少保留一列'); return; }
         if (i >= 0) DB.locCols.splice(i, 1);
       }
+      row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '') + (cb.checked ? ' on' : '');
       saveDB(); refreshInv();
     };
     row.appendChild(cb);

@@ -1161,6 +1161,23 @@ try:
           "btnPrivacy" in _app_html and "btnTerms" in _app_html
           and "btnInfoList" in _app_html and "btnExport" in _app_html
           and "btnWithdraw" in _app_html)
+
+    # 设置页 v1.32.3 分组版式：三组五卡，重排后功能控件一个不能丢
+    _pset = _app_html.split('id="pSet"', 1)[-1].split("</main>", 1)[0]
+    _set_ids = ["btnQrConn", "shBase", "shCode", "btnShareConn", "btnShareOff",
+                "shareStat", "btnSync", "btnAuto", "syncStat", "inPrefix",
+                "btnPrefix", "thLight", "thDark", "thAuto", "prefixStat",
+                "btnColReset", "colList", "dataStat", "btnExport", "btnWipe",
+                "legalStat", "btnPrivacy", "btnTerms", "btnInfoList",
+                "btnLock", "btnWithdraw"]
+    _miss2 = [i for i in _set_ids if ('id="%s"' % i) not in _pset]
+    check("设置页分组版式保留全部功能控件 id", not _miss2,
+          "缺：" + ", ".join(_miss2) if _miss2 else "")
+    check("设置页按「连接 / 显示 / 数据与隐私」分三组",
+          _pset.count('class="sec"') == 3 and _pset.count("sec-t") == 3)
+    check("表格列自定义为两列网格，勾选高亮有 JS 兜底（:has 兼容）",
+          'class="colgrid"' in _pset and ".colgrid .ckrow.on" in _app_html
+          and "row.className = 'ckrow'" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
