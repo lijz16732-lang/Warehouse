@@ -768,7 +768,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         String top = lines.get(0);
         hintBig.setText("填入：" + top);
         hintBig.setTag(top);
-        hintBig.setBackgroundColor(Color.parseColor("#1f6feb"));
+        hintBig.setBackgroundColor(Color.parseColor("#2563EB"));
         status.setText("识别到 " + lines.size() + " 行，点下面的文字填入；不合适可重拍");
         choices.removeAllViews();
         for (int i = 1; i < lines.size(); i++) {
@@ -948,7 +948,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         ok.setAllCaps(false);
         ok.setTextSize(15);
         ok.setTextColor(Color.WHITE);
-        ok.setBackgroundColor(Color.parseColor("#1f6feb"));
+        ok.setBackgroundColor(Color.parseColor("#2563EB"));
         ok.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {

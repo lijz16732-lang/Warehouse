@@ -247,7 +247,7 @@ public final class Legal {
         TextView tv = new TextView(a);
         tv.setText(text);
         tv.setTextSize(13f);
-        tv.setTextColor(Color.parseColor("#1f6feb"));
+        tv.setTextColor(Color.parseColor("#2563EB"));
         tv.setPadding(dp(a, 8), dp(a, 4), dp(a, 8), dp(a, 4));
         tv.setMovementMethod(LinkMovementMethod.getInstance());
         tv.setOnClickListener(l);

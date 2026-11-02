@@ -128,7 +128,7 @@ public class MainActivity extends Activity {
      */
     private void buildUi(Bundle savedInstanceState) {
         if (Build.VERSION.SDK_INT >= 21) {
-            getWindow().setStatusBarColor(Color.parseColor("#1f6feb"));
+            getWindow().setStatusBarColor(Color.parseColor("#2563EB"));
         }
         if (lockEnabled()) {
             if (awaitUnlock()) {
@@ -165,7 +165,7 @@ public class MainActivity extends Activity {
         tv.setText("仓管家\n\n本地库存管理 · 数据只存在你的手机上");
         tv.setGravity(android.view.Gravity.CENTER);
         tv.setTextSize(15);
-        tv.setTextColor(Color.parseColor("#1f6feb"));
+        tv.setTextColor(Color.parseColor("#2563EB"));
         setContentView(tv);
     }
 
