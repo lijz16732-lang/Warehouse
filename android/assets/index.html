@@ -125,6 +125,24 @@ th { background:var(--th); color:var(--thf); font-size:var(--fs-xs); font-weight
      z-index:2; text-align:left; border-bottom:1px solid var(--line2); }
 td { padding:12px; border-bottom:1px solid var(--line3); font-size:13.5px;
      white-space:nowrap; font-variant-numeric:tabular-nums; }
+/* 表格超出屏幕时横向滑动（列宽/文字保持原样，不截断）；右上角给一个滑动提示 */
+.tblbox { position:relative; }
+/* 禁掉表格文字选中：长按行是「进入多选」，不能让系统弹出复制/分享菜单 */
+.tblwrap { user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+.swhint { position:absolute; right:10px; top:7px; z-index:3; pointer-events:none;
+          font-size:var(--fs-xs); font-weight:600; color:var(--accent);
+          background:var(--accent-soft); border-radius:var(--r-pill);
+          padding:4px 9px; box-shadow:var(--sh1); transition:opacity .25s; }
+body.dark .swhint { background:#1e2b45; color:#8fb4ff; }
+/* 长按多选：勾选圆圈列 + 选中行高亮 + 底部选择条 */
+td.ckbox { padding:12px 4px; text-align:center; color:var(--line2); font-size:17px; }
+tr.picked td { background:var(--accent-soft) !important; }
+tr.picked td.ckbox { color:var(--accent); font-weight:700; }
+.selbar { position:fixed; left:12px; right:12px; bottom:calc(72px + env(safe-area-inset-bottom));
+          z-index:9; display:flex; align-items:center; gap:8px; background:var(--card);
+          border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+          box-shadow:var(--sh3); }
+.selbar span { flex:1; text-align:center; font-size:var(--fs-sm); color:var(--soft); }
 tbody tr:nth-child(even) td { background:var(--zebra); }
 tbody tr:last-child td { border-bottom:0; }
 td:first-child { font-weight:600; color:var(--accent); }
@@ -196,11 +214,11 @@ tr:active td { background:var(--active) !important; }
 .phbig { width:100%; max-height:56vh; object-fit:contain; border-radius:var(--r-md);
          background:var(--seg); }
 .phcnt { text-align:center; font-size:var(--fs-sm); color:var(--muted); margin:8px 0; }
-/* 悬浮录入按钮：避开底栏与安全区，拇指自然落点 */
-.fab { position:fixed; right:16px; bottom:calc(72px + env(safe-area-inset-bottom));
-       height:48px; padding:0 20px 0 16px; border-radius:var(--r-pill);
-       font-size:var(--fs-md); font-weight:600; letter-spacing:.5px;
-       box-shadow:0 8px 22px rgba(37,99,235,.36); z-index:8; gap:6px; }
+/* 悬浮录入按钮：避开底栏与安全区，拇指自然落点（小巧不挡表格） */
+.fab { position:fixed; right:14px; bottom:calc(72px + env(safe-area-inset-bottom));
+       height:38px; padding:0 14px 0 12px; border-radius:var(--r-pill);
+       font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px;
+       box-shadow:0 6px 16px rgba(37,99,235,.32); z-index:8; gap:4px; }
 .fab:active { transform:scale(.96); }
 body.dark .fab { box-shadow:0 8px 22px rgba(0,0,0,.55); }
 /* 深色下顶栏用更深一档的蓝：浅蓝底 + 白字对比度不够（约 2.6:1） */
@@ -274,9 +292,20 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
     <div class="chips" id="fltRow"></div>
     <div class="chips hide" id="kwHist"></div>
     <div class="stat" id="invStat"></div>
-    <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
+    <div class="tblbox">
+      <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
+      <!-- 列超出屏幕时提示可左右滑动，滑过之后自动消失 -->
+      <div id="swHint" class="swhint hide">↔ 左右滑动看更多列</div>
+    </div>
     <!-- 悬浮「＋ 录入」：录入是最高频动作，放拇指可及处；随本页签一起隐藏 -->
     <button id="fabAdd" class="fab" type="button">＋ 录入</button>
+    <!-- 长按行进入多选后的操作条 -->
+    <div id="selBar" class="selbar hide">
+      <button id="btnSelAll" class="gray small">全选</button>
+      <button id="btnSelDel" class="danger small">删除</button>
+      <span id="selCnt">已选 0 项</span>
+      <button id="btnSelCancel" class="gray small">取消</button>
+    </div>
   </div>
   <!-- 录入 -->
   <div id="pAdd" class="hide">
@@ -1005,6 +1034,7 @@ function curCols() {
 /* 库存搜索：执行时记录到搜索历史 */
 function runSearch() {
   pushKwHist($('inKw').value);
+  selExit();
   refreshInv();
 }
 function refreshInv() {
@@ -1015,6 +1045,7 @@ $('inKw').addEventListener('keydown', function (e) {
   if (e.key === 'Enter') runSearch();
 });
 $('segLoc').onclick = function () {
+  selExit();
   invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = '';
   $('fltRow').classList.remove('hide');
   loadLoc($('inKw').value);
@@ -1022,14 +1053,24 @@ $('segLoc').onclick = function () {
 };
 $('segPc').onclick = function () {
   if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  selExit();                            // 电脑库存只读，退出多选态
   invView = 'pc'; $('segPc').className = 'on'; $('segLoc').className = '';
   $('fltRow').classList.add('hide');   // 快捷筛选只对手机库存有意义
   loadPc($('inKw').value);
   setTimeout(fitTbls, 0);
 };
+/* 长按多选状态（只对手机库存；电脑库存只读） */
+var SEL = { on: false, set: [] };
+var LOCV_ROWS = [];                       // 当前筛选下全部行，供「全选」
+/* 列宽交给浏览器自动排（内容完整、超出就横向滑动）；只补多选勾选列 */
 function mkHead(tbl, cols, phMark) {
   var thead = tbl.tHead; thead.innerHTML = '';
   var tr = document.createElement('tr');
+  if (SEL.on && tbl.id === 'tInv') {
+    var thc = document.createElement('th');
+    thc.style.padding = '11px 2px';
+    tr.appendChild(thc);
+  }
   if (phMark) {
     var thm = document.createElement('th');
     thm.textContent = '📷';
@@ -1057,24 +1098,94 @@ function loadLoc(kw) {
     });
   });
   rows.sort(function (a, b) { return a.lid - b.lid; });
-  $('invStat').textContent = '手机库存 ' + DB.items.length + ' 条（点行可修改；数据存在手机）';
+  LOCV_ROWS = rows.map(function (r) { return r.lid; });   // 「全选」用
+  $('invStat').textContent = SEL.on
+    ? ('已选 ' + SEL.set.length + ' / ' + rows.length + ' 条（点行勾选，长按可退出后修改）')
+    : '手机库存 ' + DB.items.length + ' 条（点行可修改；长按行可多选删除）';
+  var colspan = cols.length + (SEL.on ? 1 : 0);
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="' + cols.length +
+    tb.innerHTML = '<tr><td colspan="' + colspan +
       '" class="empty">没有符合条件的记录</td></tr>';
+    updateSwHint();
     return;
   }
   rows.forEach(function (r) {
     var tr = document.createElement('tr');
     if (r.sold_out) tr.className = 'sold';
+    if (SEL.on) {
+      if (SEL.set.indexOf(r.lid) >= 0) tr.classList.add('picked');
+      var tc = document.createElement('td');
+      tc.className = 'ckbox';
+      tc.textContent = SEL.set.indexOf(r.lid) >= 0 ? '✔' : '○';
+      tr.appendChild(tc);
+    }
     cols.forEach(function (f) {
       var td = document.createElement('td');
       td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
       tr.appendChild(td);
     });
-    tr.onclick = function () { openEdit(r); };
+    var lpT = null, lpFired = false;          // 长按 480ms 进入多选
+    if (!SEL.on) {
+      tr.addEventListener('touchstart', function () {
+        lpFired = false;
+        lpT = setTimeout(function () { lpFired = true; selEnter(r.lid); }, 480);
+      }, { passive: true });
+      tr.addEventListener('touchmove', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchcancel', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchend', function () { clearTimeout(lpT); });
+      tr.oncontextmenu = function (e) {       // 电脑浏览器里右键等价于长按
+        e.preventDefault();
+        selEnter(r.lid);
+      };
+    }
+    tr.onclick = function () {
+      if (lpFired) { lpFired = false; return; }   // 长按结束后的那次 click 吞掉
+      if (SEL.on) selToggle(r.lid); else openEdit(r);
+    };
     tb.appendChild(tr);
   });
+  updateSwHint();
 }
+/* ---------- 多选操作（进入 / 勾选 / 全选 / 删除 / 退出） ---------- */
+function selEnter(lid) {
+  SEL = { on: true, set: [lid] };
+  $('selCnt').textContent = '已选 1 项';
+  $('selBar').classList.remove('hide');
+  $('fabAdd').classList.add('hide');
+  loadLoc($('inKw').value);
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+}
+function selExit() {
+  if (!SEL.on) return;
+  SEL = { on: false, set: [] };
+  $('selBar').classList.add('hide');
+  $('fabAdd').classList.remove('hide');
+  loadLoc($('inKw').value);
+}
+function selToggle(lid) {
+  var i = SEL.set.indexOf(lid);
+  if (i >= 0) SEL.set.splice(i, 1); else SEL.set.push(lid);
+  if (!SEL.set.length) { selExit(); return; }     // 一个都不剩就退出多选
+  $('selCnt').textContent = '已选 ' + SEL.set.length + ' 项';
+  loadLoc($('inKw').value);
+}
+$('btnSelAll').onclick = function () {
+  SEL.set = LOCV_ROWS.slice();
+  $('selCnt').textContent = '已选 ' + SEL.set.length + ' 项';
+  loadLoc($('inKw').value);
+};
+$('btnSelCancel').onclick = selExit;
+$('btnSelDel').onclick = function () {
+  if (!SEL.set.length) { toast('先勾选要删除的行'); return; }
+  var n = SEL.set.length, lids = SEL.set.slice();
+  askConfirm('删除选中的 ' + n + ' 条？\n已同步到电脑的记录不会被删除。', '删除', function () {
+    lids.forEach(function (lid) { delPh(lid); });
+    DB.items = DB.items.filter(function (x) { return lids.indexOf(x.lid) < 0; });
+    saveDB(); selExit();
+    renderSync(); renderData();
+    toast('已删除 ' + n + ' 条（本地）');
+  });
+};
 var PC_PAGE = { kw: '', offset: 0, total: 0, hasMore: false, loading: false };
 function pcRow(r, cols) {
   var tr = document.createElement('tr');
@@ -1112,16 +1223,24 @@ function pcMaybeLoad() {
 $('main').addEventListener('scroll', pcMaybeLoad);
 /* 容器限高后表格在自己内部滚动，加载更多要听 tblwrap 的滚动 */
 $('tInv').parentNode.addEventListener('scroll', pcMaybeLoad);
+/* 列超出屏幕时给「可左右滑动」提示；滑过或列放得下就藏起来 */
+function updateSwHint() {
+  var w = $('tInv').parentNode, h = $('swHint');
+  if (!w || !h) return;
+  var more = w.scrollWidth > w.clientWidth + 2 && w.scrollLeft < 8;
+  h.classList.toggle('hide', !more);
+}
+$('tInv').parentNode.addEventListener('scroll', updateSwHint);
 /* 表格容器限高精调：让 th sticky 吸顶且主页面尽量不滚动 */
 function fitTbl(id) {
   var m = $('main'), w = $(id).parentNode;
   if (!w.offsetHeight) return;                 // 页签隐藏时跳过
   var top = w.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop;
-  // 库存页右下角有悬浮「＋ 录入」，给表格底部留 56px，免得最后一行被按钮盖住
-  var h = m.clientHeight - top - 14 - (id === 'tInv' ? 56 : 0);
+  // 库存页右下角有悬浮「＋ 录入」，给表格底部留 50px，免得最后一行被按钮盖住
+  var h = m.clientHeight - top - 14 - (id === 'tInv' ? 50 : 0);
   if (h > 160) w.style.maxHeight = h + 'px';
 }
-function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); }
+function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); updateSwHint(); }
 window.addEventListener('resize', fitTbls);
 function pcLoadMore() {
   if (PC_PAGE.loading || !PC_PAGE.hasMore) return;
@@ -1165,6 +1284,7 @@ function loadPc(kw) {
     }
     (j.items || []).forEach(function (r) { tb.appendChild(pcRow(r, cols)); });
     if (PC_PAGE.hasMore) tb.appendChild(pcMoreRow(cols));
+    updateSwHint();
     setTimeout(pcMaybeLoad, 50);          // 首屏未满时自动续载
   }).catch(function (e) {
     tb.innerHTML = '<tr><td colspan="' + (cols.length + 1) + '" class="empty">' +

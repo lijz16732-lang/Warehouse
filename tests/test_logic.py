@@ -1178,6 +1178,21 @@ try:
     check("表格列自定义为两列网格，勾选高亮有 JS 兜底（:has 兼容）",
           'class="colgrid"' in _pset and ".colgrid .ckrow.on" in _app_html
           and "row.className = 'ckrow'" in _app_html)
+
+    # v1.32.4 长按多选删除 + 库存表固定列宽
+    check("库存表长按进入多选，切换页签/搜索时退出",
+          "setTimeout(function () { lpFired = true; selEnter(r.lid); }, 480)" in _app_html
+          and "oncontextmenu" in _app_html
+          and "selExit();" in _app_html
+          and _app_html.count("selExit()") >= 4)
+    check("多选操作条提供全选/删除/取消，删除走确认弹窗",
+          'id="selBar"' in _app_html and 'id="btnSelAll"' in _app_html
+          and 'id="btnSelDel"' in _app_html and 'id="btnSelCancel"' in _app_html
+          and "删除选中的" in _app_html and "delPh(lid)" in _app_html)
+    check("库存表不压缩列宽：超宽时横向滑动，并提示「左右滑动看更多列」",
+          "swHint" in _app_html and "function updateSwHint" in _app_html
+          and "左右滑动看更多列" in _app_html
+          and "table-layout:fixed" not in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
