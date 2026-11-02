@@ -467,7 +467,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         root.addView(cropView, 0, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         actions.setVisibility(View.VISIBLE);
-        status.setText("拖动四角框住要识别的文字，点「识别」");
+        status.setText("拖动四角框住文字，双指可放大照片框更小的字，点「识别」");
         warmUp();                               // 后台先把模型读进来，点识别时几乎不用等
         hintBig.setText("");
         hintBig.setTag(null);
@@ -982,7 +982,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(root);
     }
 
-    /** 框选层：照片按比例铺满显示，拖动四角/整体调整框，框住要识别的文字。 */
+    /** 框选层：照片按比例显示，双指可缩放（1~8 倍）看小字，拖动四角/整体调整框。 */
     private class CropView extends View {
         private static final int M_NONE = 0;
         private static final int M_MOVE = 1;
@@ -1002,6 +1002,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         private int mode = M_NONE;
         private float lastX = 0f;
         private float lastY = 0f;
+        private float zoom = 1f;                    // 双指缩放倍数（1~8），小字先放大再框
+        private float ox = 0f, oy = 0f;             // 缩放后图片左上角在视图中的位置
+        private float pinchDist = 0f;               // 双指间距（捏合缩放用）
+        private boolean pinching = false;
 
         CropView(Activity c, Bitmap bitmap) {
             super(c);
@@ -1027,9 +1031,19 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             float vw = getWidth();
             float vh = getHeight();
             float k = Math.min(vw / iw, vh / ih);
-            float dw = iw * k;
-            float dh = ih * k;
-            draw.set((vw - dw) / 2f, (vh - dh) / 2f, (vw + dw) / 2f, (vh + dh) / 2f);
+            float dw = iw * k * zoom;
+            float dh = ih * k * zoom;
+            if (dw <= vw) {
+                ox = (vw - dw) / 2f;
+            } else {
+                ox = Math.max(vw - dw, Math.min(0f, ox));
+            }
+            if (dh <= vh) {
+                oy = (vh - dh) / 2f;
+            } else {
+                oy = Math.max(vh - dh, Math.min(0f, oy));
+            }
+            draw.set(ox, oy, ox + dw, oy + dh);
             box.set(draw.left + l * draw.width(), draw.top + t * draw.height(),
                     draw.left + r * draw.width(), draw.top + b * draw.height());
         }
@@ -1048,6 +1062,15 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         @Override
         public boolean onTouchEvent(MotionEvent event) {
             if (bmp == null || bmp.isRecycled() || draw.isEmpty()) return true;
+            if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN
+                    && event.getPointerCount() >= 2) {
+                // 第二根手指按下：进入捏合缩放，暂停拖框
+                pinching = true;
+                mode = M_NONE;
+                pinchDist = dist(event.getX(0), event.getY(0),
+                        event.getX(1), event.getY(1));
+                return true;
+            }
             float x = event.getX();
             float y = event.getY();
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
@@ -1062,7 +1085,38 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 else mode = M_NONE;
                 return true;
             }
-            if (event.getAction() == MotionEvent.ACTION_MOVE && mode != M_NONE) {
+            if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP
+                    && pinching && event.getPointerCount() <= 2) {
+                // 抬起一根手指：退出捏合，剩下的那根接着拖框
+                pinching = false;
+                pinchDist = 0f;
+                int stay = event.getActionIndex() == 0 ? 1 : 0;
+                lastX = event.getX(stay);
+                lastY = event.getY(stay);
+                mode = M_NONE;
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE
+                    && pinching && event.getPointerCount() >= 2) {
+                float nd = dist(event.getX(0), event.getY(0),
+                        event.getX(1), event.getY(1));
+                if (pinchDist > 0f && nd > 0f && draw.width() > 0) {
+                    float midX = (event.getX(0) + event.getX(1)) / 2f;
+                    float midY = (event.getY(0) + event.getY(1)) / 2f;
+                    float nx = (midX - ox) / draw.width();      // 锚点（照片归一化坐标）
+                    float ny = (midY - oy) / draw.height();
+                    zoom = Math.max(1f, Math.min(8f, zoom * nd / pinchDist));
+                    layout();                                   // 先按新倍数算出尺寸
+                    ox = midX - nx * draw.width();              // 再让锚点跟住手指中点
+                    oy = midY - ny * draw.height();
+                    layout();
+                    invalidate();
+                }
+                pinchDist = nd;
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE
+                    && !pinching && mode != M_NONE) {
                 float dnx = (x - lastX) / draw.width();
                 float dny = (y - lastY) / draw.height();
                 lastX = x;
@@ -1075,7 +1129,11 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                     t = clamp01(Math.min(Math.max(0f, t + dny), 1f - hh));
                     b = t + hh;
                 } else {
-                    float minSize = 0.05f;
+                    // 最小框随缩放走：屏幕上始终保持约 22dp 可捏，
+                    // 放大照片后就能框住一行很小的字（1% 宽度起步）；
+                    // 不放大时不低于原来的 5%，行为不变
+                    float minSize = Math.max(0.010f,
+                            Math.min(0.05f, dp(22) / draw.width()));
                     if (mode == M_TL || mode == M_BL) l = clamp01(Math.min(l + dnx, r - minSize));
                     if (mode == M_TR || mode == M_BR) r = clamp01(Math.max(r + dnx, l + minSize));
                     if (mode == M_TL || mode == M_TR) t = clamp01(Math.min(t + dny, b - minSize));
@@ -1088,9 +1146,16 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             if (event.getAction() == MotionEvent.ACTION_UP
                     || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 mode = M_NONE;
+                pinching = false;
+                pinchDist = 0f;
                 return true;
             }
             return true;
+        }
+
+        private float dist(float x1, float y1, float x2, float y2) {
+            float dx = x2 - x1, dy = y2 - y1;
+            return (float) Math.sqrt(dx * dx + dy * dy);
         }
 
         private float clamp01(float v) {

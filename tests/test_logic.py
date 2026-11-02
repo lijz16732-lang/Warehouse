@@ -986,6 +986,10 @@ try:
     check("引擎起不来时会说明原因，且长按「识别」可自检（手机上看不到日志）",
           "识别引擎不可用" in _sj and "setOnLongClickListener" in _sj
           and "runDiag" in _sj and "CGMDIAG" in _sj)
+    check("框选支持双指缩放（1~8 倍），小字先放大再框，最小框随缩放变小",
+          "pinchDist" in _sj and "pinching" in _sj and "zoom" in _sj
+          and "Math.min(0.05f, dp(22) / draw.width())" in _sj
+          and "双指可放大照片" in _sj)
     check("打包脚本带了缺失类扫描工具（换库后先跑它再出包）",
           os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。

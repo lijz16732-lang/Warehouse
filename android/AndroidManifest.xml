@@ -8,8 +8,8 @@
      纯 JNI，不需要任何清单声明、不依赖 Google 服务，装上就能用。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="36"
-    android:versionName="1.31.0">
+    android:versionCode="37"
+    android:versionName="1.31.1">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
