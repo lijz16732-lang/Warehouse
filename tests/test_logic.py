@@ -992,6 +992,24 @@ try:
     check("放大后可平移：单指在框外拖动移动照片，捏合松指后剩余手指直接平移",
           "M_PAN" in _sj and "mode = (zoom > 1f) ? M_PAN : M_NONE" in _sj
           and "ox += dx;" in _sj and "放大后单指在框外拖动可移动照片" in _sj)
+    # v1.31.3 修「倾斜文字识别不出」三连（66 项倾角×字高矩阵实测驱动）：
+    _ppj = open(os.path.join(ROOT, "android", "src", "com", "cangguanjia",
+                             "app", "PpOcrEngine.java"), encoding="utf-8").read()
+    check("① det 输入用双线性放大（最近邻把小图放大十几倍后文字成锯齿块，"
+          "检测概率直接掉到阈值以下）",
+          "Bitmap.createScaledBitmap(src, rw, rh, true)" in _ppj
+          and "int sy = Math.min(H - 1, y * H / rh)" not in _ppj)
+    check("② 框打分只算文字 blob 自身像素（轴对齐包围盒均值把斜字分数拉到阈值下）",
+          "psum += prob[0][0][cy][cx]" in _ppj and "psum / (cn / 2) < BOX_THRESH" in _ppj
+          and "for (int yy = minY; yy <= maxY; yy++)" not in _ppj)
+    check("③ 四点定序按最长边（文字行方向）定起点，禁止按 y 排序（斜字会被排成 90°）",
+          "normalizeQuad" in _ppj and "orderQuad(" not in _ppj
+          and "最长边（文字行方向）" in _ppj)
+    check("④ 识别前给裁剪图补 30% 白边（斜字被图像边界裁断后四边贴死，rec 对贴边极敏感）",
+          "private static Bitmap padWhite(" in _ppj and "padWhite(crop)" in _ppj
+          and "0.30f" in _ppj)
+    check("倾斜回归素材生成工具在位（tools/_mk_tilt_cases.py，66 项倾角×字高矩阵）",
+          os.path.isfile(os.path.join(ROOT, "tools", "_mk_tilt_cases.py")))
     check("打包脚本带了缺失类扫描工具（换库后先跑它再出包）",
           os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。

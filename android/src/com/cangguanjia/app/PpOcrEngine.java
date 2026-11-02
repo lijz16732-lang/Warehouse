@@ -2,6 +2,8 @@ package com.cangguanjia.app;
 
 import android.content.res.AssetManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.util.Log;
 
 import java.io.File;
@@ -156,6 +158,12 @@ public class PpOcrEngine {
                     crop.recycle();
                     crop = fix;
                 }
+                // 识别前给裁剪图四周补白边（约短边 30%）。斜字被图像边界裁断后
+                // 文字四边贴死，rec 对贴边文字极敏感（实测同一张图：无白边=(空)，
+                // 补 25% 白边=全对）。
+                Bitmap pad = padWhite(crop);
+                crop.recycle();
+                crop = pad;
                 Line ln = recognize(crop);
                 if (ln != null && !ln.text.isEmpty()) {
                     float x1 = Math.min(Math.min(b[0], b[2]), Math.min(b[4], b[6]));
@@ -211,13 +219,16 @@ public class PpOcrEngine {
         }
 
         float[] in = new float[3 * rw * rh];
-        int[] px = new int[W * H];
-        src.getPixels(px, 0, W, 0, 0, W, H);
+        // 双线性放大（createScaledBitmap）。v1.31.2 之前这里用最近邻逐像素取点，
+        // 小图被放大十几倍后文字全是锯齿块，倾斜/小字时检测概率直接掉到阈值以下
+        // （实测 158×51 的图最近邻 prob_max=0.27 < 0.3 阈值，双线性=1.0），整张就空了。
+        Bitmap scaled = Bitmap.createScaledBitmap(src, rw, rh, true);
+        int[] px = new int[rw * rh];
+        scaled.getPixels(px, 0, rw, 0, 0, rw, rh);
+        scaled.recycle();
         for (int y = 0; y < rh; y++) {
-            int sy = Math.min(H - 1, y * H / rh);
             for (int x = 0; x < rw; x++) {
-                int sx = Math.min(W - 1, x * W / rw);
-                int c = px[sy * W + sx];
+                int c = px[y * rw + x];
                 int i = y * rw + x;
                 in[i] = (((c >> 16) & 0xff) / 127.5f) - 1f;          // R
                 in[rw * rh + i] = (((c >> 8) & 0xff) / 127.5f) - 1f; // G
@@ -272,11 +283,13 @@ public class PpOcrEngine {
                 }
                 int sp = 0;
                 int cn = 0;
+                double psum = 0;                 // blob 自身像素的概率和（v1.31.3 打分修正）
                 stack[sp++] = idx;
                 seen[idx] = true;
                 while (sp > 0) {
                     int cur = stack[--sp];
                     int cy = cur / rw, cx = cur % rw;
+                    psum += prob[0][0][cy][cx];
                     if (cn + 2 > cpts.length) {
                         int[] bigger = new int[cpts.length * 2];
                         System.arraycopy(cpts, 0, bigger, 0, cpts.length);
@@ -320,16 +333,11 @@ public class PpOcrEngine {
                 if (Math.min(bw, bh) < 3) {
                     continue;
                 }
-                // 框内平均得分（对应 box_score_fast）
-                double sum = 0;
-                int cnt = 0;
-                for (int yy = minY; yy <= maxY; yy++) {
-                    for (int xx = minX; xx <= maxX; xx++) {
-                        sum += prob[0][0][yy][xx];
-                        cnt++;
-                    }
-                }
-                if (cnt == 0 || sum / cnt < BOX_THRESH) {
+                // 打分（对应 box_score_fast 的意图）：只算文字 blob 自己的像素。
+                // v1.31.3 之前对轴对齐包围盒求均值——斜字的包围盒大半是背景，
+                // 平均分被拉到阈值以下，±10° 以上全部漏检（实测 bbox 均值 0.18~0.47，
+                // blob 均值 0.89~0.96）。
+                if (cn == 0 || psum / (cn / 2) < BOX_THRESH) {
                     continue;
                 }
                 // v1.31.1：最小外接矩形（不是轴对齐框）——标签拍歪时轴对齐会把字裁斜，
@@ -478,9 +486,19 @@ public class PpOcrEngine {
 
     /** 按四点做透视矫正裁剪（对应 PP-OCR 的 get_rotate_crop_image）。
      *  标签拍歪时这一步决定成败：直接裁轴对齐框，字是斜的，识别必糊。 */
+    /** 给裁剪图四周补白边（约短边 30%）：rec 对四边贴死的文字极敏感。 */
+    private static Bitmap padWhite(Bitmap src) {
+        int p = Math.max(3, Math.round(Math.min(src.getWidth(), src.getHeight()) * 0.30f));
+        Bitmap out = Bitmap.createBitmap(src.getWidth() + 2 * p,
+                src.getHeight() + 2 * p, Bitmap.Config.ARGB_8888);
+        out.eraseColor(Color.WHITE);
+        Canvas c = new Canvas(out);
+        c.drawBitmap(src, p, p, null);
+        return out;
+    }
+
     private static Bitmap warpCrop(Bitmap src, float[] q0) {
-        float[] q = orderQuad(q0);
-        Log.i(TAG, "warp in=" + Arrays.toString(q0) + " ord=" + Arrays.toString(q));
+        float[] q = normalizeQuad(q0);
         double d01 = dist(q[0], q[1], q[2], q[3]);
         double d32 = dist(q[6], q[7], q[4], q[5]);
         double d03 = dist(q[0], q[1], q[6], q[7]);
@@ -517,36 +535,59 @@ public class PpOcrEngine {
         return out;
     }
 
-    /** 四点定序为 左上→右上→右下→左下（按 y 分上下、再按 x 分左右）。
-     *  最小外接矩形的角点顺序随角度变化，不定序会裁出镜像/翻转的图，识别直接崩。 */
-    private static float[] orderQuad(float[] q) {
+    /** 四点规范化为 左上→右上→右下→左下 循环序。
+     *  关键：minAreaQuad 输出的就是正确的环绕顺序（顺时针、无镜像），
+     *  这里只旋转起点，让「最长边（文字行方向）」成为 TL→TR 且指向右
+     *  （竖排文字则向下）。
+     *  绝不能按 y 排序定起点（旧 orderQuad 的做法）——±15° 以上的斜字
+     *  顶点 y 序和文字方向无关，会被排成 90° 旋转，识别必出乱码。 */
+    private static float[] normalizeQuad(float[] q) {
         float[][] p = new float[4][2];
         for (int i = 0; i < 4; i++) {
             p[i][0] = q[i * 2];
             p[i][1] = q[i * 2 + 1];
         }
-        java.util.Arrays.sort(p, new java.util.Comparator<float[]>() {
-            @Override
-            public int compare(float[] a, float[] b) {
-                return Float.compare(a[1], b[1]);
+        // 兜底：若为负向环绕（镜像序）则反转
+        double area = 0;
+        for (int i = 0; i < 4; i++) {
+            int j = (i + 1) & 3;
+            area += p[i][0] * p[j][1] - p[j][0] * p[i][1];
+        }
+        if (area < 0) {
+            float[] r = new float[8];
+            for (int i = 0; i < 4; i++) {
+                r[i * 2] = p[(4 - i) & 3][0];
+                r[i * 2 + 1] = p[(4 - i) & 3][1];
             }
-        });
-        float[] tl, tr, bl, br;
-        if (p[0][0] <= p[1][0]) {
-            tl = p[0];
-            tr = p[1];
-        } else {
-            tl = p[1];
-            tr = p[0];
+            for (int i = 0; i < 4; i++) {
+                p[i][0] = r[i * 2];
+                p[i][1] = r[i * 2 + 1];
+            }
         }
-        if (p[2][0] <= p[3][0]) {
-            bl = p[2];
-            br = p[3];
-        } else {
-            bl = p[3];
-            br = p[2];
+        // 最长边作为起点
+        int start = 0;
+        double bestLen = -1;
+        for (int i = 0; i < 4; i++) {
+            int j = (i + 1) & 3;
+            double len = dist(p[i][0], p[i][1], p[j][0], p[j][1]);
+            if (len > bestLen) {
+                bestLen = len;
+                start = i;
+            }
         }
-        return new float[]{tl[0], tl[1], tr[0], tr[1], br[0], br[1], bl[0], bl[1]};
+        // 方向校正：指向左（或竖排向上）就改从对边开始
+        double dx = p[(start + 1) & 3][0] - p[start][0];
+        double dy = p[(start + 1) & 3][1] - p[start][1];
+        if (dx < 0 || (Math.abs(dx) < bestLen * 0.2 && dy < 0)) {
+            start = (start + 2) & 3;
+        }
+        float[] out = new float[8];
+        for (int i = 0; i < 4; i++) {
+            int k = (start + i) & 3;
+            out[i * 2] = p[k][0];
+            out[i * 2 + 1] = p[k][1];
+        }
+        return out;
     }
 
     private static double dist(float x1, float y1, float x2, float y2) {
