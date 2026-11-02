@@ -196,6 +196,15 @@ tr:active td { background:var(--active) !important; }
 .phbig { width:100%; max-height:56vh; object-fit:contain; border-radius:var(--r-md);
          background:var(--seg); }
 .phcnt { text-align:center; font-size:var(--fs-sm); color:var(--muted); margin:8px 0; }
+/* 悬浮录入按钮：避开底栏与安全区，拇指自然落点 */
+.fab { position:fixed; right:16px; bottom:calc(72px + env(safe-area-inset-bottom));
+       height:48px; padding:0 20px 0 16px; border-radius:var(--r-pill);
+       font-size:var(--fs-md); font-weight:600; letter-spacing:.5px;
+       box-shadow:0 8px 22px rgba(37,99,235,.36); z-index:8; gap:6px; }
+.fab:active { transform:scale(.96); }
+body.dark .fab { box-shadow:0 8px 22px rgba(0,0,0,.55); }
+/* 深色下顶栏用更深一档的蓝：浅蓝底 + 白字对比度不够（约 2.6:1） */
+body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,.45); }
 /* 无障碍：系统开了「减少动态效果」就关掉过渡 */
 @media (prefers-reduced-motion: reduce) {
   * { transition:none !important; animation:none !important; }
@@ -222,6 +231,8 @@ tr:active td { background:var(--active) !important; }
     <div class="chips hide" id="kwHist"></div>
     <div class="stat" id="invStat"></div>
     <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
+    <!-- 悬浮「＋ 录入」：录入是最高频动作，放拇指可及处；随本页签一起隐藏 -->
+    <button id="fabAdd" class="fab" type="button">＋ 录入</button>
   </div>
   <!-- 录入 -->
   <div id="pAdd" class="hide">
@@ -1039,7 +1050,8 @@ function fitTbl(id) {
   var m = $('main'), w = $(id).parentNode;
   if (!w.offsetHeight) return;                 // 页签隐藏时跳过
   var top = w.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop;
-  var h = m.clientHeight - top - 14;
+  // 库存页右下角有悬浮「＋ 录入」，给表格底部留 56px，免得最后一行被按钮盖住
+  var h = m.clientHeight - top - 14 - (id === 'tInv' ? 56 : 0);
   if (h > 160) w.style.maxHeight = h + 'px';
 }
 function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); }
@@ -1546,6 +1558,15 @@ $('btnExport').onclick = function () {
     toast('照片较多，本次导出不含照片');
   }
   b.exportData(s);
+};
+
+/* 库存页「＋ 录入」：切页签 + 聚焦第一个输入框，省一次点击 */
+$('fabAdd').onclick = function () {
+  tab2('add');
+  setTimeout(function () {
+    var el = $('aBrand');
+    if (el) el.focus();
+  }, 80);
 };
 
 /* ================= 页签 ================= */
