@@ -988,8 +988,10 @@ try:
           and "runDiag" in _sj and "CGMDIAG" in _sj)
     check("框选支持双指缩放（1~8 倍），小字先放大再框，最小框随缩放变小",
           "pinchDist" in _sj and "pinching" in _sj and "zoom" in _sj
-          and "Math.min(0.05f, dp(22) / draw.width())" in _sj
-          and "双指可放大照片" in _sj)
+          and "Math.min(0.05f, dp(22) / draw.width())" in _sj)
+    check("放大后可平移：单指在框外拖动移动照片，捏合松指后剩余手指直接平移",
+          "M_PAN" in _sj and "mode = (zoom > 1f) ? M_PAN : M_NONE" in _sj
+          and "ox += dx;" in _sj and "放大后单指在框外拖动可移动照片" in _sj)
     check("打包脚本带了缺失类扫描工具（换库后先跑它再出包）",
           os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。

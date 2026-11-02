@@ -467,7 +467,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         root.addView(cropView, 0, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         actions.setVisibility(View.VISIBLE);
-        status.setText("拖动四角框住文字，双指可放大照片框更小的字，点「识别」");
+        status.setText("拖四角框字，双指缩放，放大后单指在框外拖动可移动照片，点「识别」");
         warmUp();                               // 后台先把模型读进来，点识别时几乎不用等
         hintBig.setText("");
         hintBig.setTag(null);
@@ -990,6 +990,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         private static final int M_TR = 3;
         private static final int M_BL = 4;
         private static final int M_BR = 5;
+        private static final int M_PAN = 6;     // 单指在框外拖动 = 平移放大后的照片
 
         private final Bitmap bmp;
         private final Paint dim = new Paint();
@@ -1082,18 +1083,18 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 else if (near(x, y, box.left, box.bottom)) mode = M_BL;
                 else if (near(x, y, box.right, box.bottom)) mode = M_BR;
                 else if (box.contains(x, y)) mode = M_MOVE;
-                else mode = M_NONE;
+                else mode = (zoom > 1f) ? M_PAN : M_NONE;   // 放大后框外拖动平移照片
                 return true;
             }
             if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP
                     && pinching && event.getPointerCount() <= 2) {
-                // 抬起一根手指：退出捏合，剩下的那根接着拖框
+                // 抬起一根手指：退出捏合，剩下的那根接着用（放大状态下直接平移照片）
                 pinching = false;
                 pinchDist = 0f;
                 int stay = event.getActionIndex() == 0 ? 1 : 0;
                 lastX = event.getX(stay);
                 lastY = event.getY(stay);
-                mode = M_NONE;
+                mode = (zoom > 1f) ? M_PAN : M_NONE;
                 return true;
             }
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE
@@ -1117,10 +1118,20 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             }
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE
                     && !pinching && mode != M_NONE) {
-                float dnx = (x - lastX) / draw.width();
-                float dny = (y - lastY) / draw.height();
+                float dx = x - lastX;
+                float dy = y - lastY;
+                float dnx = dx / draw.width();
+                float dny = dy / draw.height();
                 lastX = x;
                 lastY = y;
+                if (mode == M_PAN) {
+                    // 平移照片：手指往哪儿拖照片就往哪儿走，layout() 会自动夹住边界
+                    ox += dx;
+                    oy += dy;
+                    layout();
+                    invalidate();
+                    return true;
+                }
                 if (mode == M_MOVE) {
                     float w = r - l;
                     float hh = b - t;
