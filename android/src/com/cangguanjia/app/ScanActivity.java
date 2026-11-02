@@ -37,7 +37,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.googlecode.tesseract.android.TessBaseAPI;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
@@ -59,21 +58,23 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 拍照识别型号（v1.28.0 重构）：拍照 → 框选 → ML Kit 本地离线识别。
+ * 拍照识别型号（v1.28.0 重构）：拍照 → 框选 → 本地离线识别。
  *
  * 为什么不用实时预览帧识别（v1.27.x 及以前的做法）：
  *   实时预览流分辨率低（≤1600px）、连续对焦近距常不收敛，识别率差还费电；
  *   系统相机拍一张是全分辨率 + 自动对焦/HDR，配合手动框选排除背景干扰，
  *   只识别一次，又准又省电。照片走 cacheDir 临时文件，用完即删，不进相册。
  *
- * 识别引擎：Tesseract（tesseract4android 4.7.0 + assets/tessdata 的 chi_sim/eng 模型），
- * 纯 JNI，不依赖 Google 服务框架、不联网、不需要任何清单声明。
+ * 识别引擎（v1.31 起）：PP-OCR（PpOcrEngine，ONNX Runtime + assets/ppocr 的 det/cls/rec
+ * 小模型），检测/方向分类/识别三段全在本地跑，不联网、不需要任何清单声明。
+ *   换过来的原因：工业标签上大量小字与少量中文，Tesseract 中文小字错得离谱
+ *   （「开关」认成「开天」、「施耐德」认成「ems」），PP-OCR 同样素材全对。
+ *   代价：APK 增大约 30MB，单张识别 0.5~1 秒（可接受）。
  *
- * 为什么从 ML Kit 换回来（v1.29.0）：
+ * 为什么不用 ML Kit（v1.29.0 已放弃）：
  *   ML Kit 走 GMS dynamite 机制，运行时还要 datatransport/dagger 一整套组件；
  *   本工程用 build_apk.py 手工打包（无 Gradle），这些都得手工补清单与依赖，
  *   任何一处对不上就是「引擎起不来」，且错误信息被笼统报成「未初始化」，极难定位。
- *   Tesseract 只有一个 AAR + 一份模型，初始化就是 init(dataPath, lang)，稳定可预期。
  *
  * 二维码模式（扫电脑连接码）仍是实时取景 ZXing 解码。
  *
@@ -97,10 +98,9 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
     private boolean isQr = false;
     private final MultiFormatReader qrReader = new MultiFormatReader();
 
-    /** 识别引擎全局复用：TessBaseAPI 初始化要读模型（首次约 1~2 秒），不要每次重建。
-     *  注意 TessBaseAPI 非线程安全——所有调用都在 worker 这个单线程里做。 */
-    private static TessBaseAPI sTess;
-    private static final String LANG = "chi_sim+eng";
+    /** 识别引擎全局复用：PP-OCR 三个模型首次加载约 0.3~0.5 秒，之后常驻。
+     *  引擎非线程安全——所有调用都在 worker 这个单线程里做。 */
+    private static PpOcrEngine sPp;               // 主引擎（v1.31，PP-OCR small 模型）
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -182,102 +182,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 final StringBuilder sb = new StringBuilder();
                 sb.append("ABI: ").append(android.os.Build.SUPPORTED_ABIS[0]).append('\n');
                 sb.append("版本: v").append(verName()).append('\n');
-                TessBaseAPI api = null;
-                try {
-                    api = ensureTess();
-                    sb.append("引擎: OK (").append(LANG).append(")\n");
-                } catch (Throwable t) {
-                    sb.append("引擎: FAIL\n").append(android.util.Log.getStackTraceString(t));
-                }
-                for (String lang : new String[]{"chi_sim", "eng"}) {   // 初始化后模型已解出
-                    File f = new File(new File(getFilesDir(), "tessdata"),
-                            lang + ".traineddata");
-                    sb.append("模型 ").append(lang).append(": ")
-                            .append(f.isFile() ? (f.length() / 1024 + " KB") : "缺失").append('\n');
-                }
-                if (api != null) {
-                    try {                                   // ① 自绘图（纯印刷体）
-                        Bitmap bmp = Bitmap.createBitmap(900, 240, Bitmap.Config.ARGB_8888);
-                        Canvas cv = new Canvas(bmp);
-                        cv.drawColor(Color.WHITE);
-                        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-                        p.setColor(Color.BLACK);
-                        p.setTextSize(72);
-                        p.setTypeface(Typeface.DEFAULT_BOLD);
-                        cv.drawText("SEREAM T40 59633", 24, 150, p);
-                        sb.append("自绘图: ").append(ocr(api, bmp)).append('\n');
-                        bmp.recycle();
-                    } catch (Throwable t) {
-                        sb.append("自绘图 FAILED: ").append(brief(t)).append('\n');
-                    }
-                    // ①b 内部合成小字回归（v1.30）：直接复现「字很小很清晰但认不出」，
-                    // 不依赖外部文件。smallText 画的就是用户反馈的场景——
-                    // 文字只占几个像素高、四周紧贴边框（框得准反而失败的典型输入）。
-                    try {
-                        String[][] mini = {
-                                {"GV2ME08", "小字紧贴"},
-                                {"LC1D18M7", "小字带边"},
-                                {"T40 59633", "灰底小字"},
-                        };
-                        for (String[] m : mini) {
-                            Bitmap bmp = miniLabel(m[0], "灰底小字".equals(m[1]));
-                            sb.append(m[1]).append(": ")
-                              .append(ocr(api, bmp)).append('\n');
-                            bmp.recycle();
-                        }
-                    } catch (Throwable t) {
-                        sb.append("小字回归 FAILED: ").append(brief(t)).append('\n');
-                    }
-                    try {                                   // ② 真实照片（可选）
-                        File f = new File(getExternalFilesDir(null), "cgm_test.jpg");
-                        if (f.isFile()) {
-                            BitmapFactory.Options o = new BitmapFactory.Options();
-                            o.inSampleSize = 2;
-                            Bitmap ph = BitmapFactory.decodeFile(f.getAbsolutePath(), o);
-                            sb.append("照片 ").append(f.length() / 1024).append("KB: ");
-                            sb.append(ph == null ? "解码失败" : ocr(api, ph)).append('\n');
-                            if (ph != null) ph.recycle();
-                        } else {
-                            sb.append("照片: 无 cgm_test.jpg，跳过\n");
-                        }
-                    } catch (Throwable t) {
-                        sb.append("照片 FAILED: ").append(brief(t)).append('\n');
-                    }
-                    try {                                   // ③ ocr_cases 回归素材（可选目录）
-                        File ext = getExternalFilesDir(null);
-                        File dir = ext == null ? null : new File(ext, "ocr_cases");
-                        File[] fs = dir == null ? null : dir.listFiles();
-                        if (fs != null && fs.length > 0) {
-                            java.util.Arrays.sort(fs, new java.util.Comparator<File>() {
-                                @Override
-                                public int compare(File a, File b) {
-                                    return a.getName().compareTo(b.getName());
-                                }
-                            });
-                            for (File f : fs) {
-                                Bitmap ph = BitmapFactory.decodeFile(f.getAbsolutePath());
-                                if (ph == null) {
-                                    sb.append(f.getName()).append(": 解码失败\n");
-                                    continue;
-                                }
-                                long at = android.os.SystemClock.elapsedRealtime();
-                                String r = ocr(api, ph);
-                                long ms = android.os.SystemClock.elapsedRealtime() - at;
-                                sb.append(f.getName()).append(" (").append(ms).append("ms): ");
-                                sb.append(r.isEmpty() ? "(空)" : r.replace('\n', ' ')).append('\n');
-                                ph.recycle();
-                            }
-                        } else {
-                            sb.append("回归素材: 目录为空或不可读 (").append(dir).append(")\n");
-                        }
-                    } catch (Throwable t) {
-                        sb.append("回归素材 FAILED: ").append(brief(t)).append('\n');
-                    }
-                }
-                // ---- v1.31 测试：PP-OCR（ONNX Runtime）对照，同一批输入跑准确率与耗时 ----
+                // ---- v1.31 起主引擎：PP-OCR（ONNX Runtime），同一批输入跑准确率与耗时 ----
                 PpOcrEngine pp = null;
                 try {
-                    pp = PpOcrEngine.create(getAssets(), getFilesDir());
+                    pp = ensurePp();                 // 与正式识别共用同一个常驻实例
                     sb.append("PP引擎: OK 字数=").append(pp.charsetSize())
                       .append(" 加载=").append(pp.loadMs).append("ms\n");
                 } catch (Throwable t) {
@@ -356,7 +264,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                               .append(" FAILED: ").append(brief(t)).append('\n');
                         }
                         try {                               // 加同一套预处理后再试一遍
-                            Bitmap pre = preprocess(in, false);
+                            Bitmap pre = preprocess(in);
                             long t0 = android.os.SystemClock.elapsedRealtime();
                             List<PpOcrEngine.Line> r = pp.run(pre);
                             long ms = android.os.SystemClock.elapsedRealtime() - t0;
@@ -370,13 +278,25 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                               .append(" FAILED: ").append(brief(t)).append('\n');
                         }
                     }
+                    // 正式识别路径（PP-OCR → 预处理 → 旋转）实测
+                    for (int i = 0; i < inputs.size(); i++) {
+                        if (!"真机照片".equals(names.get(i))) continue;
+                        try {
+                            long t0 = android.os.SystemClock.elapsedRealtime();
+                            String r = recognizeText(inputs.get(i));
+                            sb.append("正式路径|").append(names.get(i)).append('|')
+                              .append(android.os.SystemClock.elapsedRealtime() - t0)
+                              .append("ms: ").append(r.replace('\n', '␤')).append('\n');
+                        } catch (Throwable t) {
+                            sb.append("正式路径 FAILED: ").append(brief(t)).append('\n');
+                        }
+                    }
                     sb.append("PP 合计: 原始 ").append(totalRaw).append("ms / 预处理 ")
                       .append(totalPre).append("ms，共 ").append(inputs.size()).append(" 张\n");
                     PpOcrEngine.dumpDir = null;
                     for (Bitmap b : inputs) {
                         b.recycle();
                     }
-                    pp.close();
                 }
                 android.util.Log.i("CGMDIAG", sb.toString());
                 // logcat 单条上限 ~4068 字节，回归素材结果多时会被截尾 → 逐行再打一遍
@@ -567,7 +487,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
             @Override
             public void run() {
                 try {
-                    ensureTess();
+                    ensurePp();                 // 主引擎（PP-OCR）先热起来，约 0.3~0.5 秒
                 } catch (Throwable ignored) {   // 失败留给点「识别」时报出来
                 }
             }
@@ -608,7 +528,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
                 String text = null;
                 String err = null;
                 try {
-                    text = ocr(ensureTess(), crop);
+                    text = recognizeText(crop);
                 } catch (Throwable t) {
                     err = brief(t);
                 } finally {
@@ -633,77 +553,7 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
 
-    /** 统一的一张图识别入口（含预处理 + 自动转正 + 多变体重试）。
-     *  拍照时标签经常是倒的/横的（Tesseract 只认正的文字，倒着认全是乱码），
-     *  先按原方向识别，置信度不够高就自动转 180/90/270° 再认，取分最高的结果。
-     *  v1.30：每个方向先试「灰度拉伸」，不够好再试「二值化」；每版内先整块识别，
-     *  分不够再按单行/散点模式兜底（框得紧、行稀疏时整块模式常空手而归）。
-     *  TessBaseAPI 非线程安全：只在 worker 里调用。 */
-    private String ocr(TessBaseAPI api, Bitmap src) {
-        String best = null;
-        int bestScore = -1;
-        int budget = 14;                        // 识别次数上限：最坏也不至于卡半分钟
-        for (int rot : new int[]{0, 180, 90, 270}) {
-            Bitmap base = rot == 0 ? src : rotate(src, rot);
-            try {
-                for (boolean bin : new boolean[]{false, true}) {
-                    Bitmap in = preprocess(base, bin);
-                    int score = -1;
-                    String t = "";
-                    try {
-                        for (int psm : new int[]{
-                                TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK,
-                                TessBaseAPI.PageSegMode.PSM_SINGLE_LINE,
-                                TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT}) {
-                            if (budget-- <= 0) break;
-                            api.setPageSegMode(psm);
-                            api.setImage(in);
-                            String r;
-                            try {
-                                r = api.getUTF8Text();
-                            } catch (Throwable ignored) {
-                                r = null;
-                            }
-                            r = r == null ? "" : r.trim();
-                            int s = scoreOcr(r, api.meanConfidence());
-                            if (s > score) {
-                                score = s;
-                                t = r;
-                            }
-                            if (score >= 75) break;   // 这版已经很准，别再换模式
-                        }
-                    } finally {
-                        in.recycle();
-                    }
-                    if (score > bestScore) {
-                        bestScore = score;
-                        best = t;
-                    }
-                    if (bestScore >= 75) break;
-                }
-            } finally {
-                if (base != src) base.recycle();
-            }
-            if (bestScore >= 75) break;             // 已经很准，不用再试其他方向
-        }
-        return best == null ? "" : best;
-    }
 
-    /** 识别结果打分（0~100）：置信度为主，字数太少/没一个字母数字的结果压分，
-     *  避免把「乱码但置信度虚高」的方向当成正方向。 */
-    private static int scoreOcr(String text, int meanConf) {
-        if (text == null || text.isEmpty()) return -1;
-        int alnum = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')
-                    || (c >= 'a' && c <= 'z') || c > 127) {
-                alnum++;
-            }
-        }
-        if (alnum < 2) return 0;
-        return Math.max(0, Math.min(100, meanConf));
-    }
 
     /** 旋转位图（90/180/270）。 */
     private static Bitmap rotate(Bitmap b, int deg) {
@@ -716,11 +566,10 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
      *  ① 放大到引擎合适的尺寸——框选出来的小图若直接喂，笔画只有几个像素高；
      *  ② 放大后 3×3 锐化——双线性放大把小字笔画糊开，糊了就认不出；
      *  ③ 去色 + 2%/98% 对比度拉伸——发灰的照片拉成黑白分明；
-     *  ④ 四周加白边——文字贴着图边时 Tesseract 经常整张认不出，
-     *     「框得越准反而越失败」的主因就是它；
-     *  binarize=true 时再叠加 Otsu 全局二值化（灰底/彩底标签更黑白分明）。
+     *  ④ 四周加白边——文字贴着图边时引擎经常整张认不出，
+     *     「框得越准反而越失败」的主因就是它。
      *  内存峰值约 (2000+边距)²×4B ≈ 17MB，可接受。 */
-    private Bitmap preprocess(Bitmap src, boolean binarize) {
+    private Bitmap preprocess(Bitmap src) {
         int w = src.getWidth();
         int h = src.getHeight();
         int longEdge = Math.max(w, h);
@@ -746,9 +595,6 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         up.recycle();
         sharpen(px, dw, dh);
         stretch(px, n);
-        if (binarize) {
-            otsu(px, n);
-        }
         int pad = Math.max(12, Math.max(dw, dh) / 28);          // 白边防「贴边认不出」
         Bitmap out = Bitmap.createBitmap(dw + pad * 2, dh + pad * 2,
                 Bitmap.Config.ARGB_8888);
@@ -801,38 +647,6 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
-    /** Otsu 全局二值化：按类间方差自动挑阈值，输出纯黑白（小字笔画边缘更利落）。 */
-    private static void otsu(int[] px, int n) {
-        int[] hist = new int[256];
-        for (int i = 0; i < n; i++) {
-            hist[(px[i] >> 16) & 0xff]++;
-        }
-        double sum = 0;
-        for (int v = 0; v < 256; v++) {
-            sum += v * hist[v];
-        }
-        double sumB = 0;
-        int wB = 0, thr = 127;
-        double maxVar = -1;
-        for (int t = 0; t < 256; t++) {
-            wB += hist[t];
-            if (wB == 0) continue;
-            int wF = n - wB;
-            if (wF == 0) break;
-            sumB += t * hist[t];
-            double mB = sumB / wB;
-            double mF = (sum - sumB) / wF;
-            double var = (double) wB * wF * (mB - mF) * (mB - mF);
-            if (var > maxVar) {
-                maxVar = var;
-                thr = t;
-            }
-        }
-        for (int i = 0; i < n; i++) {
-            int v = ((px[i] >> 16) & 0xff) <= thr ? 0 : 255;
-            px[i] = 0xff000000 | (v << 16) | (v << 8) | v;
-        }
-    }
 
     /** 异常压成一小段可读文字，方便用户反馈时截图。 */
     private String brief(Throwable t) {
@@ -862,58 +676,71 @@ public class ScanActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
-    /** 取（必要时初始化）识别引擎：模型放在 App 私有目录，首次从 assets 解出。
-     *  TessBaseAPI 非线程安全，调用方必须都在 worker 单线程里；synchronized 兜住自检线程。 */
-    private synchronized TessBaseAPI ensureTess() throws Exception {
-        if (sTess != null) return sTess;
+    /** 正式识别入口（v1.31 起引擎换成 PP-OCR，Tesseract 已移除）：
+     *  ① PP-OCR 原始图 —— 检测框自带透视矫正，倒着拍由 cls 方向分类自动转正；
+     *  ② 还认不出 → 套一套预处理（放大/锐化/补白边）再来一次，专治极小字；
+     *  ③ 仍然空手 → 顺/逆时针 90° 各试一次（标签横着拍时检测会漏）。
+     *  只在 worker 单线程里调用：引擎非线程安全。 */
+    private String recognizeText(Bitmap crop) throws Exception {
         try {
-            File dir = new File(getFilesDir(), "tessdata");
-            if (!dir.isDirectory() && !dir.mkdirs()) {
-                throw new IOException("无法创建模型目录");
-            }
-            for (String lang : new String[]{"chi_sim", "eng"}) {
-                File f = new File(dir, lang + ".traineddata");
-                if (f.isFile() && f.length() > 100 * 1024) continue;     // 已解压过
-                copyAsset("tessdata/" + lang + ".traineddata", f);
-            }
-            TessBaseAPI api = new TessBaseAPI();
-            if (!api.init(getFilesDir().getAbsolutePath(), LANG)) {
-                api.recycle();
-                throw new IllegalStateException("模型加载失败（tessdata 缺失或版本不符）");
-            }
-            api.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SINGLE_BLOCK);
-            // 小图必须有 DPI 提示，否则引擎按 0dpi 估算字高、小字整张认不出
-            api.setVariable("user_defined_dpi", "300");
-            api.setVariable("preserve_interword_spaces", "1");
-            api.setVariable(TessBaseAPI.VAR_CHAR_BLACKLIST, "|");
-            sTess = api;
-            return sTess;
+            return linesToText(ppLines(ensurePp(), crop));
         } catch (Throwable t) {
             if (t instanceof Exception) throw (Exception) t;
             throw new IllegalStateException(t);
         }
     }
 
-    /** 把 assets 里的模型拷到私有目录（Tesseract 只能读文件路径，不能读 assets）。 */
-    private void copyAsset(String name, File dst) throws Exception {
-        java.io.InputStream in = getAssets().open(name);
-        java.io.FileOutputStream out = new java.io.FileOutputStream(dst);
+    /** 跑 PP-OCR：原图 → 预处理图 → 旋转 90/270，谁先出字用谁。 */
+    private List<PpOcrEngine.Line> ppLines(PpOcrEngine e, Bitmap src) {
+        List<PpOcrEngine.Line> r = e.run(src);
+        if (!r.isEmpty()) return r;
+
+        Bitmap pre = null;
         try {
-            byte[] buf = new byte[64 * 1024];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            out.flush();
+            pre = preprocess(src);
+            r = e.run(pre);
+            if (!r.isEmpty()) return r;
+        } catch (Throwable ignored) {           // 预处理只是加分项，失败不影响主流程
         } finally {
+            if (pre != null) pre.recycle();
+        }
+
+        for (int deg : new int[]{90, 270}) {
+            Bitmap rot = null;
             try {
-                in.close();
-            } catch (Exception ignored) {
-            }
-            try {
-                out.close();
-            } catch (Exception ignored) {
+                rot = rotate(src, deg);
+                r = e.run(rot);
+                if (!r.isEmpty()) return r;
+            } catch (Throwable ignored) {
+            } finally {
+                if (rot != null) rot.recycle();
             }
         }
+        return r;
     }
+
+    /** PP-OCR 多行结果拼回文本（按行，交给 cleanLines 去重/过滤）。 */
+    private static String linesToText(List<PpOcrEngine.Line> lines) {
+        if (lines == null || lines.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (PpOcrEngine.Line l : lines) {
+            String s = l.text == null ? "" : l.text.trim();
+            if (s.isEmpty()) continue;
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(s);
+        }
+        return sb.toString();
+    }
+
+    /** 取（必要时初始化）PP-OCR 主引擎：模型随 APK 打包在 assets/ppocr，首次解压到私有目录。
+     *  三个模型 det(9.9MB)/rec(21MB)/cls(0.6MB) 一次性读入，之后常驻。 */
+    private synchronized PpOcrEngine ensurePp() throws Exception {
+        if (sPp != null) return sPp;
+        sPp = PpOcrEngine.create(getAssets(), getFilesDir());
+        return sPp;
+    }
+
+
 
     /** 从识别文本里挑出像型号/说明的行（去空、去符号行、去重，最多 6 行）。 */
     private List<String> cleanLines(String text) {

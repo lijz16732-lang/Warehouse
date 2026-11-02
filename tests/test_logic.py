@@ -940,10 +940,10 @@ try:
     check("型号识别改为拍照+框选（全分辨率照片比实时预览帧更清晰）",
           "ACTION_IMAGE_CAPTURE" in _sj and "EXTRA_OUTPUT" in _sj
           and "CropView" in _sj and "normalizedRect" in _sj)
-    check("识别在手机本地跑（Tesseract 中文+英文模型，无网络请求、不依赖 GMS）",
-          "TessBaseAPI" in _sj and "chi_sim+eng" in _sj
+    check("识别在手机本地跑（PP-OCR + ONNX Runtime，无网络请求、不依赖 GMS）",
+          "ensurePp()" in _sj and "PpOcrEngine" in _sj
           and "MlKit" not in _sj and "TextRecognizer" not in _sj
-          and "http" not in _sj.lower())
+          and "TessBaseAPI" not in _sj and "http" not in _sj.lower())
     check("照片即拍即用即删（不占存储）+ 采样解码与 EXIF 摆正控内存",
           "scan_tmp.jpg" in _sj and "inSampleSize" in _sj and "ExifInterface" in _sj)
     check("拍照识别会申请相机权限", "permission.CAMERA" in _sj and "android.permission.CAMERA" in _mf)
@@ -952,27 +952,37 @@ try:
     check("页面 → 原生桥（AndroidOcr）与回填回调",
           'addJavascriptInterface' in _mj and '"AndroidOcr"' in _mj
           and "__ocrFill" in _mj and "ScanActivity.EXTRA_TEXT" in _mj)
-    check("Tesseract 引擎与中文模型随 App 打包（离线、装机即用）",
-          os.path.isfile(os.path.join(_android_dir, "libs",
-                                      "tesseract4android-4.7.0.aar"))
-          and os.path.isfile(os.path.join(_android_dir, "assets",
-                                          "tessdata", "chi_sim.traineddata"))
-          and os.path.isfile(os.path.join(_android_dir, "assets",
-                                          "tessdata", "eng.traineddata")))
+    check("旧引擎已彻底移除（不再打包 Tesseract 与 tessdata，省 18MB）",
+          not os.path.exists(os.path.join(_android_dir, "libs",
+                                          "tesseract4android-4.7.0.aar"))
+          and not os.path.exists(os.path.join(_android_dir, "assets", "tessdata")))
     check("识别前做尺寸归一 + 去色 + 对比度拉伸（照片发灰也能认）",
           "private Bitmap preprocess(" in _sj and "setSaturation(0f)" in _sj
           and "private static void stretch(" in _sj and "inSampleSize" in _sj)
-    # v1.30.0 专治「字很小很清晰却认不出」：贴边加白边 / 放大后锐化 / DPI 提示 /
-    # Otsu 二值化变体 / 单行与散点 PSM 兜底 / 自检内置小字紧贴回归
-    check("v1.30 小字识别四件套：白边防贴边、锐化防糊、DPI 提示、Otsu 二值化",
-          "eraseColor(Color.WHITE)" in _sj and "private static void sharpen("
-          in _sj and "user_defined_dpi" in _sj
-          and "private static void otsu(" in _sj)
-    check("v1.30 多模式兜底：二值化变体 + 单行/散点 PSM + 识别次数预算",
-          "PSM_SINGLE_LINE" in _sj and "PSM_SPARSE_TEXT" in _sj
-          and "boolean bin" in _sj and "budget" in _sj)
+    # 预处理三件套（v1.30 为 Tesseract 引入，PP-OCR 同样吃这套，保留）
+    check("小字预处理三件套：白边防贴边、锐化防糊、放大保底宽",
+          "eraseColor(Color.WHITE)" in _sj and "private static void sharpen(" in _sj
+          and "320f / shortEdge" in _sj)
     check("v1.30 自检内置小字回归（不依赖外部文件即可验证识别率）",
           "miniLabel" in _sj and "小字紧贴" in _sj)
+    # v1.31 换引擎：PP-OCR(onnxruntime) 全权负责识别，Tesseract 已移除
+    _pp_java = os.path.join(_android_dir, "src", "com", "cangguanjia", "app",
+                            "PpOcrEngine.java")
+    check("PP-OCR 引擎与模型随包（det/cls/rec 三件套 + onnxruntime）",
+          os.path.isfile(_pp_java)
+          and all(os.path.isfile(os.path.join(_android_dir, "assets", "ppocr", m))
+                  for m in ("det.onnx", "rec.onnx", "cls.onnx"))
+          and any(f.startswith("onnxruntime-android") and f.endswith(".aar")
+                  for f in os.listdir(os.path.join(_android_dir, "libs"))))
+    check("PP-OCR 识别顺序：原始图 → 预处理 → 旋转 90/270",
+          "private String recognizeText(" in _sj
+          and "ppLines(" in _sj and "ensurePp(" in _sj
+          and "private static String linesToText(" in _sj)
+    check("PP-OCR 三个必踩坑都修好了：cls 转正 / 透视矫正 / rec 补 320 宽",
+          os.path.isfile(_pp_java)
+          and "cls" in open(_pp_java, encoding="utf-8").read()
+          and "warpCrop" in open(_pp_java, encoding="utf-8").read()
+          and "320" in open(_pp_java, encoding="utf-8").read())
     check("引擎起不来时会说明原因，且长按「识别」可自检（手机上看不到日志）",
           "识别引擎不可用" in _sj and "setOnLongClickListener" in _sj
           and "runDiag" in _sj and "CGMDIAG" in _sj)
