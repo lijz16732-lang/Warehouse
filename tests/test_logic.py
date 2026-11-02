@@ -1193,6 +1193,12 @@ try:
           "swHint" in _app_html and "function updateSwHint" in _app_html
           and "左右滑动看更多列" in _app_html
           and "table-layout:fixed" not in _app_html)
+    check("全页禁文字选中（长按是手势不是选择），输入框除外",
+          "user-select:none" in _app_html and "-webkit-touch-callout:none" in _app_html
+          and "input, textarea { user-select:text" in _app_html)
+    check("底部导航带图标、加高",
+          "<i>▦</i>" in _app_html and "<i>✚</i>" in _app_html and "<i>⚙</i>" in _app_html
+          and "nav div i { display:block" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
