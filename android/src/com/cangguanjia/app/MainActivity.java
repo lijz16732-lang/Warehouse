@@ -3,7 +3,9 @@ package com.cangguanjia.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.KeyguardManager;
 import android.content.ClipData;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -15,10 +17,14 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Base64;
 import android.view.KeyEvent;
+import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
+import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
@@ -26,6 +32,7 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -45,14 +52,14 @@ public class MainActivity extends Activity {
 
     private static final String PREFS = "cgm";
     private static final String KEY_URL = "server_url";
-    private static final String KEY_PRIVACY = "privacy_agreed";   // 首启协议同意标记
+    private static final String KEY_LOCK = "startup_lock";    // 启动验证（手机锁屏）
     private static final String LOCAL_PAGE = "file:///android_asset/index.html";
     private static final int REQ_SCAN = 1001;
     private static final int REQ_QR = 1002;
     private static final int REQ_FILE = 1003;      // 相册选照片（可多选）
     private static final int REQ_CAMERA = 1004;    // 拍照
     private static final int REQ_CAM_PERM = 1005;  // 相机运行时权限
-    private static final int REQ_GAL_PERM = 1006;  // 相册读取权限
+    private static final int REQ_UNLOCK = 1006;    // 启动验证（系统锁屏）
 
     private WebView web;
     private ValueCallback<Uri[]> fileCb;     // 旧 <input type=file> 回调（兜底保留）
@@ -112,11 +119,89 @@ public class MainActivity extends Activity {
         setContentView(tv);
     }
 
+    /**
+     * 启动顺序（合规相关，勿随意调整）：
+     *   ① 启动验证（可选，走系统锁屏，不额外存密码）
+     *   ② 隐私政策同意（版本号比对；未同意不加载界面、不创建 WebView）
+     *   ③ 正常界面
+     * 把同意放在创建 WebView 之前，是为了保证「未取得同意前不开始任何处理」。
+     */
     private void buildUi(Bundle savedInstanceState) {
         if (Build.VERSION.SDK_INT >= 21) {
             getWindow().setStatusBarColor(Color.parseColor("#1f6feb"));
         }
+        if (lockEnabled()) {
+            if (awaitUnlock()) {
+                return;                 // 等系统锁屏回来再继续
+            }
+        }
+        proceed();
+    }
 
+    /** 过了启动验证之后：先看同意状态，再建界面。 */
+    private void proceed() {
+        if (Legal.agreed(this)) {
+            setupWeb();
+            return;
+        }
+        showSplash();                   // 同意页背后放个品牌页，避免白屏
+        Legal.askConsent(this,
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        setupWeb();
+                    }
+                },
+                new Runnable() {
+                    @Override
+                    public void run() {
+                        finish();       // 不同意 → 退出，不做任何处理
+                    }
+                });
+    }
+
+    private void showSplash() {
+        android.widget.TextView tv = new android.widget.TextView(this);
+        tv.setText("仓管家\n\n本地库存管理 · 数据只存在你的手机上");
+        tv.setGravity(android.view.Gravity.CENTER);
+        tv.setTextSize(15);
+        tv.setTextColor(Color.parseColor("#1f6feb"));
+        setContentView(tv);
+    }
+
+    // ------------------------------------------------------------ 启动验证（访问控制）
+    /** 是否开启启动验证（由设置页写入）。 */
+    private boolean lockEnabled() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_LOCK, false);
+    }
+
+    /**
+     * 调起系统锁屏验证（图案/密码/指纹）。返回 true 表示已拉起、需等回调。
+     * 用系统凭据而不是自建 PIN：用户不会忘记，也不会因为忘记密码而丢数据。
+     */
+    private boolean awaitUnlock() {
+        KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+        if (km == null || !km.isDeviceSecure()) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putBoolean(KEY_LOCK, false).apply();
+            toast("手机未设置锁屏密码，启动验证已自动关闭");
+            return false;
+        }
+        Intent it = km.createConfirmDeviceCredentialIntent("仓管家", "验证身份后查看库存数据");
+        if (it == null) {
+            return false;
+        }
+        try {
+            startActivityForResult(it, REQ_UNLOCK);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 建界面：加载 APK 内置页面，注册三个原生桥。 */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void setupWeb() {
         web = new WebView(this);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -124,8 +209,28 @@ public class MainActivity extends Activity {
         // 界面文件在 APK 本地（file://）；开启共享后要向电脑发跨源请求：
         s.setAllowFileAccess(true);                        // API 30+ 默认 false，必须打开
         s.setAllowUniversalAccessFromFileURLs(true);       // 本地页 → http 接口跨源
+        s.setAllowFileAccessFromFileURLs(false);           // 本地页之间不互读
         s.setMediaPlaybackRequiresUserGesture(true);
-        web.setWebViewClient(new WebViewClient());
+        s.setSaveFormData(false);
+        s.setGeolocationEnabled(false);
+        if (Build.VERSION.SDK_INT >= 21) {
+            // 本地页面不允许混入公网 http 资源，配合 NetGuard 一起收紧出网面
+            s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        }
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView v,
+                                                              WebResourceRequest req) {
+                // 出网白名单：只允许私有网段/局域网主机（详见 NetGuard）
+                String u = req == null || req.getUrl() == null
+                        ? null : req.getUrl().toString();
+                if (!NetGuard.allow(u)) {
+                    android.util.Log.w("CGM", "已拦截非局域网请求：" + u);
+                    return new WebResourceResponse("text/plain", "utf-8", null);
+                }
+                return null;
+            }
+        });
         // 兜底：若页面仍走 <input type=file>（如浏览器环境无原生桥），仍弹系统选择器
         web.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -143,7 +248,7 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new ScanBridge(), "AndroidOcr");
         // 页面调用本机「拍照/相册」加照片（原生读取+压缩，回传 base64）
         web.addJavascriptInterface(new PhotoBridge(), "AndroidPhotos");
-        // 页面「设置」里随时重看《隐私政策》和《用户协议》
+        // 页面「设置」里的隐私与数据功能（协议、清单、导出、撤回同意、启动验证）
         web.addJavascriptInterface(new InfoBridge(), "AndroidInfo");
 
         setContentView(web);
@@ -154,14 +259,9 @@ public class MainActivity extends Activity {
         if (saved.length() > 0) {
             url += "#base=" + Uri.encode(saved);
         }
-        // 首次打开必须先阅读并同意《隐私政策》与《用户协议》才能进入
-        if (getSharedPreferences(PREFS, MODE_PRIVATE)
-                .getBoolean(KEY_PRIVACY, false)) {
-            web.loadUrl(url);
-        } else {
-            showPrivacyDialog(url);
-        }
+        web.loadUrl(url);
     }
+
 
     @Override
     protected void onDestroy() {
@@ -182,75 +282,6 @@ public class MainActivity extends Activity {
         android.widget.Toast.makeText(this, msg,
                 android.widget.Toast.LENGTH_SHORT).show();
     }
-
-    // ------------------------------------------------------------ 首启协议
-    /** 首次打开：滚动展示隐私政策+用户协议，同意才加载界面，不同意退出。 */
-    private void showPrivacyDialog(final String url) {
-        android.widget.ScrollView sc = new android.widget.ScrollView(this);
-        android.widget.TextView tv = new android.widget.TextView(this);
-        tv.setText(PRIVACY_TEXT);
-        tv.setTextSize(13.5f);
-        tv.setLineSpacing(0, 1.25f);
-        tv.setPadding(dp(18), dp(10), dp(18), dp(10));
-        sc.addView(tv);
-        new AlertDialog.Builder(this)
-                .setTitle("欢迎使用仓管家")
-                .setView(sc)
-                .setCancelable(false)
-                .setPositiveButton("同意并继续",
-                        new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int w) {
-                                getSharedPreferences(PREFS, MODE_PRIVATE)
-                                        .edit().putBoolean(KEY_PRIVACY, true).apply();
-                                web.loadUrl(url);
-                            }
-                        })
-                .setNegativeButton("不同意并退出",
-                        new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int w) {
-                                finish();
-                            }
-                        })
-                .show();
-    }
-
-    /** 设置页 → 随时重看协议：只读展示，关闭即回，不重复要同意。 */
-    private void showAgreementDialog() {
-        android.widget.ScrollView sc = new android.widget.ScrollView(this);
-        android.widget.TextView tv = new android.widget.TextView(this);
-        tv.setText(PRIVACY_TEXT);
-        tv.setTextSize(13.5f);
-        tv.setLineSpacing(0, 1.25f);
-        tv.setPadding(dp(18), dp(10), dp(18), dp(10));
-        sc.addView(tv);
-        new AlertDialog.Builder(this)
-                .setTitle("隐私政策与用户协议")
-                .setView(sc)
-                .setCancelable(true)
-                .setPositiveButton("我知道了", null)
-                .show();
-    }
-
-    /** 协议正文（应用商店合规要求：首启展示、说明权限用途与数据去向）。 */
-    private static final String PRIVACY_TEXT =            "在使用本应用前，请务必阅读并理解《隐私政策》和《用户协议》：\n\n"
-            + "一、隐私政策\n\n"
-            + "1. 数据存储：您的全部库存数据仅保存在本机（手机本地存储 / 电脑本地数据库），"
-            + "本应用不连接任何云服务器，不在云端留存任何数据。\n\n"
-            + "2. 局域网同步：仅当您主动开启「数据共享到电脑端」时，应用才会与同一局域网内"
-            + "您自己的电脑直接通信；数据不经互联网传输，也不经过任何第三方。\n\n"
-            + "3. 相机权限：仅用于 ① 拍照添加商品照片 ② 拍照识别型号文字 / 二维码。"
-            + "相机画面只在手机本地处理，不拍摄存储无关内容、不上传互联网。\n\n"
-            + "4. 照片：您添加的商品照片经压缩后保存在本机；开启共享后仅同步到您自己的电脑，"
-            + "删除记录时照片一并删除。\n\n"
-            + "5. 我们不收集、不分析、不共享、不出售您的任何数据。\n\n"
-            + "二、用户协议\n\n"
-            + "1. 本应用供个人或小型商户进行本地库存管理，按「现状」提供。\n"
-            + "2. 您的数据由您自行保管，重要数据请定期在电脑端导出备份；"
-            + "因设备丢失、系统故障、误删除等造成的数据损失，需由您自行承担。\n"
-            + "3. 请遵守当地法律法规使用本应用，不得用于非法用途。\n"
-            + "4. 点击「同意并继续」即表示您已阅读并同意以上全部条款。";
 
     /** 页面 → 原生：window.AndroidOcr.scan() 识别型号文字；scanQr() 扫电脑二维码。 */
     public class ScanBridge {
@@ -281,17 +312,216 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 页面 → 原生：window.AndroidInfo.showAgreement() 重看隐私政策/用户协议。 */
+    /**
+     * 页面 → 原生：设置页「隐私与数据」的全部合规功能。
+     * 每项都对应一条法定义务：告知（协议/清单）、查阅复制（导出）、删除（清空）、
+     * 撤回同意（PIPL 15）、访问控制（启动验证）。
+     */
     public class InfoBridge {
         @JavascriptInterface
-        public void showAgreement() {
-            runOnUiThread(new Runnable() {
+        public String legalVersion() {
+            return Legal.VERSION;
+        }
+
+        @JavascriptInterface
+        public void showPrivacy() {
+            ui(new Runnable() {
                 @Override
                 public void run() {
-                    showAgreementDialog();
+                    Legal.showPrivacy(MainActivity.this);
                 }
             });
         }
+
+        @JavascriptInterface
+        public void showTerms() {
+            ui(new Runnable() {
+                @Override
+                public void run() {
+                    Legal.showTerms(MainActivity.this);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void showPersonalInfo() {
+            ui(new Runnable() {
+                @Override
+                public void run() {
+                    Legal.showPersonalInfo(MainActivity.this);
+                }
+            });
+        }
+
+        /** 兼容旧页面：一个按钮看两份协议时按顺序展示（新版页面已分开）。 */
+        @JavascriptInterface
+        public void showAgreement() {
+            showPrivacy();
+        }
+
+        /** 导出全部数据（JSON）：写缓存目录 → 系统分享面板，不需要存储权限。 */
+        @JavascriptInterface
+        public void exportData(final String json) {
+            ui(new Runnable() {
+                @Override
+                public void run() {
+                    if (json == null || json.length() == 0) {
+                        toast("没有可导出的数据");
+                        return;
+                    }
+                    if (!shareExport(json)) {
+                        toast("导出失败，请检查手机存储空间");
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean startupLock() {
+            return lockEnabled();
+        }
+
+        /** 开关启动验证：开启前要求手机已设置锁屏密码。 */
+        @JavascriptInterface
+        public boolean setStartupLock(final boolean on) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (on) {
+                        KeyguardManager km = (KeyguardManager) getSystemService(
+                                Context.KEYGUARD_SERVICE);
+                        if (km == null || !km.isDeviceSecure()) {
+                            toast("请先在系统设置里为手机设置锁屏密码/图案，再开启启动验证");
+                            return;
+                        }
+                    }
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .putBoolean(KEY_LOCK, on).apply();
+                    toast(on ? "已开启启动验证" : "已关闭启动验证");
+                }
+            });
+            return on;
+        }
+
+        /** 撤回同意：清除本机全部数据并退出（PIPL 第 15 条）。 */
+        @JavascriptInterface
+        public void withdrawConsent() {
+            ui(new Runnable() {
+                @Override
+                public void run() {
+                    askWithdraw();
+                }
+            });
+        }
+    }
+
+    private void ui(final Runnable r) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                r.run();
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ 导出（查阅、复制权）
+    /** 把 JSON 备份写到缓存目录并经系统分享面板交给用户，全程不申请存储权限。 */
+    private boolean shareExport(String json) {
+        try {
+            File dir = new File(getCacheDir(), "exports");
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                return false;
+            }
+            // 旧备份先清掉，避免缓存目录里堆积个人信息
+            File[] old = dir.listFiles();
+            if (old != null) {
+                for (File f : old) {
+                    f.delete();
+                }
+            }
+            String stamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss",
+                    java.util.Locale.CHINA).format(new java.util.Date());
+            String name = "仓管家备份_" + stamp + ".json";
+            FileOutputStream fo = new FileOutputStream(new File(dir, name));
+            fo.write(json.getBytes("UTF-8"));
+            fo.close();
+
+            Uri u = ExportProvider.uriFor(name);
+            Intent it = new Intent(Intent.ACTION_SEND);
+            it.setType("application/json");
+            it.putExtra(Intent.EXTRA_STREAM, u);
+            it.putExtra(Intent.EXTRA_SUBJECT, name);
+            it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            it.setClipData(ClipData.newRawUri("export", u));
+            try {
+                startActivity(Intent.createChooser(it, "保存或转发备份文件"));
+            } catch (Exception e) {
+                it.setType("*/*");
+                startActivity(Intent.createChooser(it, "保存或转发备份文件"));
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    // ------------------------------------------------------------ 撤回同意（PIPL 15）
+    private void askWithdraw() {
+        new AlertDialog.Builder(this)
+                .setTitle("撤回同意并清除数据")
+                .setMessage("撤回后，我们将不再处理你的个人信息：\n\n"
+                        + "· 本机上的库存、出售记录、商品照片会被删除\n"
+                        + "· 应用会退出\n"
+                        + "· 已同步到你电脑的数据需在电脑端自行删除\n\n"
+                        + "建议先在「数据管理」里导出备份。此操作不可撤销。")
+                .setPositiveButton("仍要撤回", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        doWithdraw();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void doWithdraw() {
+        try {
+            if (web != null) {
+                web.evaluateJavascript("try{localStorage.clear()}catch(e){}", null);
+            }
+            WebStorage.getInstance().deleteAllData();
+            CookieManager cm = CookieManager.getInstance();
+            cm.removeAllCookies(null);
+            cm.flush();
+        } catch (Throwable ignore) {
+        }
+        deleteTree(new File(getCacheDir(), "photos"));
+        deleteTree(new File(getCacheDir(), "exports"));
+        File crash = new File(getFilesDir(), CgmApp.CRASH_FILE);
+        crash.delete();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply();
+        Legal.clearAgreed(this);
+        toast("已撤回同意并清除本机数据");
+        // 给 WebView 一点时间把 localStorage 真正落盘
+        new android.os.Handler(getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                finish();
+            }
+        }, 400);
+    }
+
+    private void deleteTree(File f) {
+        if (f == null || !f.exists()) {
+            return;
+        }
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) {
+                deleteTree(k);
+            }
+        }
+        f.delete();
     }
 
     /** 页面 → 原生：window.AndroidPhotos.pick() 拍照/选图，返回 base64 dataURL 数组 JSON。 */
@@ -325,13 +555,10 @@ public class MainActivity extends Activity {
                                                     }
                                                 });
                                             } else {
-                                                askGalleryPerm(new Runnable() {
-                                                    @Override
-                                                    public void run() {
-                                                        nativePickMode = true;
-                                                        openGalleryNative();
-                                                    }
-                                                });
+                                                // 相册走系统照片选择器：无需存储权限，
+                                                // 系统只把用户主动选中的图片授予本应用。
+                                                nativePickMode = true;
+                                                openGalleryNative();
                                             }
                                         }
                                     })
@@ -393,49 +620,12 @@ public class MainActivity extends Activity {
         cont.run();
     }
 
-    private void askGalleryPerm(Runnable cont) {
-        String perm = galleryPerm();
-        if (Build.VERSION.SDK_INT >= 23 && perm != null && checkSelfPermission(perm)
-                != PackageManager.PERMISSION_GRANTED) {
-            pendingAfterPerm = cont;
-            // 申请前先给用途说明（合规要求：权限使用告知）
-            new AlertDialog.Builder(this)
-                    .setTitle("需要照片权限")
-                    .setMessage("「从相册选择」需要读取您相册里的照片，"
-                            + "用于添加商品照片。照片仅保存在本机并同步到您自己的电脑，"
-                            + "不会上传互联网。")
-                    .setPositiveButton("去允许",
-                            new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface d, int w) {
-                                    requestPermissions(new String[]{galleryPerm()},
-                                            REQ_GAL_PERM);
-                                }
-                            })
-                    .setNegativeButton("暂不",
-                            new DialogInterface.OnClickListener() {
-                                @Override
-                                public void onClick(DialogInterface d, int w) {
-                                    onPermDenied(true);
-                                }
-                            })
-                    .setOnCancelListener(new DialogInterface.OnCancelListener() {
-                        @Override
-                        public void onCancel(DialogInterface d) {
-                            onPermDenied(true);
-                        }
-                    })
-                    .show();
-            return;
-        }
-        cont.run();
-    }
-
     /** 权限被拒/弹窗被取消：按当前模式把「空结果」交回对应通道。 */
     private void onPermDenied(boolean gallery) {
         String tip = gallery
-                ? "未授予照片权限，无法从相册选择；可在系统设置 → 应用 → 仓管家里允许"
-                : "未授予相机权限，无法拍照；可在系统设置 → 应用 → 仓管家里允许";
+                ? "未选择照片，已取消"
+                : "未授予相机权限，无法拍照；可在系统设置 → 应用 → 仓管家里允许，"
+                        + "也可以改用「从相册选择」或手动输入型号";
         android.widget.Toast.makeText(this, tip, android.widget.Toast.LENGTH_LONG).show();
         if (nativePickMode) {
             deliverNative(null);
@@ -444,31 +634,20 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 相册读取权限名：API 33+ 用 READ_MEDIA_IMAGES，旧系统用 READ_EXTERNAL_STORAGE。 */
-    private String galleryPerm() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            return "android.permission.READ_MEDIA_IMAGES";
-        }
-        if (Build.VERSION.SDK_INT >= 23) {
-            return android.Manifest.permission.READ_EXTERNAL_STORAGE;
-        }
-        return null;    // 6.0 以下安装时授予，无需运行时申请
-    }
-
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] perms,
                                            int[] results) {
         super.onRequestPermissionsResult(requestCode, perms, results);
         boolean granted = results.length > 0
                 && results[0] == PackageManager.PERMISSION_GRANTED;
-        if (requestCode == REQ_CAM_PERM || requestCode == REQ_GAL_PERM) {
+        if (requestCode == REQ_CAM_PERM) {
             if (granted && pendingAfterPerm != null) {
                 Runnable r = pendingAfterPerm;
                 pendingAfterPerm = null;
                 r.run();
             } else if (!granted) {
                 pendingAfterPerm = null;
-                onPermDenied(requestCode == REQ_GAL_PERM);
+                onPermDenied(false);
             }
         }
     }
@@ -533,6 +712,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_UNLOCK) {                // 启动验证：通过才继续，取消即退出
+            if (resultCode == RESULT_OK) {
+                proceed();
+            } else {
+                finish();
+            }
+            return;
+        }
         if (requestCode == REQ_FILE) {                  // 相册：支持单/多选
             Uri[] uris = parsePickerResult(resultCode, data);
             if (nativePickMode) {
@@ -711,13 +898,8 @@ public class MainActivity extends Activity {
                                         }
                                     });
                                 } else {
-                                    askGalleryPerm(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            nativePickMode = false;
-                                            openGalleryOld(params);
-                                        }
-                                    });
+                                    nativePickMode = false;   // 同上：系统选择器无需权限
+                                    openGalleryOld(params);
                                 }
                             }
                         })

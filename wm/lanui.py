@@ -293,6 +293,9 @@ class LanDialog(tk.Toplevel):
                                    width=11, state="disabled",
                                    command=self.block_phone)
         self.btn_pblk.pack(side="right", padx=(0, 6))
+        # 访问日志：网络安全法第 23 条要求网络日志留存不少于六个月（2025 修正后条号）
+        ttk.Button(rowpb, text="访问日志", style="Ghost.TButton", width=9,
+                   command=self.show_access_log).pack(side="right", padx=(0, 6))
 
         # ---- 底部 ----
         self._foot = foot = tk.Frame(self, bg=CLR_BG)
@@ -745,6 +748,50 @@ class LanDialog(tk.Toplevel):
             return
         self.app.lan_block_client(ip, name)
         self.refresh()
+
+    def show_access_log(self):
+        """查看局域网访问日志（只读，保留 180 天）。
+
+        只记录时间 / 来源 IP / 接口 / 结果，不记录型号、买家、金额等业务内容 ——
+        日志本身不该变成第二份个人信息库。
+        """
+        srv = getattr(self.app, "lan_server", None)
+        log = srv.access_log() if srv is not None else None
+        win = tk.Toplevel(self)
+        win.title("局域网访问日志")
+        win.configure(bg=CLR_BG)
+        win.transient(self)
+        apply_window_icon(win)
+        tk.Label(win,
+                 text="记录时间 / 来源地址 / 接口 / 结果，保留 180 天；不含型号、买家等业务内容。",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 9)).pack(
+            anchor="w", padx=16, pady=(14, 6))
+        wrap = tk.Frame(win, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        wrap.pack(fill="both", expand=True, padx=16)
+        txt = tk.Text(wrap, height=16, width=90, bg=CLR_CARD, fg=CLR_TEXT,
+                      font=(self.fam, 9), relief="flat", wrap="none")
+        sb = ttk.Scrollbar(wrap, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+        body = log.tail(400) if log is not None else ""
+        if not body:
+            body = ("暂无访问日志。\n\n"
+                    "开启共享、并有电脑或手机访问后，这里会记录：\n"
+                    "时间、来源 IP、接口、结果。日志按天分文件保存在数据目录 logs/ 下，\n"
+                    "保留 180 天后自动清除。")
+        txt.insert("1.0", body)
+        txt.configure(state="disabled")
+        row = tk.Frame(win, bg=CLR_BG)
+        row.pack(fill="x", padx=16, pady=10)
+        n = len(log.files()) if log is not None else 0
+        tk.Label(row, text=("共 %d 个日志文件" % n) if n else "",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(side="left")
+        ttk.Button(row, text="关闭", width=9,
+                   command=win.destroy).pack(side="right")
+        win.bind("<Escape>", lambda e: win.destroy())
+        center_window(win, self, size=(700, 520))
 
     def manage_blocked(self):
         win = tk.Toplevel(self)

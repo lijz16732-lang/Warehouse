@@ -253,8 +253,33 @@ def main():
               "--out", out, aligned])
     print("\n=== APK 构建完成 ===")
     print("输出: %s (%.2f MB)" % (out, os.path.getsize(out) / 1048576.0))
+    check_compliance_texts()
     print("装到手机：把 apk 传到手机（微信文件传输/数据线均可）→ 安装 →")
     print("打开 App「设置」→ 扫电脑二维码自动连接（也可手填地址 + 连接码）。")
+
+
+def check_compliance_texts():
+    """打包后自检合规文本，避免把占位符发给用户。
+
+    《个人信息保护法》第 17 条要求告知「个人信息处理者名称和联系方式」，
+    隐私政策里若还留着【请填写…】占位符，对外分发就是硬伤，且很难事后补救
+    （用户手里的 APK 不会更新）。这里只警告不阻断构建，方便本地调试。
+    """
+    p = os.path.join(HERE, "assets", "legal", "privacy.txt")
+    try:
+        with open(p, encoding="utf-8") as f:
+            txt = f.read()
+    except OSError as e:
+        print("[合规警告] 读不到隐私政策：%s" % e)
+        return
+    miss = [s for s in ("【请填写联系邮箱】", "【开发者") if s in txt]
+    if miss:
+        print("\n[合规警告] 隐私政策里仍有占位符：%s" % "、".join(miss))
+        print("           PIPL 第 17 条要求告知处理者名称与联系方式，对外分发前必须填写：")
+        print("           android/assets/legal/privacy.txt（第一节）")
+        print("           docs/compliance/隐私政策.md（同步）")
+    else:
+        print("合规文本自检：未发现占位符")
 
 
 if __name__ == "__main__":

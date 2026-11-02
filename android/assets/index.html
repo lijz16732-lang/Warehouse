@@ -229,13 +229,29 @@ tr:active { background:var(--active); }
     <div class="card">
       <h3>数据管理</h3>
       <div class="statline" id="dataStat"></div>
-      <button id="btnWipe" class="danger" style="width:100%;margin-top:10px">清空手机数据</button>
-      <div class="hint">只清手机上的库存和出售记录；已同步到电脑的数据不受影响。操作前请先同步。</div>
+      <div class="btnrow" style="display:flex;gap:10px;margin-top:10px">
+        <button id="btnExport" style="flex:1">导出全部数据</button>
+        <button id="btnWipe" class="danger" style="flex:1">清空手机数据</button>
+      </div>
+      <div class="hint">导出的 JSON 备份含库存、出售记录与照片，可保存到电脑或转发给自己；
+        清空只影响手机，已同步到电脑的数据不受影响。</div>
     </div>
     <div class="card">
-      <h3>隐私政策与用户协议</h3>
-      <button id="btnAgreement" class="gray" style="width:100%">查看《隐私政策》和《用户协议》</button>
-      <div class="hint">首次启动时展示的协议内容，可随时在这里重新阅读。</div>
+      <h3>隐私与数据</h3>
+      <div class="statline" id="legalStat">隐私政策</div>
+      <div class="btnrow" style="display:flex;gap:10px;margin-top:10px">
+        <button id="btnPrivacy" class="gray" style="flex:1">《隐私政策》</button>
+        <button id="btnTerms" class="gray" style="flex:1">《用户协议》</button>
+      </div>
+      <button id="btnInfoList" class="gray" style="width:100%;margin-top:10px">个人信息收集使用清单</button>
+      <div class="frow" style="margin-top:14px">
+        <div class="fcol"><label>启动验证（用手机锁屏密码）</label></div>
+        <button id="btnLock" class="gray" style="flex:none">关</button>
+      </div>
+      <div class="hint" style="margin-top:0">开启后每次打开应用要先通过手机锁屏密码 / 指纹，
+        防止别人拿到手机直接看库存。</div>
+      <button id="btnWithdraw" class="danger" style="width:100%;margin-top:12px">撤回同意并清除数据</button>
+      <div class="hint">撤回后本机数据会被删除、应用退出；撤回前建议先导出备份。</div>
     </div>
   </div>
 </main>
@@ -493,6 +509,34 @@ function dropShare(msg) {
   saveDB(); refreshHead();
   if (msg) toast(msg);
 }
+/* 只允许局域网地址：10.x / 172.16-31.x / 192.168.x / 127.x / localhost / 单标签主机名。
+   与服务端 NetGuard 一致，防止把库存数据填到公网地址上发出去。
+   注意：本页脚本不用正则反斜杠，避免被 HTML 转义吃掉。 */
+function isLanBase(v) {
+  var h = String(v || '').replace(/^https?:\/\//, '');
+  var cut = h.length, i = h.indexOf('/');
+  if (i >= 0 && i < cut) cut = i;
+  i = h.indexOf('?');
+  if (i >= 0 && i < cut) cut = i;
+  h = h.slice(0, cut);
+  i = h.indexOf(':');
+  if (i >= 0) h = h.slice(0, i);
+  h = h.toLowerCase();
+  if (!h) return false;
+  if (h === 'localhost') return true;
+  var p = h.split('.');
+  if (p.length === 1) return true;                 // my-pc、desktop
+  if (p.length === 4) {
+    var a = parseInt(p[0], 10), b = parseInt(p[1], 10);
+    if (isNaN(a) || isNaN(b)) return false;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  return h.slice(-6) === '.local' || h.slice(-4) === '.lan' || h.slice(-5) === '.home';
+}
 function normBase(v) {
   v = (v || '').trim();
   if (!v) return '';
@@ -512,6 +556,10 @@ function connectTo(b, code, thenSync) {
   b = normBase(b);
   code = (code || '').trim();
   if (!b) { toast('请填写电脑地址'); return; }
+  if (!isLanBase(b)) {
+    toast('只能连接局域网内的电脑（如 192.168.1.5），不支持公网地址');
+    return;
+  }
   if (!code) { toast('请填写连接码'); return; }
   base = b;
   $('btnShareConn').disabled = true;
@@ -525,7 +573,8 @@ function connectTo(b, code, thenSync) {
     try { j = JSON.parse(x.responseText); } catch (e2) {}
     if (x.status === 0) { toast('连不上电脑（检查是否已开启共享、同一 WiFi）'); return; }
     if (!j.ok) { toast(j.error || '连接失败'); return; }
-    DB.share.base = b; DB.share.code = code; DB.share.token = j.token || '';
+    DB.share.base = b; DB.share.token = j.token || '';
+    DB.share.code = '';          /* 连接码是凭据，只本次会话用，不写进本地存储 */
     saveDB();
     if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
     $('shBase').value = b;
@@ -1326,13 +1375,89 @@ function renderData() {
   $('dataStat').textContent = '手机库存 ' + DB.items.length + ' 条 · 出售记录 ' +
     DB.sales.length + ' 条 · 待同步 ' + pendingCount() + ' 条';
 }
-/* 隐私政策 / 用户协议：随时重看（原生只读弹窗） */
-$('btnAgreement').onclick = function () {
-  if (window.AndroidInfo && AndroidInfo.showAgreement) {
-    AndroidInfo.showAgreement();
-  } else {
-    toast('请在手机 App 内查看');
+
+/* ================= 隐私与数据（合规：告知 / 查阅复制 / 删除 / 撤回同意） =================
+   AndroidInfo 由原生注入；在浏览器里打开本页时这些功能不可用，用文案兜底。 */
+function legal() {
+  return (window.AndroidInfo && AndroidInfo.showPrivacy) ? AndroidInfo : null;
+}
+function legalVersion() {
+  try { return (legal() && AndroidInfo.legalVersion) ? AndroidInfo.legalVersion() : ''; }
+  catch (e) { return ''; }
+}
+function renderLegal() {
+  var v = legalVersion();
+  var on = false;
+  try { on = (legal() && AndroidInfo.startupLock) ? !!AndroidInfo.startupLock() : false; }
+  catch (e2) { on = false; }
+  $('legalStat').textContent = v
+    ? ('已同意 · 隐私政策 v' + v)
+    : '请在 App 内阅读并同意隐私政策';
+  $('btnLock').textContent = on ? '开' : '关';
+  $('btnLock').className = on ? '' : 'gray';
+}
+$('btnPrivacy').onclick = function () {
+  var b = legal();
+  if (b) { b.showPrivacy(); } else { toast('请在手机 App 内查看《隐私政策》'); }
+};
+$('btnTerms').onclick = function () {
+  var b = legal();
+  if (b) { b.showTerms(); } else { toast('请在手机 App 内查看《用户协议》'); }
+};
+$('btnInfoList').onclick = function () {
+  var b = legal();
+  if (b) { b.showPersonalInfo(); } else { toast('请在手机 App 内查看清单'); }
+};
+$('btnLock').onclick = function () {
+  var b = legal();
+  if (!b || !b.setStartupLock) { toast('需要新版 App 才支持启动验证'); return; }
+  b.setStartupLock(!b.startupLock());
+  setTimeout(renderLegal, 400);
+};
+$('btnWithdraw').onclick = function () {
+  var b = legal();
+  if (!b || !b.withdrawConsent) { toast('请在 App 内操作'); return; }
+  b.withdrawConsent();           /* 二次确认由原生弹窗负责 */
+};
+
+/* 导出全部数据：JSON 备份 → 原生写文件 → 系统分享面板（PIPL 第 45 条查阅复制权）。
+   刻意不导出会话令牌与连接码：它们是凭据，不属于用户要备份的数据。 */
+function buildExport() {
+  var photos = {};
+  var i, k, n = 0;
+  for (i = 0; i < LS.length; i += 1) {
+    k = LS.key(i);
+    if (k && k.indexOf('cgm_ph_') === 0) { photos[k] = LS.getItem(k); n += 1; }
   }
+  return {
+    app: '仓管家手机版',
+    kind: 'backup',
+    format: 1,
+    exported_at: new Date().toISOString(),
+    privacy_version: legalVersion(),
+    items: DB.items,
+    sales: DB.sales,
+    seq: DB.seq,
+    prefix: DB.prefix,
+    settings: { theme: DB.theme, locCols: DB.locCols, kwHist: DB.kwHist,
+                server: DB.share.base || '' },
+    photo_count: n,
+    photos: photos
+  };
+}
+$('btnExport').onclick = function () {
+  var b = legal();
+  if (!b || !b.exportData) { toast('导出需要新版 App'); return; }
+  var data = buildExport();
+  var s = JSON.stringify(data);
+  /* 原生桥一次传太大的字符串会占内存，超过 6MB 就先只导表格数据 */
+  if (s.length > 6 * 1024 * 1024) {
+    data.photos = {};
+    data.photos_omitted = true;
+    s = JSON.stringify(data);
+    toast('照片较多，本次导出不含照片');
+  }
+  b.exportData(s);
 };
 
 /* ================= 页签 ================= */
@@ -1429,7 +1554,7 @@ $('inPrefix').value = DB.prefix || 'APP';
 applyTheme();
 renderFlts(); renderKwHist();
 refreshHead();
-renderSync(); renderData();
+renderSync(); renderData(); renderLegal();
 (function () {
   var m = (location.hash || '').match(/base=([^&]+)/);
   if (m) {

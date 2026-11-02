@@ -1,27 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 仓管家手机 App：WebView 壳 + 本机离线 OCR（拍照识别型号）。
-     usesCleartextTraffic：局域网内主机是 http://，必须允许明文（数据不出局域网）。
+     识别引擎：PP-OCR（ONNX Runtime + assets/ppocr/{det,rec,cls}.onnx），纯本地推理，
+     不联网、不依赖任何第三方服务，因此清单里没有任何 SDK 组件声明。
 
-     识别引擎：Tesseract（tesseract4android，libs 里一个 AAR + assets/tessdata 中文模型）。
-     v1.29.0 从 Google ML Kit 换回来：ML Kit 依赖 GMS 的 dynamite/datatransport/dagger 一整套
-     组件，手写打包（无 Gradle）要手工补清单注册，稍有遗漏就是「引擎起不来」；Tesseract
-     纯 JNI，不需要任何清单声明、不依赖 Google 服务，装上就能用。 -->
+     合规要点（《个人信息保护法》《网络安全法》《移动互联网应用程序信息服务管理规定》）：
+     1. 权限最小化：只申请 INTERNET 与 CAMERA。相册选图走系统照片选择器（GET_CONTENT），
+        系统只把用户选中的图片授权给本应用，因此不需要 READ_MEDIA_IMAGES /
+        READ_EXTERNAL_STORAGE；也从不申请位置、通讯录、电话、短信、日历权限。
+     2. usesCleartextTraffic 保持 true 是必要的：电脑端局域网服务是 http（自签证书落地
+        成本高、普通用户也装不上）。明文只被允许发往私有网段——由 NetGuard 在 WebView
+        层硬拦截，公网地址一律拒绝，避免数据被发出去。
+     3. allowBackup=false：数据不进入系统备份/云备份，避免库存与照片被同步到云端。
+     4. 两个 ContentProvider 都是 exported=false + grantUriPermissions=true：
+        photos 给相机写临时照片，export 用于「导出全部数据」时把 JSON 交给分享面板。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="39"
-    android:versionName="1.31.3">
+    android:versionCode="40"
+    android:versionName="1.32.0">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 
+  <!-- 唯一网络权限：仅用于连接同一局域网内用户自己的电脑（不访问互联网服务） -->
   <uses-permission android:name="android.permission.INTERNET"/>
-  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
-  <!-- 扫一扫：相机只用于实时取景识别，不存照片、不上传 -->
+  <!-- 扫一扫 / 拍照留档：仅在用户点击时申请，拒绝不影响其他功能 -->
   <uses-permission android:name="android.permission.CAMERA"/>
-  <!-- 相册：选商品照片（API 33+ 用 READ_MEDIA_IMAGES，旧系统用 READ_EXTERNAL_STORAGE） -->
-  <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-      android:maxSdkVersion="32"/>
+
   <uses-feature android:name="android.hardware.camera" android:required="false"/>
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
 
@@ -59,9 +62,14 @@
         android:exported="false"
         android:grantUriPermissions="true"/>
 
-    <!-- 说明：Tesseract 引擎只有 JNI 原生库（libtesseract/libleptonica/...），
-         不需要任何 service / meta-data / provider 声明，因此这里不再有 ML Kit 的
-         组件发现声明与 GMS 版本声明（v1.29.0 已全部移除）。
-         崩溃由 CgmApp 统一记录，下次启动显示，不会无迹可查。 -->
+    <!-- 数据导出中转：只服务 cacheDir/exports，用户点「导出全部数据」时临时授权给分享目标 -->
+    <provider
+        android:name=".ExportProvider"
+        android:authorities="com.cangguanjia.app.export"
+        android:exported="false"
+        android:grantUriPermissions="true"/>
+
+    <!-- 说明：PP-OCR 只有 ONNX 模型 + onnxruntime 的 JNI 原生库，不需要任何 service /
+         meta-data / provider 声明。崩溃由 CgmApp 统一记录，下次启动显示，不会无迹可查。 -->
   </application>
 </manifest>

@@ -13,12 +13,14 @@
 
 import hmac
 import json
+import os
 import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .audit import AccessLog
 from .constants import APP_NAME, APP_VERSION
 from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
                      handle_logout, handle_m_item, handle_m_sale, handle_page,
@@ -91,6 +93,7 @@ class LanServer(object):
         self._thread = None
         self.last_error = ""
         self.mobile = MobileService()   # 手机端：会话与手机专用接口
+        self._access = None             # 访问日志（懒加载，见 audit_log）
 
     # ------------------------------------------------------------ 生命周期
     def start(self):
@@ -176,6 +179,28 @@ class LanServer(object):
             return [{"ip": ip, "name": b.get("name") or "",
                      "time": b.get("time") or 0}
                     for ip, b in sorted(self.blocked.items())]
+
+    # ------------------------------------------------------------ 访问日志
+    def access_log(self):
+        """懒加载访问日志：日志目录跟着数据库走（<data>/logs）。"""
+        if self._access is None:
+            try:
+                st = self.get_store()
+                root = os.path.join(os.path.dirname(os.path.abspath(st.path)),
+                                    "logs")
+                self._access = AccessLog(root)
+            except Exception:
+                return None
+        return self._access
+
+    def audit_log(self, ip, method, path, status):
+        """记一条访问日志（《网络安全法》第 23 条：留存不少于六个月）。"""
+        try:
+            log = self.access_log()
+            if log is not None:
+                log.write(ip, method, path, status)
+        except Exception:
+            pass
 
     def _gate(self, ip):
         """黑名单 / 被移除检查：返回 (http_code, body) 或 None。"""
@@ -294,6 +319,8 @@ def _make_handler(srv):
 
         def _send(self, http_code, obj):
             data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            srv.audit_log(self._client_ip(), self.command,
+                          urlparse(self.path).path, http_code)
             try:
                 self.send_response(http_code)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -305,6 +332,8 @@ def _make_handler(srv):
 
         def _send_full(self, http_code, body, extra_headers=()):
             """body 为 dict（发 JSON）或 bytes（Content-Type 由 extra_headers 给出）。"""
+            srv.audit_log(self._client_ip(), self.command,
+                          urlparse(self.path).path, http_code)
             try:
                 if isinstance(body, dict):
                     data = json.dumps(body, ensure_ascii=False).encode("utf-8")

@@ -1014,9 +1014,13 @@ try:
           os.path.isfile(os.path.join(ROOT, "tools", "_missing_classes.py")))
     # v1.28.2 教训：ContentProvider 会在进程启动时被实例化，声明错了就是「点开闪退」。
     # v1.29.0 换 Tesseract 后不再需要任何引擎侧清单声明，启动期只留自己的 PhotoProvider。
-    check("启动期只允许 PhotoProvider，且崩溃自证（CgmApp）已就位",
+    # v1.32.0 新增 ExportProvider（导出备份用），两者都只服务私有缓存目录、
+    # exported=false，启动期不碰任何外部组件，安全。
+    check("启动期只允许 PhotoProvider / ExportProvider，且崩溃自证（CgmApp）已就位",
           'androidx.startup.InitializationProvider' not in _mf
-          and _mf.count("<provider") == 1 and ".PhotoProvider" in _mf
+          and _mf.count("<provider") == 2 and ".PhotoProvider" in _mf
+          and ".ExportProvider" in _mf
+          and _mf.count('android:exported="false"') >= 2
           and 'android:name=".CgmApp"' in _mf)
     check("清单里不再残留 ML Kit / GMS 声明（换引擎后已清理）",
           "mlkit" not in _mf.lower() and "gms.version" not in _mf)
@@ -1042,6 +1046,143 @@ try:
     check("页面接收扫码结果并自动连接 + 同步",
           "window.__qrResult" in _app_html and "function parseQr" in _app_html
           and "function connectTo" in _app_html)
+
+    # ================================================================
+    # 合规整改（v1.32.0）：《网络安全法》《数据安全法》《个人信息保护法》
+    # 《移动互联网应用程序信息服务管理规定》
+    # ================================================================
+    _legal_dir = os.path.join(_android_dir, "assets", "legal")
+    _privacy = ""
+    _terms = ""
+    for _n, _holder in (("privacy.txt", "_privacy"), ("terms.txt", "_terms")):
+        _fp = os.path.join(_legal_dir, _n)
+        if os.path.isfile(_fp):
+            with open(_fp, encoding="utf-8") as _f:
+                if _n == "privacy.txt":
+                    _privacy = _f.read()
+                else:
+                    _terms = _f.read()
+    _mainj = open(os.path.join(_android_dir, "src", "com", "cangguanjia", "app",
+                              "MainActivity.java"), encoding="utf-8").read()
+    _legalj = ""
+    _lf = os.path.join(_android_dir, "src", "com", "cangguanjia", "app", "Legal.java")
+    if os.path.isfile(_lf):
+        _legalj = open(_lf, encoding="utf-8").read()
+
+    check("隐私政策与用户协议独立成文并随包（PIPL 第 17 条告知义务）",
+          os.path.isfile(os.path.join(_legal_dir, "privacy.txt"))
+          and os.path.isfile(os.path.join(_legal_dir, "terms.txt"))
+          and len(_privacy) > 2000 and len(_terms) > 600)
+    # PIPL 17：处理者名称与联系方式、目的方式、信息种类、保存期限、权利行使方式
+    _must = ("个人信息处理者", "联系方式", "存储期限", "您的权利", "未成年人",
+             "安全措施", "本政策的更新", "不涉及个人信息出境")
+    check("隐私政策覆盖 PIPL 第 17 条必备要素（主体/目的/种类/期限/权利/更新）",
+          all(k in _privacy for k in _must))
+    check("隐私政策明示「未集成任何第三方 SDK」「不共享、不出售」",
+          "未集成任何第三方 SDK" in _privacy and "不会向任何第三方出售" in _privacy)
+    check("隐私政策逐项说明权限用途、调用时机与拒绝后果",
+          "相机（CAMERA）" in _privacy and "拒绝的后果" in _privacy
+          and "不申请存储权限" in _privacy)
+    check("隐私政策写明保存期限（崩溃日志/会话令牌/访问日志 180 天）",
+          "180 天" in _privacy and "12 小时" in _privacy)
+
+    # 同意机制：单独同意 + 不默认勾选 + 版本化 + 不同意可退出
+    check("首启同意页：政策与协议分开入口、复选框默认不勾选（App 规定第 12 条）",
+          "askConsent" in _legalj and "setChecked(false)" in _legalj
+          and "《隐私政策》全文" in _legalj and "《用户协议》全文" in _legalj)
+    check("未勾选点「同意」不放行（同意必须主动作出）",
+          "请先阅读并勾选同意" in _legalj and "if (!cb.isChecked())" in _legalj)
+    check("同意状态记的是政策版本号，政策升版会重新征得同意",
+          "KEY_VER" in _legalj and "VERSION.equals(" in _legalj
+          and "KEY_PRIVACY" not in _mainj)
+    check("「不同意」与「同意」同等显著，且不做任何处理直接退出",
+          "不同意，退出" in _legalj
+          and "不同意 → 退出，不做任何处理" in _mainj)
+    check("未取得同意前不创建 WebView（先同意后处理）",
+          "Legal.agreed(this)" in _mainj
+          and _mainj.index("Legal.agreed(this)") < _mainj.index("setupWeb()"))
+
+    # 权限最小化
+    import re as _re
+    # 先去掉 XML 注释再统计，否则注释里提到的历史权限名会误判
+    _mf_perms = _re.sub(r"<!--.*?-->", "", _mf, flags=_re.S)
+    _perms = _re.findall(r'uses-permission android:name="([^"]+)"', _mf_perms)
+    check("只申请 INTERNET + CAMERA 两个权限（权限最小必要）",
+          sorted(_perms) == ["android.permission.CAMERA",
+                             "android.permission.INTERNET"], str(_perms))
+    check("不再申请存储/位置/通讯录/电话/短信等权限",
+          not any(k in _mf_perms for k in ("READ_MEDIA_IMAGES", "READ_EXTERNAL_STORAGE",
+                                     "WRITE_EXTERNAL_STORAGE", "ACCESS_FINE_LOCATION",
+                                     "READ_CONTACTS", "READ_SMS", "READ_PHONE_STATE",
+                                     "ACCESS_NETWORK_STATE", "ACCESS_WIFI_STATE")))
+    check("相册选图走系统选择器，不申请相册权限",
+          "ACTION_GET_CONTENT" in _mainj and "askGalleryPerm" not in _mainj)
+    check("相机权限申请前先说明用途、拒绝不影响其他功能",
+          "需要相机权限" in _mainj and "不会上传互联网" in _mainj
+          and "也可以改用「从相册选择」或手动输入型号" in _mainj)
+
+    # 网络安全（CSL 21 条 / PIPL 51 条）
+    check("出网白名单：只允许私有网段，公网地址在 WebView 层直接拦截",
+          os.path.isfile(os.path.join(_android_dir, "src", "com", "cangguanjia",
+                                      "app", "NetGuard.java"))
+          and "shouldInterceptRequest" in _mainj and "NetGuard.allow(" in _mainj
+          and "192" in open(os.path.join(_android_dir, "src", "com",
+                                         "cangguanjia", "app", "NetGuard.java"),
+                            encoding="utf-8").read())
+    check("页面侧也校验局域网地址（不把库存发到公网）",
+          "function isLanBase" in _app_html
+          and "只能连接局域网内的电脑" in _app_html)
+    check("连接码不再写入本地存储（凭据最小化）",
+          "DB.share.code = ''" in _app_html and "不写进本地存储" in _app_html)
+    check("WebView 收紧：禁混合内容、禁 file 互读、关表单保存与定位",
+          "MIXED_CONTENT_NEVER_ALLOW" in _mainj
+          and "setAllowFileAccessFromFileURLs(false)" in _mainj
+          and "setSaveFormData(false)" in _mainj and "setGeolocationEnabled(false)" in _mainj)
+    check("关闭系统备份，数据不进云备份",
+          'android:allowBackup="false"' in _mf)
+
+    # 数据主体权利：查阅复制 / 删除 / 撤回同意 / 访问控制
+    check("导出全部数据（PIPL 45 条查阅复制权）走系统分享，不申请存储权限",
+          "exportData" in _mainj and "ExportProvider" in _mainj
+          and "ACTION_SEND" in _mainj)
+    check("导出内容不含会话令牌与连接码",
+          "不导出会话令牌与连接码" in _app_html
+          and "settings: { theme: DB.theme" in _app_html)
+    check("撤回同意并清除本机数据（PIPL 15 条）",
+          "withdrawConsent" in _mainj and "askWithdraw" in _mainj
+          and "localStorage.clear()" in _mainj)
+    check("撤回同意会清 WebView 存储 / Cookie / 照片 / 崩溃日志 / 偏好",
+          "WebStorage.getInstance().deleteAllData()" in _mainj
+          and "removeAllCookies" in _mainj and "deleteTree" in _mainj)
+    check("启动验证作为访问控制措施（走系统锁屏，不自建密码）",
+          "createConfirmDeviceCredentialIntent" in _mainj
+          and "isDeviceSecure" in _mainj and "startupLock" in _mainj)
+    check("设置页「隐私与数据」提供协议、清单、导出、撤回同意入口",
+          "btnPrivacy" in _app_html and "btnTerms" in _app_html
+          and "btnInfoList" in _app_html and "btnExport" in _app_html
+          and "btnWithdraw" in _app_html)
+    check("个人信息收集使用清单可查",
+          "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
+
+    # 电脑端：网络日志留存不少于 6 个月（CSL 第 23 条，2025 修正后条号）
+    _audit = os.path.join(ROOT, "wm", "audit.py")
+    check("局域网访问日志按天落盘、保留 180 天、不记业务内容",
+          os.path.isfile(_audit)
+          and "KEEP_DAYS = 180" in open(_audit, encoding="utf-8").read()
+          and "不记业务内容" in open(_audit, encoding="utf-8").read())
+    check("局域网服务已接入访问日志（含状态码），且跳过 /ping 心跳",
+          "srv.audit_log(" in open(os.path.join(ROOT, "wm", "lan.py"),
+                                   encoding="utf-8").read()
+          and 'startswith("/ping")' in open(_audit, encoding="utf-8").read())
+
+    # 合规文档
+    _cdir = os.path.join(ROOT, "docs", "compliance")
+    _need = ["合规整改报告.md", "隐私政策.md", "用户协议.md",
+             "个人信息收集使用清单.md", "个人信息保护影响评估.md",
+             "数据安全管理制度.md", "App备案与分发合规指引.md"]
+    _miss = [n for n in _need if not os.path.isfile(os.path.join(_cdir, n))]
+    check("合规文档齐全（报告/政策/协议/清单/PIA/制度/备案指引）",
+          not _miss, "缺：" + ", ".join(_miss) if _miss else "")
     check("原生桥提供 scanQr 且结果回调分开",
           "scanQr" in _mj and "REQ_QR" in _mj and "__qrResult" in _mj)
     check("扫码页面支持二维码模式（ZXing 解码）",
