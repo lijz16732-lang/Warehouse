@@ -365,8 +365,15 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
   </div>
   <!-- 记录 -->
   <div id="pRec" class="hide">
-    <div class="stat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
+    <div class="stat" id="recStat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
     <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
+    <!-- 出售记录长按多选操作条（与库存页同款交互） -->
+    <div id="recSelBar" class="selbar hide">
+      <button id="btnRSelAll" class="gray small">全选</button>
+      <button id="btnRSelDel" class="danger small">删除</button>
+      <span id="rSelCnt">已选 0 项</span>
+      <button id="btnRSelCancel" class="gray small">取消</button>
+    </div>
   </div>
   <!-- 设置 -->
   <div id="pSet" class="hide">
@@ -1076,11 +1083,14 @@ $('segPc').onclick = function () {
 /* 长按多选状态（只对手机库存；电脑库存只读） */
 var SEL = { on: false, set: [] };
 var LOCV_ROWS = [];                       // 当前筛选下全部行，供「全选」
+/* 出售记录页的多选状态（记录没有编辑弹窗，长按只做多选删除） */
+var RSEL = { on: false, set: [] };
 /* 列宽交给浏览器自动排（内容完整、超出就横向滑动）；只补多选勾选列 */
 function mkHead(tbl, cols, phMark) {
   var thead = tbl.tHead; thead.innerHTML = '';
   var tr = document.createElement('tr');
-  if (SEL.on && tbl.id === 'tInv') {
+  var selOn = (tbl.id === 'tInv' && SEL.on) || (tbl.id === 'tRec' && RSEL.on);
+  if (selOn) {
     var thc = document.createElement('th');
     thc.style.padding = '11px 2px';
     tr.appendChild(thc);
@@ -1629,10 +1639,24 @@ var REC_COLS = ['sale_date', 'code', 'brand', 'model', 'qty', 'total', 'buyer'];
 function loadRec() {
   var tb = $('tRec').tBodies[0]; tb.innerHTML = '';
   mkHead($('tRec'), REC_COLS);
-  if (!DB.sales.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">暂无出售记录</td></tr>'; return; }
   var rows = DB.sales.slice().reverse();
+  $('recStat').textContent = RSEL.on
+    ? ('已选 ' + RSEL.set.length + ' / ' + rows.length + ' 条（点行勾选）')
+    : '手机出售记录 ' + rows.length + ' 条（长按行可多选删除）';
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="' + (REC_COLS.length + (RSEL.on ? 1 : 0)) +
+      '" class="empty">暂无出售记录</td></tr>';
+    return;
+  }
   rows.forEach(function (s) {
     var tr = document.createElement('tr');
+    if (RSEL.on) {
+      if (RSEL.set.indexOf(s.lid) >= 0) tr.classList.add('picked');
+      var tc = document.createElement('td');
+      tc.className = 'ckbox';
+      tc.textContent = RSEL.set.indexOf(s.lid) >= 0 ? '✔' : '○';
+      tr.appendChild(tc);
+    }
     REC_COLS.forEach(function (f) {
       var td = document.createElement('td');
       td.textContent = (s[f] === null || s[f] === undefined) ? '' : s[f];
@@ -1644,7 +1668,62 @@ function loadRec() {
     tag.textContent = s.dirty ? '待同步' : '已同步';
     tdS.appendChild(tag);
     tr.appendChild(tdS);
+    var lpT = null, lpFired = false;          // 长按 480ms 进入多选（同库存页）
+    if (!RSEL.on) {
+      tr.addEventListener('touchstart', function () {
+        lpFired = false;
+        lpT = setTimeout(function () { lpFired = true; recSelEnter(s.lid); }, 480);
+      }, { passive: true });
+      tr.addEventListener('touchmove', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchcancel', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchend', function () { clearTimeout(lpT); });
+      tr.oncontextmenu = function (e) {       // 电脑浏览器里右键等价于长按
+        e.preventDefault();
+        recSelEnter(s.lid);
+      };
+    }
+    tr.onclick = function () {
+      if (lpFired) { lpFired = false; return; }   // 长按结束后的那次 click 吞掉
+      if (RSEL.on) recSelToggle(s.lid);
+    };
     tb.appendChild(tr);
+  });
+}
+/* ---------- 出售记录多选（进入 / 勾选 / 全选 / 删除 / 退出） ---------- */
+function recSelEnter(lid) {
+  RSEL = { on: true, set: [lid] };
+  $('rSelCnt').textContent = '已选 1 项';
+  $('recSelBar').classList.remove('hide');
+  loadRec();
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+}
+function recSelExit() {
+  if (!RSEL.on) return;
+  RSEL = { on: false, set: [] };
+  $('recSelBar').classList.add('hide');
+  loadRec();
+}
+function recSelToggle(lid) {
+  var i = RSEL.set.indexOf(lid);
+  if (i >= 0) RSEL.set.splice(i, 1); else RSEL.set.push(lid);
+  if (!RSEL.set.length) { recSelExit(); return; }   // 一个都不剩就退出多选
+  $('rSelCnt').textContent = '已选 ' + RSEL.set.length + ' 项';
+  loadRec();
+}
+$('btnRSelAll').onclick = function () {
+  RSEL.set = DB.sales.map(function (s) { return s.lid; });
+  $('rSelCnt').textContent = '已选 ' + RSEL.set.length + ' 项';
+  loadRec();
+};
+$('btnRSelCancel').onclick = recSelExit;
+$('btnRSelDel').onclick = function () {
+  if (!RSEL.set.length) { toast('先勾选要删除的记录'); return; }
+  var n = RSEL.set.length, lids = RSEL.set.slice();
+  askConfirm('删除选中的 ' + n + ' 条出售记录？\n已同步到电脑的不受影响；未同步的将不再上传。', '删除', function () {
+    DB.sales = DB.sales.filter(function (x) { return lids.indexOf(x.lid) < 0; });
+    saveDB(); recSelExit();
+    renderSync(); renderData();
+    toast('已删除 ' + n + ' 条（本地）');
   });
 }
 
@@ -1819,6 +1898,7 @@ $('fabAdd').onclick = function () {
 
 /* ================= 页签 ================= */
 function tab2(name) {
+  selExit(); recSelExit();          // 切页签一律退出多选（操作条是 fixed 的，不退会浮在新页面上）
   var tabs = document.querySelectorAll('nav div');
   for (var i = 0; i < tabs.length; i += 1)
     tabs[i].className = (tabs[i].getAttribute('data-t') === name) ? 'on' : '';
@@ -1840,7 +1920,8 @@ function tab2(name) {
 /* ================= 列题（电脑端共享设置，用于电脑库存表头） ================= */
 var CT_DEFS = { code: '编号', brand: '品牌', category: '品类', model: '型号',
                 condition: '成色', price: '单价', qty: '数量', shelf: '货架',
-                listed: '上架', remark: '备注', total: '合计', sale_date: '日期' };
+                listed: '上架', remark: '备注', total: '合计', sale_date: '日期',
+                buyer: '买家', out_type: '类型' };
 function loadTitles() {
   if (!DB.share.token) { titles = {}; return Promise.resolve(); }
   return api('GET', '/m/api/coltitles').then(function (j) {

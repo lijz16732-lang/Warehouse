@@ -1203,6 +1203,13 @@ try:
           "fabPos" in _app_html and "FAB_DRAG" in _app_html
           and "touch-action:none" in _app_html
           and "Math.abs(dx) + Math.abs(dy) < 6" in _app_html)
+    check("出售记录页支持长按多选删除（独立选择条 + 删除确认）",
+          "recSelBar" in _app_html and "recSelEnter" in _app_html
+          and "recSelToggle" in _app_html and "btnRSelDel" in _app_html
+          and "DB.sales = DB.sales.filter" in _app_html
+          and "未同步的将不再上传" in _app_html)
+    check("切页签时退出多选（fixed 操作条不残留到其他页面）",
+          "selExit(); recSelExit();" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
