@@ -1199,6 +1199,10 @@ try:
     check("底部导航带图标、加高",
           "<i>▦</i>" in _app_html and "<i>✚</i>" in _app_html and "<i>⚙</i>" in _app_html
           and "nav div i { display:block" in _app_html)
+    check("录入悬浮按钮可拖动并记住位置，轻点仍进录入页",
+          "fabPos" in _app_html and "FAB_DRAG" in _app_html
+          and "touch-action:none" in _app_html
+          and "Math.abs(dx) + Math.abs(dy) < 6" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 

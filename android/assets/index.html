@@ -87,12 +87,12 @@ header button:active { background:rgba(255,255,255,.3); }
 
 /* 底栏：文字导航靠「顶部指示条 + 字重」表达选中，比整块高亮干净 */
 nav { display:flex; background:var(--card); border-top:1px solid var(--line); flex:none;
-      padding:8px 0 calc(8px + env(safe-area-inset-bottom)); }
-nav div { flex:1; text-align:center; padding:7px 0 6px; color:var(--muted);
+      padding:5px 0 calc(5px + env(safe-area-inset-bottom)); }
+nav div { flex:1; text-align:center; padding:5px 0 4px; color:var(--muted);
           font-size:var(--fs-xs); font-weight:500; position:relative;
           transition:color .15s; }
-nav div i { display:block; font-style:normal; font-size:21px; line-height:26px;
-            font-weight:400; margin-bottom:2px; }
+nav div i { display:block; font-style:normal; font-size:19px; line-height:22px;
+            font-weight:400; margin-bottom:1px; }
 nav div::before { content:""; position:absolute; top:0; left:50%; transform:translateX(-50%) scaleX(0);
                   width:22px; height:3px; border-radius:0 0 3px 3px; background:var(--accent);
                   transition:transform .18s ease; }
@@ -224,12 +224,16 @@ tr:active td { background:var(--active) !important; }
 .phbig { width:100%; max-height:56vh; object-fit:contain; border-radius:var(--r-md);
          background:var(--seg); }
 .phcnt { text-align:center; font-size:var(--fs-sm); color:var(--muted); margin:8px 0; }
-/* 悬浮录入按钮：避开底栏与安全区，拇指自然落点（小巧不挡表格） */
+/* 悬浮录入按钮：可拖动（touch-action:none 让拖动不被页面滚动抢走） */
 .fab { position:fixed; right:14px; bottom:calc(72px + env(safe-area-inset-bottom));
        height:38px; padding:0 14px 0 12px; border-radius:var(--r-pill);
        font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px;
-       box-shadow:0 6px 16px rgba(37,99,235,.32); z-index:8; gap:4px; }
+       box-shadow:0 6px 16px rgba(37,99,235,.32); z-index:8; gap:4px;
+       touch-action:none; }
 .fab:active { transform:scale(.96); }
+/* 拖动中：不再做按下缩放，给一点放大+阴影，像被"拎起来" */
+.fab.drag { transform:scale(1.06); opacity:.94; transition:none;
+            box-shadow:0 10px 24px rgba(37,99,235,.45); }
 body.dark .fab { box-shadow:0 8px 22px rgba(0,0,0,.55); }
 /* 深色下顶栏用更深一档的蓝：浅蓝底 + 白字对比度不够（约 2.6:1） */
 body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,.45); }
@@ -1757,8 +1761,55 @@ $('btnExport').onclick = function () {
   b.exportData(s);
 };
 
-/* 库存页「＋ 录入」：切页签 + 聚焦第一个输入框，省一次点击 */
+/* 库存页「＋ 录入」：切页签 + 聚焦第一个输入框，省一次点击
+   按钮可拖动：按住挪位置，松开记住（存本机），轻点仍是进录入页 */
+var FAB_DRAG = { moved: false };
+(function () {
+  var fab = $('fabAdd');
+  var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
+  function place(l, t, save) {
+    var w = fab.offsetWidth, h = fab.offsetHeight;
+    l = Math.max(6, Math.min(l, window.innerWidth - w - 6));
+    t = Math.max(6, Math.min(t, window.innerHeight - h - 64));   // 别钻到底栏下面
+    fab.style.left = l + 'px'; fab.style.top = t + 'px';
+    fab.style.right = 'auto'; fab.style.bottom = 'auto';
+    if (save) { try { LS.setItem('fabPos', Math.round(l) + ',' + Math.round(t)); } catch (e) {} }
+  }
+  try {                                        // 恢复上次拖到的位置
+    var sv = LS.getItem('fabPos');
+    if (sv) {
+      var a = sv.split(',');
+      if (a.length === 2) place(parseFloat(a[0]), parseFloat(a[1]), false);
+    }
+  } catch (e) {}
+  fab.addEventListener('touchstart', function (e) {
+    var t = e.touches[0], r = fab.getBoundingClientRect();
+    sx = t.clientX; sy = t.clientY; ox = r.left; oy = r.top;
+    dragging = true; FAB_DRAG.moved = false;
+    fab.classList.add('drag');
+  }, { passive: true });
+  fab.addEventListener('touchmove', function (e) {
+    if (!dragging) return;
+    var t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (!FAB_DRAG.moved && Math.abs(dx) + Math.abs(dy) < 6) return;   // 抖动不算拖
+    FAB_DRAG.moved = true;
+    place(ox + dx, oy + dy, false);
+  }, { passive: true });
+  fab.addEventListener('touchend', function () {
+    dragging = false;
+    fab.classList.remove('drag');
+    if (FAB_DRAG.moved) {
+      var r = fab.getBoundingClientRect();
+      place(r.left, r.top, true);
+    }
+  });
+  fab.addEventListener('touchcancel', function () {
+    dragging = false;
+    fab.classList.remove('drag');
+  });
+})();
 $('fabAdd').onclick = function () {
+  if (FAB_DRAG.moved) { FAB_DRAG.moved = false; return; }   // 拖动结束时的那次点击不算点击
   tab2('add');
   setTimeout(function () {
     var el = $('aBrand');
