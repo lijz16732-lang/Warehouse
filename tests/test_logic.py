@@ -1214,6 +1214,10 @@ try:
           "kwHistShow" in _app_html and "kwHistHide" in _app_html
           and "addEventListener('focus', kwHistShow)" in _app_html
           and "span.kwclr" in _app_html and "已清空搜索历史" in _app_html)
+    check("搜索历史只占一行：横向滑动 + 长词省略号",
+          "#kwHist { flex-wrap:nowrap" in _app_html
+          and "overflow-x:auto" in _app_html
+          and "max-width:9em" in _app_html and "text-overflow:ellipsis" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
