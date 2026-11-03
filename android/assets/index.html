@@ -180,6 +180,8 @@ tr:active td { background:var(--active) !important; }
               transition:background .15s, color .15s, border-color .15s; }
 .chips span.on { background:var(--accent); border-color:var(--accent); color:#fff;
                  box-shadow:0 2px 8px rgba(37,99,235,.28); }
+/* 搜索历史尾部的「清空」：虚线灰字，不与历史词混淆 */
+.chips span.kwclr { border-style:dashed; color:var(--muted); }
 /* 弹层 */
 #mask { position:fixed; inset:0; background:rgba(12,18,32,.48); z-index:20;
         display:flex; align-items:flex-end; justify-content:center;
@@ -1036,18 +1038,42 @@ function pushKwHist(kw) {
   if (DB.kwHist.length > 8) DB.kwHist.length = 8;
   saveDB(); renderKwHist();
 }
+/* 搜索历史：默认收起，点搜索框才浮出（失焦/搜索后自动收起），尾部可清空 */
+var KW_FOCUS = false;
 function renderKwHist() {
   var box = $('kwHist');
-  if (!DB.kwHist.length) { box.classList.add('hide'); return; }
   box.innerHTML = '';
-  box.classList.remove('hide');
+  if (!DB.kwHist.length) { box.classList.add('hide'); return; }
   DB.kwHist.forEach(function (k) {
     var el = document.createElement('span');
     el.textContent = k;
-    el.onclick = function () { $('inKw').value = k; refreshInv(); };
+    el.onmousedown = function (e) { e.preventDefault(); };   // 先于 blur，防止历史还没点就被收走
+    el.onclick = function () {
+      $('inKw').value = k;
+      refreshInv(); kwHistHide(); $('inKw').blur();
+    };
     box.appendChild(el);
   });
+  var clr = document.createElement('span');
+  clr.className = 'kwclr';
+  clr.textContent = '清空';
+  clr.onclick = function () {
+    DB.kwHist = []; saveDB(); kwHistHide();
+    toast('已清空搜索历史');
+  };
+  box.appendChild(clr);
+  if (KW_FOCUS) box.classList.remove('hide');
 }
+function kwHistShow() {
+  KW_FOCUS = true;
+  if (DB.kwHist.length) $('kwHist').classList.remove('hide');
+}
+function kwHistHide() {
+  KW_FOCUS = false;
+  $('kwHist').classList.add('hide');
+}
+$('inKw').addEventListener('focus', kwHistShow);
+$('inKw').addEventListener('blur', function () { setTimeout(kwHistHide, 180); });
 /* 表格列自定义：用户在设置页勾选，编号始终显示 */
 function curCols() {
   return (DB.locCols && DB.locCols.length) ? DB.locCols : LOC_COLS;
@@ -1057,6 +1083,7 @@ function runSearch() {
   pushKwHist($('inKw').value);
   selExit();
   refreshInv();
+  kwHistHide(); $('inKw').blur();     // 搜完就收起历史和键盘，不占屏幕
 }
 function refreshInv() {
   (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);

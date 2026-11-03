@@ -1210,6 +1210,10 @@ try:
           and "未同步的将不再上传" in _app_html)
     check("切页签时退出多选（fixed 操作条不残留到其他页面）",
           "selExit(); recSelExit();" in _app_html)
+    check("搜索历史默认收起：点搜索框浮出、失焦/搜索后收起、可一键清空",
+          "kwHistShow" in _app_html and "kwHistHide" in _app_html
+          and "addEventListener('focus', kwHistShow)" in _app_html
+          and "span.kwclr" in _app_html and "已清空搜索历史" in _app_html)
     check("个人信息收集使用清单可查",
           "showPersonalInfo" in _legalj and "个人信息收集使用清单" in _legalj)
 
