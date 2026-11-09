@@ -839,6 +839,16 @@ try:
           and _C.CLR_BG != "#000000")
     _app_src = open(os.path.join(_wm_dir, "app.py"),
                     encoding="utf-8").read()
+    _nav_src = open(os.path.join(_wm_dir, "nav.py"),
+                    encoding="utf-8").read()
+    _theme_src = open(os.path.join(_wm_dir, "theme.py"),
+                      encoding="utf-8").read()
+    check("桌面 v1.31 骨架：左侧功能导航（分组折叠）+ Notebook 页签条隐藏",
+          all(x in _app_src for x in ("FunctionNav", "self.nav = FunctionNav",
+                                      "def show_page", "def nav_add"))
+          and all(x in _nav_src for x in ("def add_item", "def _toggle",
+                                          "def set_active"))
+          and 'style.layout("TNotebook.Tab", [])' in _theme_src)
     check("电脑端外观设置：主题/字体/快捷键可配置（即时生效+原地重建）",
           all(x in _app_src for x in
               ("open_appearance", "ui_theme", "font_scale",
@@ -2380,8 +2390,14 @@ try:
         app._on_wheel(type("E", (), {"delta": -120})())
         root.update()
         ok_w = 0
+        _vw = app.tree.winfo_width()
         for lb in app._paint_labels:
             pi = lb.place_info()
+            # 左侧功能导航（v1.34）让表格变窄后，最右列可能被视口裁掉：
+            # 贴片正确但探测点(+5)落在可视区外，identify 返回 None——跳过
+            if int(pi["x"]) + 5 >= _vw:
+                ok_w += 1
+                continue
             iid, idx = app._cell_at(int(pi["x"]) + 5, int(pi["y"]) + 5)
             if iid and app.fmt(cols_p[idx], app.by_id[str(iid)]) == lb.cget("text"):
                 ok_w += 1

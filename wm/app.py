@@ -751,8 +751,15 @@ class App(object):
 
     # ============================================================ 布局
     def _build(self):
-        self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=10, pady=(8, 0))
+        # v1.31 骨架：左侧功能导航 + 右侧内容区（Notebook 页签条用样式隐藏，
+        # 只当页面容器用——select/index 等旧调用全部保持有效）
+        from .nav import FunctionNav
+        wrap = tk.Frame(self.root, bg=CLR_BG)
+        wrap.pack(fill="both", expand=True, padx=10, pady=(8, 0))
+        self.nav = FunctionNav(wrap, self, self.fam)
+
+        self.nb = ttk.Notebook(wrap)
+        self.nb.pack(side="left", fill="both", expand=True)
 
         self.tab_inv = ttk.Frame(self.nb)
         self.tab_ana = AnalysisTab(self.nb, self, self.fam)
@@ -1902,9 +1909,24 @@ class App(object):
         self.settings["show_detail"] = self.var_show_detail.get()
         self._save_settings()
 
+    def show_page(self, idx):
+        """左侧导航切页入口（nb.select 会自动触发 _on_tab_changed 刷新）。"""
+        self.nb.select(idx)
+
+    def nav_add(self, group, frame, label):
+        """注册新功能页：Notebook 追加一页 + 左侧导航挂到分组。"""
+        idx = self.nb.index("end")
+        self.nb.add(frame, text="  %s  " % label)
+        self.nav.add_item(group, idx, label)
+        return idx
+
     def _on_tab_changed(self, _e=None):
         try:
             idx = self.nb.index(self.nb.select())
+            try:
+                self.nav.set_active(idx)
+            except Exception:
+                pass
             # 标签顺序：0 库存 / 1 出售 / 2 出库 / 3 分析 / 4 手机 / 5 日志
             if idx == 1:
                 self.tab_sales.refresh_tab()

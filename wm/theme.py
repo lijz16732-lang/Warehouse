@@ -245,7 +245,11 @@ def apply_theme(root, scale=1.0):
     style.map("Card.TRadiobutton", background=[("active", CLR_CARD)],
               indicatorcolor=[("selected", CLR_ACCENT), ("!selected", CLR_CARD)])
 
-    cfg("TNotebook", background=CLR_BG, borderwidth=0, tabmargins=(0, 4, 0, 0))
+    # v1.31 骨架：页签条整体隐藏——导航交给左侧 FunctionNav，Notebook 只当页面容器。
+    # 页签由 ttk 核心用 TNotebook.Tab 元素绘制（不走 TNotebook 布局），
+    # 所以要清空的是 Tab 元素的布局，而非 Notebook 本身
+    cfg("TNotebook", background=CLR_BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    style.layout("TNotebook.Tab", [])
     cfg("TNotebook.Tab", padding=(s(22), s(9)), font=(fam, 10), background=CLR_HEADER,
         foreground=CLR_MUTED, borderwidth=0)
     style.map("TNotebook.Tab",
