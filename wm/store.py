@@ -113,6 +113,63 @@ CREATE TABLE IF NOT EXISTS phone_sales (
     synced_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_phone_sales_date ON phone_sales("sale_date");
+-- 客户档案（v1.32.0）：与出售记录的 buyer 按姓名对应，累计数据实时汇总
+CREATE TABLE IF NOT EXISTS customers (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL DEFAULT '',
+    phone      TEXT DEFAULT '',
+    address    TEXT DEFAULT '',
+    level      TEXT DEFAULT '',
+    note       TEXT DEFAULT '',
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers("name");
+-- 销售退货（v1.32.0）：一条出售可部分退，退回库存可选；金额/成本按退货当日快照
+CREATE TABLE IF NOT EXISTS returns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id     INTEGER,
+    item_id     INTEGER,
+    code        TEXT,
+    brand       TEXT,
+    category    TEXT,
+    model       TEXT,
+    shelf       TEXT,
+    qty         INTEGER DEFAULT 0,
+    price       REAL DEFAULT 0,
+    refund      REAL DEFAULT 0,
+    cost        REAL DEFAULT 0,
+    restock     INTEGER DEFAULT 1,
+    buyer       TEXT,
+    return_date TEXT,
+    remark      TEXT,
+    created_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_returns_date ON returns("return_date");
+CREATE INDEX IF NOT EXISTS idx_returns_sale ON returns("sale_id");
+-- 盘点单（v1.32.0）：头 + 明细快照，提交时按实盘数写回库存
+CREATE TABLE IF NOT EXISTS stocktakes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    no         TEXT DEFAULT '',
+    name       TEXT DEFAULT '',
+    status     TEXT DEFAULT 'draft',
+    created_at TEXT,
+    done_at    TEXT,
+    note       TEXT
+);
+CREATE TABLE IF NOT EXISTS stocktake_items (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    st_id    INTEGER,
+    item_id  INTEGER,
+    code     TEXT,
+    brand    TEXT,
+    model    TEXT,
+    shelf    TEXT,
+    book_qty INTEGER DEFAULT 0,
+    real_qty INTEGER DEFAULT 0,
+    note     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_st_items ON stocktake_items("st_id");
 """.format(cols=",\n    ".join(
     '"%s" %s DEFAULT %s' % (
         k,
@@ -1607,6 +1664,474 @@ class Store(object):
         cur = self._execute("UPDATE sales SET buyer = '' WHERE buyer = ?",
                             ((name or "").strip(),))
         return cur.rowcount
+
+    # ------------------------------------------------------------ 客户档案（v1.32.0）
+    def list_customers(self, kw=""):
+        """客户列表 + 出售汇总。
+
+        客户与出售记录按「姓名」对应（历史数据里 buyer 就是名字），
+        所以老数据不用迁移：建个同名客户就能看到累计消费。
+        """
+        kw = (kw or "").strip().lower()
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM customers ORDER BY name COLLATE NOCASE").fetchall()]
+            stat = {}
+            for r in self.conn.execute(
+                    "SELECT buyer b, COUNT(*) c, COALESCE(SUM(qty), 0) q,"
+                    " COALESCE(SUM(total), 0) amt,"
+                    " MAX(COALESCE(sale_date, '')) last"
+                    " FROM sales WHERE TRIM(COALESCE(buyer, '')) != ''"
+                    " AND COALESCE(out_type, '%s') = '%s' GROUP BY b"
+                    % (OUT_TYPE_SALE, OUT_TYPE_SALE)).fetchall():
+                stat[str(r["b"] or "").strip().lower()] = dict(r)
+        out = []
+        for r in rows:
+            s = stat.get((r.get("name") or "").strip().lower()) or {}
+            rec = {"id": int(r["id"]), "name": r.get("name") or "",
+                   "phone": r.get("phone") or "", "address": r.get("address") or "",
+                   "level": r.get("level") or "", "note": r.get("note") or "",
+                   "count": int(s.get("c") or 0), "qty": int(s.get("q") or 0),
+                   "amount": round(float(s.get("amt") or 0), 2),
+                   "last": s.get("last") or ""}
+            if kw and kw not in " ".join([rec["name"], rec["phone"], rec["address"],
+                                          rec["note"]]).lower():
+                continue
+            out.append(rec)
+        return out
+
+    def add_customer(self, name, phone="", address="", level="", note=""):
+        name = (name or "").strip()
+        if not name:
+            return False, "客户名称不能为空"
+        with self._lock:
+            dup = self.conn.execute(
+                "SELECT id FROM customers WHERE LOWER(TRIM(name)) = ?",
+                (name.lower(),)).fetchone()
+            if dup:
+                return False, "客户「%s」已存在" % name
+            now = now_str()
+            self.conn.execute(
+                "INSERT INTO customers (name, phone, address, level, note,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (name, (phone or "").strip(), (address or "").strip(),
+                 (level or "").strip(), (note or "").strip(), now, now))
+            self.conn.commit()
+        self.log_op("新增客户", name, (phone or "").strip())
+        return True, "已新增客户：%s" % name
+
+    def update_customer(self, cid, name=None, phone=None, address=None,
+                        level=None, note=None):
+        sets, args = [], []
+        for col, val in (("name", name), ("phone", phone), ("address", address),
+                         ("level", level), ("note", note)):
+            if val is None:
+                continue
+            val = str(val).strip()
+            if col == "name" and not val:
+                return False, "客户名称不能为空"
+            sets.append('"%s" = ?' % col)
+            args.append(val)
+        if not sets:
+            return False, "没有要修改的内容"
+        with self._lock:
+            if name is not None:
+                dup = self.conn.execute(
+                    "SELECT id FROM customers WHERE LOWER(TRIM(name)) = ? AND id != ?",
+                    (name.strip().lower(), int(cid))).fetchone()
+                if dup:
+                    return False, "客户「%s」已存在" % name.strip()
+            args += [now_str(), int(cid)]
+            self.conn.execute(
+                "UPDATE customers SET %s, updated_at = ? WHERE id = ?"
+                % ", ".join(sets), args)
+            self.conn.commit()
+        self.log_op("修改客户", str(name or ""), "")
+        return True, "已保存"
+
+    def delete_customer(self, cid):
+        cur = self._execute("DELETE FROM customers WHERE id = ?", (int(cid),))
+        return cur.rowcount
+
+    def import_buyers(self):
+        """把出售记录里出现过的买家导入客户表（同名跳过）。返回新增条数。"""
+        rows = [dict(r) for r in self.conn.execute(
+            "SELECT buyer b, MAX(COALESCE(sale_date, '')) last,"
+            " (SELECT address FROM sales s2 WHERE s2.buyer = s.buyer"
+            "  AND TRIM(COALESCE(s2.address, '')) != ''"
+            "  ORDER BY s2.sale_date DESC LIMIT 1) addr"
+            " FROM sales s WHERE TRIM(COALESCE(buyer, '')) != ''"
+            " AND COALESCE(out_type, '%s') = '%s' GROUP BY b"
+            % (OUT_TYPE_SALE, OUT_TYPE_SALE)).fetchall()]
+        n = 0
+        now = now_str()
+        with self._lock:
+            have = {str(r["n"] or "").strip().lower() for r in self.conn.execute(
+                "SELECT name n FROM customers").fetchall()}
+            for r in rows:
+                name = str(r["b"] or "").strip()
+                if not name or name.lower() in have:
+                    continue
+                self.conn.execute(
+                    "INSERT INTO customers (name, phone, address, level, note,"
+                    " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                    (name, "", r.get("addr") or "", "",
+                     "由出售记录导入（最近成交 %s）" % (r.get("last") or ""), now, now))
+                have.add(name.lower())
+                n += 1
+            self.conn.commit()
+        if n:
+            self.log_op("导入客户", "", "从出售记录导入 %d 个买家" % n)
+        return n
+
+    # ------------------------------------------------------------ 销售退货（v1.32.0）
+    def returnable_qty(self, sale_id):
+        """某笔出售还能退多少件（已退的扣掉）。"""
+        with self._lock:
+            row = self.conn.execute("SELECT qty FROM sales WHERE id = ?",
+                                    (int(sale_id),)).fetchone()
+            if row is None:
+                return 0
+            back = self.conn.execute(
+                "SELECT COALESCE(SUM(qty), 0) FROM returns WHERE sale_id = ?",
+                (int(sale_id),)).fetchone()[0]
+        return max(0, int(row[0] or 0) - int(back or 0))
+
+    def add_return(self, sale_id, qty=0, refund=None, restock=True,
+                   return_date="", remark=""):
+        """登记一笔销售退货：可选把货退回库存，退款默认按原单价 × 数量。
+
+        返回 (ok, msg)。
+        """
+        try:
+            qty = int(round(float(qty or 0)))
+        except (TypeError, ValueError):
+            return False, "退货数量不正确"
+        if qty <= 0:
+            return False, "退货数量必须大于 0"
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM sales WHERE id = ?",
+                                    (int(sale_id),)).fetchone()
+            if row is None:
+                return False, "找不到对应的出售记录"
+            s = dict(row)
+            if str(s.get("out_type") or OUT_TYPE_SALE) != OUT_TYPE_SALE:
+                return False, "只有「销售」记录才能退货"
+            sold = int(s.get("qty") or 0)
+            back = self.conn.execute(
+                "SELECT COALESCE(SUM(qty), 0) FROM returns WHERE sale_id = ?",
+                (int(sale_id),)).fetchone()[0]
+            left = sold - int(back or 0)
+            if qty > left:
+                return False, ("该笔最多还能退 %d 件（已退 %d 件）"
+                               % (max(0, left), int(back or 0)))
+            price = float(s.get("price") or 0)
+            if refund is None:
+                refund = round(price * qty, 2)
+            try:
+                refund = float(refund or 0)
+            except (TypeError, ValueError):
+                return False, "退款金额不正确"
+            if refund < 0:
+                return False, "退款金额不能为负数"
+            cost = float(s.get("cost") or 0)
+            date = (return_date or "").strip() or now_str()[:10]
+            item_id = s.get("item_id")
+            restore = bool(restock) and bool(item_id)
+            self.conn.execute(
+                "INSERT INTO returns (sale_id, item_id, code, brand, category,"
+                " model, shelf, qty, price, refund, cost, restock, buyer,"
+                " return_date, remark, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (int(sale_id), item_id or 0, s.get("code") or "",
+                 s.get("brand") or "", s.get("category") or "",
+                 s.get("model") or "", s.get("shelf") or "", qty, price,
+                 round(refund, 2), round(cost, 4), 1 if restore else 0,
+                 s.get("buyer") or "", date, (remark or "").strip(), now_str()))
+            if restore:
+                self.conn.execute(
+                    'UPDATE items SET "qty" = COALESCE("qty", 0) + ?,'
+                    ' "sold_out" = 0, "updated_at" = ? WHERE id = ?',
+                    (qty, now_str(), item_id))
+            self.conn.commit()
+        code = s.get("code") or ""
+        self.log_op("销售退货", code,
+                    "%d 件，退款 %.2f 元%s" % (qty, refund,
+                                               "，已退回库存" if restore else ""))
+        return True, ("已登记退货 %s：%d 件，退款 %.2f 元%s"
+                      % (code, qty, refund, "，已退回库存" if restore else ""))
+
+    def list_returns(self, start="", end="", kw=""):
+        sql = "SELECT * FROM returns WHERE 1 = 1"
+        args = []
+        if start:
+            sql += " AND COALESCE(return_date, '') >= ?"
+            args.append(start)
+        if end:
+            sql += " AND COALESCE(return_date, '') <= ?"
+            args.append(end)
+        kw = (kw or "").strip()
+        if kw:
+            like = "%" + kw + "%"
+            sql += (" AND (code LIKE ? OR brand LIKE ? OR model LIKE ?"
+                    " OR buyer LIKE ? OR remark LIKE ?)")
+            args += [like] * 5
+        sql += " ORDER BY COALESCE(return_date, '') DESC, id DESC"
+        with self._lock:
+            return [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+
+    def delete_return(self, rid):
+        """撤销退货：退回库存的货再扣回来（库存不足则拒绝）。"""
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM returns WHERE id = ?",
+                                    (int(rid),)).fetchone()
+            if row is None:
+                return False, "退货记录不存在"
+            r = dict(row)
+            if int(r.get("restock") or 0) and int(r.get("item_id") or 0):
+                item = self.conn.execute(
+                    'SELECT "qty" FROM items WHERE id = ?',
+                    (int(r["item_id"]),)).fetchone()
+                if item is not None:
+                    q = int(item[0] or 0)
+                    if q < int(r.get("qty") or 0):
+                        return False, ("库存只剩 %d 件，不足以撤销这次退货"
+                                       % q)
+                    left = q - int(r.get("qty") or 0)
+                    self.conn.execute(
+                        'UPDATE items SET "qty" = ?, "sold_out" = ?,'
+                        ' "updated_at" = ? WHERE id = ?',
+                        (left, 1 if left <= 0 else 0, now_str(),
+                         int(r["item_id"])))
+            self.conn.execute("DELETE FROM returns WHERE id = ?", (int(rid),))
+            self.conn.commit()
+        self.log_op("撤销退货", r.get("code") or "",
+                    "%d 件，退款 %.2f 元" % (int(r.get("qty") or 0),
+                                            float(r.get("refund") or 0)))
+        return True, "已撤销这笔退货"
+
+    def returns_total(self, start="", end=""):
+        sql = ("SELECT COUNT(*) c, COALESCE(SUM(qty), 0) q,"
+               " COALESCE(SUM(refund), 0) amt, COALESCE(SUM(cost * qty), 0) cst"
+               " FROM returns WHERE 1 = 1")
+        args = []
+        if start:
+            sql += " AND COALESCE(return_date, '') >= ?"
+            args.append(start)
+        if end:
+            sql += " AND COALESCE(return_date, '') <= ?"
+            args.append(end)
+        with self._lock:
+            r = dict(self.conn.execute(sql, args).fetchone())
+        return {"count": int(r["c"] or 0), "qty": int(r["q"] or 0),
+                "refund": round(float(r["amt"] or 0), 2),
+                "cost": round(float(r["cst"] or 0), 2)}
+
+    # ------------------------------------------------------------ 销售利润（v1.32.0）
+    def profit_rows(self, start="", end="", brand="", kw=""):
+        """逐笔销售利润（退货冲减原单）。
+
+        利润 = 实收（销售额 - 退款） - 净成本（成本 - 退回部分成本），
+        这样「卖出去又退回来」的货利润归零，不会虚增。
+        """
+        sql = ("SELECT s.*, COALESCE(r.q, 0) rq, COALESCE(r.amt, 0) ramt,"
+               " COALESCE(r.cst, 0) rcst FROM sales s"
+               " LEFT JOIN (SELECT sale_id, SUM(qty) q, SUM(refund) amt,"
+               " SUM(cost * qty) cst FROM returns GROUP BY sale_id) r"
+               " ON r.sale_id = s.id"
+               " WHERE COALESCE(s.out_type, '%s') = '%s'"
+               % (OUT_TYPE_SALE, OUT_TYPE_SALE))
+        args = []
+        if start:
+            sql += " AND COALESCE(s.sale_date, '') >= ?"
+            args.append(start)
+        if end:
+            sql += " AND COALESCE(s.sale_date, '') <= ?"
+            args.append(end)
+        brand = (brand or "").strip()
+        if brand and brand != "全部":
+            sql += " AND s.brand LIKE ?"
+            args.append("%" + brand + "%")
+        kw = (kw or "").strip()
+        if kw:
+            like = "%" + kw + "%"
+            sql += (" AND (s.code LIKE ? OR s.brand LIKE ? OR s.model LIKE ?"
+                    " OR s.buyer LIKE ?)")
+            args += [like] * 4
+        sql += " ORDER BY COALESCE(s.sale_date, '') DESC, s.id DESC"
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+        out = []
+        for r in rows:
+            qty = int(r.get("qty") or 0)
+            rq = int(r.get("rq") or 0)
+            amount = float(r.get("total") or 0) - float(r.get("ramt") or 0)
+            cost = (float(r.get("cost") or 0) * qty
+                    - float(r.get("rcst") or 0))
+            profit = amount - cost
+            out.append({
+                "id": int(r["id"]), "code": r.get("code") or "",
+                "brand": r.get("brand") or "", "category": r.get("category") or "",
+                "model": r.get("model") or "", "buyer": r.get("buyer") or "",
+                "date": r.get("sale_date") or "", "qty": qty, "rq": rq,
+                "price": round(float(r.get("price") or 0), 2),
+                "amount": round(amount, 2), "refund": round(float(r.get("ramt") or 0), 2),
+                "cost": round(cost, 2), "profit": round(profit, 2),
+                "margin": round(profit / amount * 100, 2) if amount else 0.0,
+            })
+        return out
+
+    # ------------------------------------------------------------ 盘点单（v1.32.0）
+    def create_stocktake(self, name="", brand="", category="", shelf="",
+                         kw="", only_stock=True):
+        """按筛选条件生成盘点单快照（账面数 = 当前库存）。返回 (st_id, msg)。"""
+        where = ["COALESCE(deleted_at, '') = ''"]
+        args = []
+        for col, val in (("brand", brand), ("category", category),
+                         ("shelf", shelf)):
+            val = (val or "").strip()
+            if val and val != "全部":
+                where.append('"%s" LIKE ?' % col)
+                args.append("%" + val + "%")
+        kw = (kw or "").strip()
+        if kw:
+            like = "%" + kw + "%"
+            where.append('("code" LIKE ? OR "model" LIKE ? OR "brand" LIKE ?)')
+            args += [like] * 3
+        if only_stock:
+            where.append('COALESCE("qty", 0) > 0')
+        sql = ('SELECT id, code, brand, model, shelf, "qty" FROM items WHERE '
+               + " AND ".join(where) + ' ORDER BY "code"')
+        with self._lock:
+            src = [dict(r) for r in self.conn.execute(sql, args).fetchall()]
+            if not src:
+                return 0, "没有符合条件的记录（可取消「只盘有货的」再试）"
+            created = now_str()
+            no = "PD%s" % time.strftime("%Y%m%d%H%M%S")
+            cur = self.conn.execute(
+                "INSERT INTO stocktakes (no, name, status, created_at, note)"
+                " VALUES (?,?, 'draft', ?, '')",
+                (no, (name or "").strip() or ("盘点 %s" % created[:16]), created))
+            st_id = int(cur.lastrowid)
+            self.conn.executemany(
+                "INSERT INTO stocktake_items (st_id, item_id, code, brand,"
+                " model, shelf, book_qty, real_qty, note)"
+                " VALUES (?,?,?,?,?,?,?,?, '')",
+                [(st_id, int(r["id"]), r.get("code") or "", r.get("brand") or "",
+                  r.get("model") or "", r.get("shelf") or "",
+                  int(r.get("qty") or 0), int(r.get("qty") or 0)) for r in src])
+            self.conn.commit()
+        self.log_op("新建盘点单", no, "%d 条记录" % len(src))
+        return st_id, "已生成盘点单 %s：%d 条记录" % (no, len(src))
+
+    def list_stocktakes(self):
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT s.*,"
+                " (SELECT COUNT(*) FROM stocktake_items i WHERE i.st_id = s.id) n,"
+                " (SELECT COUNT(*) FROM stocktake_items i WHERE i.st_id = s.id"
+                "  AND i.real_qty != i.book_qty) d,"
+                " (SELECT COALESCE(SUM(i.real_qty - i.book_qty), 0)"
+                "  FROM stocktake_items i WHERE i.st_id = s.id) dq"
+                " FROM stocktakes s ORDER BY s.id DESC").fetchall()]
+        return [{"id": int(r["id"]), "no": r.get("no") or "",
+                 "name": r.get("name") or "", "status": r.get("status") or "draft",
+                 "created_at": r.get("created_at") or "",
+                 "done_at": r.get("done_at") or "",
+                 "count": int(r.get("n") or 0), "diff": int(r.get("d") or 0),
+                 "diff_qty": int(r.get("dq") or 0)} for r in rows]
+
+    def stocktake_detail(self, st_id):
+        with self._lock:
+            head = self.conn.execute("SELECT * FROM stocktakes WHERE id = ?",
+                                     (int(st_id),)).fetchone()
+            if head is None:
+                return None
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM stocktake_items WHERE st_id = ? ORDER BY code",
+                (int(st_id),)).fetchall()]
+        return {"head": dict(head), "rows": rows}
+
+    def set_stocktake_qty(self, row_id, real_qty, note=None):
+        try:
+            real_qty = int(round(float(real_qty)))
+        except (TypeError, ValueError):
+            return False, "实盘数量必须是整数"
+        if real_qty < 0:
+            return False, "实盘数量不能为负数"
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT i.st_id, s.status FROM stocktake_items i"
+                " JOIN stocktakes s ON s.id = i.st_id WHERE i.id = ?",
+                (int(row_id),)).fetchone()
+            if row is None:
+                return False, "盘点明细不存在"
+            if str(row[1] or "draft") != "draft":
+                return False, "盘点单已提交，不能再改实盘数"
+            if note is None:
+                self.conn.execute(
+                    "UPDATE stocktake_items SET real_qty = ? WHERE id = ?",
+                    (real_qty, int(row_id)))
+            else:
+                self.conn.execute(
+                    "UPDATE stocktake_items SET real_qty = ?, note = ? WHERE id = ?",
+                    (real_qty, str(note).strip(), int(row_id)))
+            self.conn.commit()
+        return True, ""
+
+    def commit_stocktake(self, st_id):
+        """按实盘数写回库存，并把单据标记为已完成。返回 (ok, msg)。"""
+        with self._lock:
+            head = self.conn.execute("SELECT * FROM stocktakes WHERE id = ?",
+                                     (int(st_id),)).fetchone()
+            if head is None:
+                return False, "盘点单不存在"
+            if str(head["status"] or "draft") != "draft":
+                return False, "这张盘点单已经提交过了"
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM stocktake_items WHERE st_id = ?",
+                (int(st_id),)).fetchall()]
+            changed = 0
+            for r in rows:
+                book = int(r.get("book_qty") or 0)
+                real = int(r.get("real_qty") or 0)
+                if real == book:
+                    continue
+                item = self.conn.execute(
+                    'SELECT "qty" FROM items WHERE id = ?',
+                    (int(r.get("item_id") or 0),)).fetchone()
+                if item is None:
+                    continue          # 盘点期间被删掉的记录：跳过
+                self.conn.execute(
+                    'UPDATE items SET "qty" = ?, "sold_out" = ?,'
+                    ' "updated_at" = ? WHERE id = ?',
+                    (real, 1 if real <= 0 else 0, now_str(),
+                     int(r["item_id"])))
+                changed += 1
+            self.conn.execute(
+                "UPDATE stocktakes SET status = 'done', done_at = ? WHERE id = ?",
+                (now_str(), int(st_id)))
+            self.conn.commit()
+        diff_qty = sum(int(r.get("real_qty") or 0) - int(r.get("book_qty") or 0)
+                       for r in rows)
+        self.log_op("提交盘点", head["no"] or "",
+                    "%d 条差异，净变动 %+d 件" % (changed, diff_qty))
+        return True, ("盘点已提交：%d 条记录库存被调整，净变动 %+d 件"
+                      % (changed, diff_qty))
+
+    def delete_stocktake(self, st_id):
+        with self._lock:
+            head = self.conn.execute("SELECT status FROM stocktakes WHERE id = ?",
+                                     (int(st_id),)).fetchone()
+            if head is None:
+                return 0
+            if str(head[0] or "") == "done":
+                return -1             # 已提交的单据不给删（库存已改，删了没意义）
+            self.conn.execute("DELETE FROM stocktake_items WHERE st_id = ?",
+                              (int(st_id),))
+            self.conn.execute("DELETE FROM stocktakes WHERE id = ?", (int(st_id),))
+            self.conn.commit()
+        return 1
 
     # ------------------------------------------------------------ 采购入库
     def _recalc_cost(self, item_id):

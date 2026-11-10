@@ -3374,6 +3374,57 @@ try:
     wapp.messagebox.showwarning = _orig_warn
     wapp.messagebox.showinfo = _orig_info
 
+    # ---- v1.32.0 业务四件套：客户 / 退货 / 利润 / 盘点（守卫断言） ----
+    st = app.store
+    check("四个新功能页已挂到导航", app.nb.index("end") == 10, app.nb.index("end"))
+    _biz = blank_record() | {"code": "WL-BIZ01", "brand": "测试品牌",
+                             "model": "BIZ-M1", "price": 100.0, "qty": 5}
+    st.insert_many([_biz])
+    _bid = st.find_by_code("WL-BIZ01")
+    st._execute('UPDATE items SET cost = 40.0 WHERE id = ?', (_bid,))
+    _ok_s, _m = st.add_sale(_bid, 2, 100.0, buyer="测试客户A",
+                            sale_date="2026-11-10")
+    check("业务探针：登记出售", _ok_s, _m)
+    _sid = [s for s in st.list_sales(scope="sale")
+            if s["code"] == "WL-BIZ01"][0]["id"]
+    _r, _m = st.add_return(_sid, 5)
+    check("退货超量被拒", not _r and "最多" in _m, _m)
+    _r, _m = st.add_return(_sid, 1, restock=True)
+    check("退货 1 件成功", _r, _m)
+    _rec2 = [x for x in st.all_records() if int(x["id"]) == _bid][0]
+    check("退货后库存回补（5-2+1=4）", int(_rec2.get("qty") or 0) == 4,
+          _rec2.get("qty"))
+    _pr = [x for x in st.profit_rows() if x["code"] == "WL-BIZ01"][0]
+    check("退货冲减后毛利 60（实收100 - 净成本40）",
+          abs(_pr["profit"] - 60.0) < 0.01, _pr)
+    _r, _m = st.add_customer("测试客户A", "138", "", "VIP", "")
+    check("新增客户成功", _r, _m)
+    _r, _m = st.add_customer("测试客户A")
+    check("重名客户被拒", not _r, _m)
+    _cs = [c for c in st.list_customers() if c["name"] == "测试客户A"][0]
+    check("客户累计消费 200", abs(_cs["amount"] - 200.0) < 0.01, _cs)
+    _st_id, _m = st.create_stocktake("测试盘点")
+    check("生成盘点单", _st_id > 0, _m)
+    _rows = st.stocktake_detail(_st_id)["rows"]
+    _row0 = [r for r in _rows if r["code"] == "WL-BIZ01"][0]
+    st.set_stocktake_qty(_row0["id"], 3)
+    _ls = [x for x in st.list_stocktakes() if x["id"] == _st_id][0]
+    check("盘点差异 1 条 / 净 -1", _ls["diff"] == 1 and _ls["diff_qty"] == -1, _ls)
+    _r, _m = st.commit_stocktake(_st_id)
+    check("提交盘点", _r, _m)
+    _rec3 = [x for x in st.all_records() if int(x["id"]) == _bid][0]
+    check("盘点后库存按实盘（3）", int(_rec3.get("qty") or 0) == 3,
+          _rec3.get("qty"))
+    _r, _m = st.commit_stocktake(_st_id)
+    check("重复提交盘点被拒", not _r, _m)
+    check("已提交盘点单不给删", st.delete_stocktake(_st_id) == -1)
+    # 新页能刷新不报错
+    for _pi, _tab in ((6, app.tab_customer), (7, app.tab_return),
+                      (8, app.tab_profit), (9, app.tab_stocktake)):
+        app.show_page(_pi)
+        root.update()
+        check("新页 %d 可刷新" % _pi, bool(_tab.tree.winfo_exists()))
+
     app.on_close()
     check("正常退出", True)
 except Exception:

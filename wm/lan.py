@@ -46,6 +46,9 @@ READ_METHODS = {
     "duplicate_models", "model_keys", "blank_content_keys",
     "sales_totals", "out_totals", "stats", "revision",
     "photos_list", "photo_data", "photo_codes",
+    # v1.32.0 客户 / 退货 / 利润 / 盘点（只读查询）
+    "list_customers", "list_returns", "returns_total", "returnable_qty",
+    "profit_rows", "list_stocktakes", "stocktake_detail",
 }
 WRITE_METHODS = RPC_METHODS - READ_METHODS
 # 这些操作和主机本地文件有关，客户端不准调用

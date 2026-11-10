@@ -19,8 +19,12 @@ from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 from . import screen, xlsxio
 from .photos import PhotoStrip
 from .analysis import AnalysisTab
+from .customers import CustomerTab
 from .phone import PhoneTab
+from .profit import ProfitTab
+from .returns import ReturnTab
 from .sales import SalesTab, ask_sale
+from .stocktake import StocktakeTab
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
                         CLR_ACCENT_LT, CLR_HEAD_FG, CLR_HOVER_EDGE, CLR_INPUT, CLR_LOW_BG,
@@ -777,6 +781,15 @@ class App(object):
         self.nb.add(self.tab_ana, text="  数据分析  ")
         self.nb.add(self.tab_phone, text="  手机数据  ")
         self.nb.add(self.tab_log, text="  操作日志  ")
+        # v1.32.0 业务三件套 + 报表：客户 / 退货 / 利润 / 盘点
+        self.tab_customer = CustomerTab(self.nb, self, self.fam)
+        self.tab_return = ReturnTab(self.nb, self, self.fam)
+        self.tab_profit = ProfitTab(self.nb, self, self.fam)
+        self.tab_stocktake = StocktakeTab(self.nb, self, self.fam)
+        self.nav_add("销售管理", self.tab_customer, "客户管理")
+        self.nav_add("销售管理", self.tab_return, "销售退货")
+        self.nav_add("数据报表", self.tab_profit, "销售利润表")
+        self.nav_add("库存管理", self.tab_stocktake, "盘点单")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_toolbar()
@@ -1948,6 +1961,14 @@ class App(object):
                 self.tab_phone.refresh_tab()
             elif idx == 5:
                 self._load_log()
+            elif idx == 6:
+                self.tab_customer.refresh_tab()
+            elif idx == 7:
+                self.tab_return.refresh_tab()
+            elif idx == 8:
+                self.tab_profit.refresh_tab()
+            elif idx == 9:
+                self.tab_stocktake.refresh_tab()
         except Exception:
             pass
 
