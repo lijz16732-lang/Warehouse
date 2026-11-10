@@ -1370,7 +1370,8 @@ class App(object):
                     elif 0 < thr and q <= thr:
                         tags.append("low")   # 低库存：橙色底提醒补货
             self.tree.insert("", "end", iid=rid,
-                             values=[self.fmt(c, rec) for c in cols]
+                             values=[(("" if c == "listed" else self.fmt(c, rec)))
+                                     for c in cols]
                              + ["📷" if (rec.get("code") or "")
                                 in getattr(self, "_photo_codes", ()) else ""],
                              tags=tuple(tags))
@@ -2146,8 +2147,10 @@ class App(object):
                                  parent=self.root)
             return
         rec["listed"] = val          # by_id 里存的就是 self.records 的同一个 dict
+        # 列里不放文字：状态只由开关表达，否则贴片缺失/延迟的一瞬会露出
+        # 「已上架/未上架」字样（复制、导出走 fmt，不受影响）
         try:
-            self.tree.set(iid, "listed", self.fmt("listed", rec))
+            self.tree.set(iid, "listed", "")
         except Exception:
             pass
         try:

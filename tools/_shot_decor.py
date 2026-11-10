@@ -62,6 +62,8 @@ decor = app.decor
 chk("覆盖层已创建", decor is not None)
 chk("每行都有开关贴片", len(decor._pills) == len(kids),
     "%d/%d" % (len(decor._pills), len(kids)))
+nonempty = [(i, t.set(i, "listed")) for i in kids if t.set(i, "listed")]
+chk("上架列不显示文字（只有开关）", not nonempty, nonempty[:3])
 
 print("== 2. 开关与单元格对齐 ==")
 bad = []
@@ -118,7 +120,7 @@ chk("数据库已切换", int(after_rec["listed"]) != int(before),
     (before, after_rec["listed"]))
 chk("选中/滚动未丢", t.exists(first_on))
 txt = t.set(first_on, "listed")
-chk("单元格文字同步", txt == ("已上架" if int(after_rec["listed"]) else "未上架"), txt)
+chk("单元格不再显示上架文字（开关即状态）", txt == "", txt)
 chk("下架行带 unlisted tag",
     ("unlisted" in t.item(first_on, "tags")) == (not int(after_rec["listed"])),
     t.item(first_on, "tags"))
