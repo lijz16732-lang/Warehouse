@@ -15,11 +15,14 @@ v1.31「线条分明」：Treeview 原生画不出单元格边框，也放不进
 后无需重建本控件也能换色。
 """
 
+import time
+
 import tkinter as tk
 
 from .constants import (CLR_ACCENT, CLR_ACCENT_LT, CLR_BORDER_LT, CLR_HOVER_BG,
                         CLR_INPUT, CLR_LOW_BG, CLR_ROW_ALT, CLR_SEL,
                         CLR_UNLISTED_BG)
+from .pillimg import capsule_b64
 
 
 class TreeDecor(object):
@@ -39,9 +42,13 @@ class TreeDecor(object):
         self._hpool = []
         self._pills = {}        # iid -> Canvas（开关）
         self._pill_pool = []    # 回收复用
+        self._imgs = {}         # (pw, ph, fill, on) -> PhotoImage（抗锯齿胶囊）
+        self._drag_t = 0.0      # 拖动列头时节流
         tree.bind("<Configure>", lambda e: self.redraw(), add="+")
         # 列宽拖动结束 / 滚动条拖动：等布局稳定后重排
         tree.bind("<ButtonRelease-1>", self._on_release, add="+")
+        # 拖动列宽 / 拖动列头换位的过程中实时跟随（节流，松手时还会再排一次）
+        tree.bind("<B1-Motion>", self._on_drag_motion, add="+")
 
     # ------------------------------------------------------------ 入口
     def redraw(self):
@@ -69,13 +76,18 @@ class TreeDecor(object):
             return
         xv = t.xview()
         xoff = float(xv[0]) * total
+        cols = self.app._cols()
+        has_listed = "listed" in cols
+        # 先收集位置：开关必须先放、网格线后放（后 place 的在上层，
+        # 否则开关整格铺底会把列边界和行分隔线盖出一个洞）
+        vpos = []
         x = -xoff
         for w in widths:
             x += w
             if 2 < x < vw - 1:                    # 视口内的边界才画竖线
-                self._vline(int(x), head_h, vh)
-        cols = self.app._cols()
-        has_listed = "listed" in cols
+                vpos.append(int(x))
+        hpos = []
+        pills = []
         for iid in t.get_children():
             try:
                 bb = t.bbox(str(iid))
@@ -85,14 +97,20 @@ class TreeDecor(object):
                 continue
             y = int(bb[1]) + int(bb[3])
             if head_h < y < vh - 1:
-                self._hline(0, y, vw)
+                hpos.append(y)
             if has_listed:
                 try:
                     pb = t.bbox(str(iid), column="listed")
                 except Exception:
                     pb = None
                 if pb and int(pb[1]) >= head_h:
-                    self._pill(str(iid), pb)
+                    pills.append((str(iid), pb))
+        for iid, pb in pills:
+            self._pill(iid, pb)
+        for x in vpos:
+            self._vline(x, head_h, vh)
+        for y in hpos:
+            self._hline(0, y, vw)
 
     def _on_release(self, e):
         # 点在表头（列宽拖动）结束后重排；数据行点击无需处理
@@ -101,6 +119,19 @@ class TreeDecor(object):
                 self.redraw()
         except Exception:
             pass
+
+    def _on_drag_motion(self, e):
+        # 拖列宽/拖列头换位的过程：开关和线要实时跟着列走（节流 ~13fps）
+        try:
+            if self.tree.identify_region(e.x, e.y) not in ("heading", "separator"):
+                return
+        except Exception:
+            return
+        now = time.time()
+        if now - self._drag_t < 0.075:
+            return
+        self._drag_t = now
+        self.redraw()
 
     # ------------------------------------------------------------ 竖线/横线
     def _get(self, pool):
@@ -208,11 +239,53 @@ class TreeDecor(object):
             on = bool(rec and rec.get("listed"))
         except Exception:
             on = False
+        fill = CLR_ACCENT if on else "#C4CBDA"
+        img = self._pill_image(pw, ph, fill, on)
+        if img is not None:
+            # 抗锯齿胶囊（Tk 的 oval 是硬边，看着不圆润）
+            cv.create_image(w // 2, h // 2, image=img)
+        else:
+            self._draw_pill_vector(cv, w, h, pw, ph, fill, on)
+        # 「是/否」字样：画在滑块对侧的空半边（像素字号 + 粗体，小字才清楚）
+        try:
+            fam = self.app.fam
+        except Exception:
+            fam = "Microsoft YaHei"
+        fs = -max(10, ph - 6)                # 负数 = 像素字号
+        px = (w - pw) // 2
+        m = 2
+        d = ph - 2 * m
+        if on:
+            tx, tc = px + (pw - d) / 2.0, "#FFFFFF"
+            txt = "是"
+        else:
+            tx, tc = px + d + (pw - d) / 2.0, "#39445C"
+            txt = "否"
+        if pw - d >= 12:
+            cv.create_text(tx, h / 2.0, text=txt, fill=tc,
+                           font=(fam, fs, "bold"))
+
+    def _pill_image(self, pw, ph, fill, on):
+        """抗锯齿胶囊图片（按尺寸/颜色缓存，PhotoImage 必须留引用）。"""
+        key = (int(pw), int(ph), fill, bool(on))
+        img = self._imgs.get(key)
+        if img is not None:
+            return img
+        try:
+            b64 = capsule_b64(pw, ph, fill, on)
+            if not b64:
+                return None
+            img = tk.PhotoImage(data=b64)
+        except Exception:
+            return None
+        self._imgs[key] = img
+        return img
+
+    def _draw_pill_vector(self, cv, w, h, pw, ph, fill, on):
+        """兜底矢量画法（图片加载失败时用，边缘有锯齿）。"""
         px, py = (w - pw) // 2, (h - ph) // 2
         m = 2
         d = ph - 2 * m
-        fill = CLR_ACCENT if on else "#C4CBDA"
-        # 胶囊：两端圆 + 中段矩形
         cv.create_oval(px, py + m, px + d, py + m + d, fill=fill, outline=fill)
         cv.create_oval(px + pw - d, py + m, px + pw, py + m + d,
                        fill=fill, outline=fill)
