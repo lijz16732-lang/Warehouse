@@ -83,6 +83,14 @@ def main():
     print("\n=== 打包完成 ===")
     print("输出: %s (%.1f MB)" % (dst, os.path.getsize(dst) / 1048576.0))
 
+    # 打包后直接覆盖 D 盘线上目录（用户要求；--no-deploy 可跳过）
+    if "--no-deploy" not in sys.argv:
+        print("\n=== 部署到 D 盘 ===")
+        rc = subprocess.call([sys.executable,
+                              os.path.join(HERE, "tools", "deploy.py")])
+        if rc != 0:
+            print("部署未完成（返回码 %s），dist 里的产物不受影响" % rc)
+
 
 if __name__ == "__main__":
     main()
