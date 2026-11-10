@@ -156,6 +156,7 @@ class App(object):
         self._update_lan_ui()
         self._lan_last_ok = True
         root.after(2000, self._lan_tick)
+        root.after(1500, self._startup_auto_backup)
         if self._lan_error:
             err, self._lan_error = self._lan_error, ""
             root.after(300, lambda: messagebox.showwarning("连不上主机", err,
@@ -215,6 +216,7 @@ class App(object):
         cfg.setdefault("port", DEFAULT_PORT)
         cfg.setdefault("host", "")
         cfg.setdefault("default_allow", False)
+        cfg.setdefault("phone_access", True)
         cfg.setdefault("client_name", socket.gethostname()[:40])
         cfg.setdefault("client_id", "%s-%04d" % (socket.gethostname(),
                                                 random.randint(1000, 9999)))
@@ -1852,7 +1854,8 @@ class App(object):
     def on_right_click(self, event):
         region = self.tree.identify_region(event.x, event.y)
         if region == "heading":
-            self._show_col_menu(event.x_root, event.y_root)
+            self._show_col_menu(event.x_root, event.y_root,
+                                col=self._heading_col_at(event.x))
             return
         if region != "cell":
             return
@@ -1927,8 +1930,31 @@ class App(object):
         finally:
             m.grab_release()
 
-    def _show_col_menu(self, x, y):
+    def _heading_col_at(self, x):
+        """表头 x 坐标 → 数据列名（点在照片列/空白返回 None）。"""
+        try:
+            cid = self.tree.identify_column(x)
+        except Exception:
+            return None
+        cols = self._cols() + ["_photos"]
+        if str(cid).startswith("#"):
+            i = int(str(cid)[1:]) - 1
+            return cols[i] if 0 <= i < len(cols) else None
+        return cid if cid in FIELD_KEYS else None
+
+    def _show_col_menu(self, x, y, col=None):
         m = tk.Menu(self.root, tearoff=0)
+        if col and self.settings.get("col_rename", True):
+            titles = self.store.col_titles()
+            cur = titles.get(col)
+            m.add_command(
+                label="修改「%s」列标题…" % (cur or FIELD_LABEL.get(col, col)),
+                command=lambda c=col: self._rename_col_dialog(c))
+            if cur:
+                m.add_command(
+                    label="恢复「%s」默认标题" % FIELD_LABEL.get(col, col),
+                    command=lambda c=col: self._reset_col_title(c))
+            m.add_separator()
         m.add_command(label="显示全部列", command=self._show_all_cols)
         m.add_separator()
         for k in FIELD_KEYS:
@@ -1954,6 +1980,82 @@ class App(object):
         self.visible_cols = list(FIELD_KEYS)
         self.render_page()
         self._save_settings()
+
+    # ------------------------------------------------------------ 列标题改名
+    def _reset_col_title(self, col):
+        """恢复某列默认标题（本仓库生效；手机端同步）。"""
+        if self._guard_write():
+            return
+        self.store.set_col_titles({col: ""})
+        self._setup_columns()
+        self._status("已恢复「%s」默认标题" % FIELD_LABEL.get(col, col))
+
+    def _rename_col_dialog(self, col):
+        """修改列标题：右键表头进入；只改本仓库（meta），手机端同步生效。"""
+        if self._guard_write():
+            return
+        titles = self.store.col_titles()
+        cur = titles.get(col) or FIELD_LABEL.get(col, "")
+        win = tk.Toplevel(self.root)
+        win.title("修改列标题")
+        win.configure(bg=CLR_CARD)
+        win.transient(self.root)
+        win.resizable(False, False)
+        apply_window_icon(win)
+        win.grab_set()
+        tk.Label(win, text="修改「%s」列标题" % FIELD_LABEL.get(col, col),
+                 bg=CLR_CARD, fg=CLR_HEAD_FG,
+                 font=(self.fam, 10, "bold")).pack(anchor="w", padx=16,
+                                                   pady=(14, 2))
+        tk.Label(win, text="只对本仓库生效（手机端同步）；留空 = 恢复默认标题。\n最长 %d 字。"
+                 % self.store.COL_TITLE_MAX,
+                 bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8),
+                 justify="left").pack(anchor="w", padx=16)
+        var = tk.StringVar(value=cur)
+        ent = tk.Entry(win, textvariable=var, font=(self.fam, 10),
+                       bg=CLR_INPUT, fg=CLR_TEXT, relief="solid", bd=1,
+                       highlightthickness=0)
+        ent.pack(fill="x", padx=16, pady=(8, 0), ipady=4)
+        ent.icursor("end")
+        ent.focus_set()
+
+        def save(close=True):
+            v = var.get().strip()
+            if len(v) > self.store.COL_TITLE_MAX:
+                messagebox.showwarning("太长了",
+                                       "标题最长 %d 个字，请缩短。"
+                                       % self.store.COL_TITLE_MAX, parent=win)
+                return False
+            self.store.set_col_titles({col: v})
+            self._setup_columns()
+            self._status("列标题已更新：%s"
+                         % (v or ("默认（%s）" % FIELD_LABEL.get(col, col))))
+            if close:
+                win.destroy()
+            return True
+
+        rowb = tk.Frame(win, bg=CLR_CARD)
+        rowb.pack(fill="x", padx=16, pady=(10, 14))
+        ttk.Button(rowb, text="保存", style="Accent.TButton", width=8,
+                   command=lambda: save()).pack(side="left")
+        ttk.Button(rowb, text="恢复默认", style="Ghost.TButton", width=8,
+                   command=lambda: (var.set(""), save())).pack(side="left",
+                                                               padx=(8, 0))
+        ttk.Button(rowb, text="取消", style="Ghost.TButton", width=8,
+                   command=win.destroy).pack(side="left", padx=(8, 0))
+
+        def on_key(e):
+            if e.keysym == "Return":
+                if save():
+                    win.destroy()
+                return "break"
+            if e.keysym == "Escape":
+                win.destroy()
+                return "break"
+
+        win.bind("<Key>", on_key)
+        ent.bind("<Return>", on_key)
+        center_window(win, self.root, size=(360, 190), force=True)
 
     def _toggle_detail(self):
         if self.var_show_detail.get():
@@ -2784,6 +2886,44 @@ class App(object):
         except Exception:
             return None
 
+    def _startup_auto_backup(self):
+        """启动时按设置的频率静默备份数据库，超出保留份数自动清理旧备份。
+
+        设置项：auto_backup（开关）/ auto_backup_freq（daily/weekly）/
+        auto_backup_keep（份数）/ last_auto_backup（上次时间戳）。
+        备份文件：<数据目录>/backups/启动备份_时间.db。
+        """
+        try:
+            if not self.settings.get("auto_backup", True):
+                return
+            if self.lan_mode == "client":
+                return            # 客户端没有本地库，备份由主机负责
+            freq = str(self.settings.get("auto_backup_freq") or "daily")
+            interval = 7 * 86400 if freq == "weekly" else 86400
+            last = float(self.settings.get("last_auto_backup") or 0)
+            if last and time.time() - last < interval:
+                return
+            db_dir = os.path.dirname(os.path.abspath(self.db_path))
+            bak_dir = os.path.join(db_dir, "backups")
+            os.makedirs(bak_dir, exist_ok=True)
+            path = os.path.join(bak_dir, "启动备份_%s.db"
+                                % datetime.now().strftime("%Y%m%d_%H%M%S"))
+            self.store.backup_to(path)
+            self.settings["last_auto_backup"] = time.time()
+            # 清理旧的启动备份，只保留最近 keep 份
+            keep = max(1, int(self.settings.get("auto_backup_keep", 10) or 10))
+            olds = sorted(
+                (os.path.join(bak_dir, n) for n in os.listdir(bak_dir)
+                 if n.startswith("启动备份_") and n.endswith(".db")),
+                key=os.path.getmtime)
+            for p in olds[:-keep] if len(olds) > keep else []:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
     def clear_all(self):
         if self._guard_write():
             return
@@ -3429,6 +3569,21 @@ class App(object):
         ttk.Button(inner, text="应用外观", style="Accent.TButton",
                    command=apply_look).pack(anchor="w", pady=(10, 0))
 
+        inner = card(pf, "表格", "每个仓库的列标题各自独立（手机端同步生效）")
+        var_colren = tk.BooleanVar(value=bool(self.settings.get("col_rename",
+                                                               True)))
+
+        def save_colren(*_a):
+            self.settings["col_rename"] = bool(var_colren.get())
+            self._save_settings()
+
+        var_colren.trace_add("write", save_colren)
+        tk.Checkbutton(inner, text="允许手动更改列标题（右键点表头改名，留空恢复默认）",
+                       variable=var_colren, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+        hint(inner, "改过的标题按仓库保存：新建仓库也可以按自己的记录习惯改名。")
+
         # ================================================== 快捷键
         pf = _page("keys", "快捷键")
         inner = card(pf, "快捷键", "即时生效，输入框里打字不受影响")
@@ -3601,6 +3756,76 @@ class App(object):
                        command=save_dir).pack(anchor="w", pady=(8, 0))
         ent.bind("<FocusOut>", lambda e: save_dir())
 
+        # ================================================== 数据安全
+        pf = _page("backup", "数据安全")
+        var_ab = tk.BooleanVar(value=bool(self.settings.get("auto_backup",
+                                                            True)))
+        var_abf = tk.StringVar(value=str(self.settings.get("auto_backup_freq")
+                                         or "daily"))
+        var_abk = tk.StringVar(value=str(int(self.settings.get("auto_backup_keep",
+                                                               10) or 10)))
+
+        def save_ab(*_a):
+            self.settings["auto_backup"] = bool(var_ab.get())
+            self.settings["auto_backup_freq"] = var_abf.get()
+            try:
+                self.settings["auto_backup_keep"] = max(1, min(50, int(var_abk.get())))
+            except (TypeError, ValueError):
+                self.settings["auto_backup_keep"] = 10
+            self._save_settings()
+
+        inner = card(pf, "自动备份", "每次打开程序时检查：到了备份周期就静默备份一份，无需手动操作")
+        tk.Checkbutton(inner, text="开启自动备份（备份到数据文件夹的 backups 目录）",
+                       variable=var_ab, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+        rowab = tk.Frame(inner, bg=CLR_CARD)
+        rowab.pack(anchor="w", pady=(8, 0))
+        tk.Label(rowab, text="备份频率", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        for val, txt in (("daily", "每天"), ("weekly", "每周")):
+            tk.Radiobutton(rowab, text=txt, value=val, variable=var_abf,
+                           bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                           activebackground=CLR_CARD,
+                           font=(fam, 10)).pack(side="left", padx=(0, 12))
+        tk.Label(rowab, text="    保留最近", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left")
+        ttk.Spinbox(rowab, from_=1, to=50, width=4, textvariable=var_abk,
+                    font=(fam, 10)).pack(side="left", padx=(4, 4))
+        tk.Label(rowab, text="份", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left")
+        last_ts = float(self.settings.get("last_auto_backup") or 0)
+        hint(inner, "上次自动备份：%s"
+             % (datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d %H:%M")
+                if last_ts else "还没有（下次打开程序时进行）"))
+        var_ab.trace_add("write", save_ab)
+        var_abf.trace_add("write", save_ab)
+        var_abk.trace_add("write", save_ab)
+
+        inner = card(pf, "数据文件夹", "备份、照片、日志都存在数据文件夹里")
+        rowdf = tk.Frame(inner, bg=CLR_CARD)
+        rowdf.pack(fill="x")
+        tk.Label(rowdf, text=self.data_dir, bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(fam, 8), anchor="w").pack(side="left", fill="x",
+                                                 expand=True)
+
+        def _open_dir(d):
+            try:
+                os.makedirs(d, exist_ok=True)
+                os.startfile(d)      # noqa: 只在 Windows 运行
+            except Exception as e:
+                messagebox.showerror("打开文件夹", "打不开：%s" % e, parent=win)
+
+        rowdb = tk.Frame(inner, bg=CLR_CARD)
+        rowdb.pack(anchor="w", pady=(6, 0))
+        ttk.Button(rowdb, text="打开数据文件夹", width=14,
+                   command=lambda: _open_dir(self.data_dir)).pack(side="left")
+        ttk.Button(rowdb, text="打开备份文件夹", style="Ghost.TButton", width=14,
+                   command=lambda: _open_dir(os.path.join(self.data_dir,
+                                                          "backups"))
+                   ).pack(side="left", padx=(8, 0))
+        hint(inner, "移动或拷贝整套数据到别的电脑：把数据文件夹整个复制过去即可。")
+
         # ================================================== 文件格式与兼容性
         pf = _page("format", "文件格式与兼容性")
         inner = card(pf, "文件格式与兼容性")
@@ -3646,6 +3871,7 @@ class App(object):
         _side_header("通用")
         _side_item("\u2302", "启动行为", "start")
         _side_item("\u2699", "默认路径", "paths")
+        _side_item("\u2726", "数据安全", "backup")
         _side_item("\u29c9", "文件格式与兼容性", "format")
         tk.Frame(side, bg=CLR_CARD).pack(expand=True)   # 底部占位
         tk.Label(side, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_MUTED,
@@ -3854,6 +4080,8 @@ class App(object):
             "clients": srv.snapshot() if srv else [],
             "default_allow": (srv.default_allow if srv
                               else bool(self.lan_cfg.get("default_allow"))),
+            "phone_access": bool(srv.phone_access if srv
+                                 else self.lan_cfg.get("phone_access", True)),
             "can_write": bool(self.can_write),
             "client_name": str(self.lan_cfg.get("client_name") or ""),
         }
@@ -3955,6 +4183,7 @@ class App(object):
         if not ok:
             return False, msg
         srv.default_allow = bool(self.lan_cfg.get("default_allow"))
+        srv.phone_access = bool(self.lan_cfg.get("phone_access", True))
         srv.set_blocked(self.lan_cfg.get("blocked") or [])
         self.lan_server = srv
         self.lan_mode = "host"
@@ -3988,6 +4217,13 @@ class App(object):
         self._save_lan_cfg()
         if self.lan_server:
             self.lan_server.set_default_allow(flag)
+
+    def set_phone_access(self, flag):
+        """允许/禁止手机访问（总开关，关后手机网页与 App 都连不上）。"""
+        self.lan_cfg["phone_access"] = bool(flag)
+        self._save_lan_cfg()
+        if self.lan_server:
+            self.lan_server.set_phone_access(flag)
 
     # ---- 主机：移除连接 / 黑名单（v1.11.4）
     def lan_kick_client(self, ip):

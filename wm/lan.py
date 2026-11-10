@@ -89,6 +89,7 @@ class LanServer(object):
         self.on_event = on_event or (lambda *a, **k: None)
         self.clients = {}          # ip -> {name, id, allowed, last_seen, requests}
         self.default_allow = False  # 新连接电脑默认是否可录入
+        self.phone_access = True    # 允许手机访问（设置里可关，关后 /m 全部 403）
         self.blocked = {}          # 黑名单：ip -> {name, time}（持久保存在主机配置里）
         self.kicked = {}           # 被移除连接：ip -> 到期时间（短暂拒绝，防 4 秒轮询立刻重连）
         self._lock = threading.Lock()
@@ -146,6 +147,10 @@ class LanServer(object):
 
     def set_default_allow(self, flag):
         self.default_allow = bool(flag)
+        self.on_event("clients", None)
+
+    def set_phone_access(self, flag):
+        self.phone_access = bool(flag)
         self.on_event("clients", None)
 
     # -------------------------------------------------------- 移除 / 黑名单
@@ -369,6 +374,10 @@ def _make_handler(srv):
             gate = srv._gate(ip)
             if gate:
                 return self._send(*gate)
+            if (path == "/m" or path == "/m/" or path.startswith("/m/api/")) \
+                    and not srv.phone_access:
+                return self._send(403, {"ok": False,
+                                        "error": "主机已关闭手机访问"})
             if path == "/m" or path == "/m/":
                 return self._send_full(*handle_page())
             if path.startswith("/m/api/"):
@@ -415,6 +424,10 @@ def _make_handler(srv):
             gate = srv._gate(ip)
             if gate:
                 return self._send(*gate)
+            if (path == "/m/login" or path == "/m/logout"
+                    or path.startswith("/m/api/")) and not srv.phone_access:
+                return self._send(403, {"ok": False,
+                                        "error": "主机已关闭手机访问"})
             if path == "/m/login":
                 code, body, hdrs = srv.mobile.login(
                     ip, str((payload or {}).get("code") or ""), srv._code_ok,

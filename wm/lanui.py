@@ -251,6 +251,15 @@ class LanPanel(tk.Frame):
         self.lbl_phone_msg.pack(side="left", fill="x", expand=True)
         self._qr_img = None
         self._qr_path = None
+        # 手机访问总开关：关后手机网页 / App 全部 403（共享仍开着，电脑不受影响）
+        self.var_phone_access = tk.BooleanVar(value=True)
+        self.cb_phone_access = ttk.Checkbutton(
+            rowp, text="允许手机访问", style="TCheckbutton",
+            variable=self.var_phone_access, command=self.toggle_phone_access)
+        self.cb_phone_access.pack(side="right", padx=(0, 10))
+        self.var_phone_access.trace_add(
+            "write", lambda *_a: self.cb_phone_access.configure(
+                state="disabled" if self.app.lan_mode == "client" else "normal"))
         rowps = tk.Frame(ph, bg=CLR_CARD)
         rowps.pack(fill="x", padx=14, pady=(0, 8))
         self.lbl_phone_sessions = tk.Label(rowps, text="", bg=CLR_CARD, fg=CLR_MUTED,
@@ -377,11 +386,14 @@ class LanPanel(tk.Frame):
         if not self.var_code.get().strip():
             self.var_code.set(st["code"])
         self.var_allow_new.set(bool(st["default_allow"]))
+        self.var_phone_access.set(bool(st.get("phone_access", True)))
         # 客户端时「开启共享」直接置灰，防止误点顶掉当前连接（v1.11.2）
         in_client = mode == "client"
         self.btn_host.configure(text="停止共享" if st["running"] else "开启共享",
                                 state="disabled" if in_client else "normal")
         self.cb_allow.configure(state="disabled" if in_client else "normal")
+        self.cb_phone_access.configure(state="disabled" if in_client
+                                       else "normal")
         self.btn_copy.configure(state="disabled" if in_client else "normal")
         self.btn_newcode.configure(state="disabled" if in_client else "normal")
         if mode == "host":
@@ -692,6 +704,9 @@ class LanPanel(tk.Frame):
 
     def toggle_default_allow(self):
         self.app.set_lan_default_allow(bool(self.var_allow_new.get()))
+
+    def toggle_phone_access(self):
+        self.app.set_phone_access(bool(self.var_phone_access.get()))
         self.refresh()
 
     def toggle_client(self):
