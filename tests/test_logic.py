@@ -2172,8 +2172,8 @@ try:
     check("取消选区颜色", not any(app.cell_colors.get(i) for i in sel_p),
           str(app.cell_colors))
     check("取消后贴片移除", len(app._paint_labels) ==
-          len(app.cell_colors.get(str(kids_p[0]), {})),
-          str(len(app._paint_labels)))
+          len(app.cell_colors.get(str(kids_p[0]), {})) - 1,
+          str(len(app._paint_labels)))   # -1：listed 列由开关承载，不建贴片
     # 取消全部
     app.clear_cell_colors(all_rows=True)
     root.update()
@@ -2183,6 +2183,37 @@ try:
           not (app.store.get_meta("cell_colors", "") or "").strip()
           or app.store.get_meta("cell_colors") in ("{}", ""),
           repr(app.store.get_meta("cell_colors", "")))
+
+    # ---- v1.32.5：「上架状态」列的上色改由开关承载（贴片会盖住开关并露字） ----
+    app._drag_block = None
+    app._block_preview = None
+    app.tree.selection_set(kids_p[0])
+    app.paint_cells("#FFE7CC")
+    root.update()
+    check("listed 列不创建贴片",
+          not any(getattr(lb, "_cell", (None, None))[1] == "listed"
+                  for lb in app._paint_labels),
+          [getattr(lb, "_cell", None) for lb in app._paint_labels])
+    cv_p = app.decor._pills.get(str(kids_p[0]))
+    check("上色后开关底色跟随用户颜色",
+          cv_p is not None and cv_p["bg"] == "#FFE7CC",
+          cv_p["bg"] if cv_p else None)
+    order_k = app.tree.winfo_children()
+    if cv_p is not None and cv_p.winfo_ismapped():
+        _cx = cv_p.winfo_rootx() + cv_p.winfo_width() // 2
+        _cy = cv_p.winfo_rooty() + cv_p.winfo_height() // 2
+        _top = root.winfo_containing(_cx, _cy)
+    else:
+        _top = None
+    check("开关在最上层（点击命中开关而非贴片/表格）",
+          _top is not None and str(_top) == str(cv_p),
+          "%s vs %s" % (_top, cv_p))
+    app.clear_cell_colors(all_rows=True)
+    root.update()
+    cv_p2 = app.decor._pills.get(str(kids_p[0]))
+    check("取消颜色后开关底色恢复",
+          cv_p2 is None or cv_p2["bg"] != "#FFE7CC",
+          cv_p2["bg"] if cv_p2 else None)
 
     # ---- 鼠标划过整行高亮（v1.10.7） ----
     app._drag_block = None
@@ -2229,6 +2260,10 @@ try:
           and all("hover" not in app.tree.item(i, "tags")
                   for i in app.tree.get_children()))
     # 划过已上色行：只加淡描边，不重建贴片
+    # 指针打桩：真实鼠标若停在窗口上，hover.sync（update 里触发）会按真实
+    # 指针位置改写描边状态，造成环境性闪断；本段全部用 hover.set 显式驱动。
+    _real_row_at = app.hover.row_at
+    app.hover.row_at = lambda *a, **k: None
     app.tree.selection_set(r1)
     app.paint_cells("#FFE3E3")
     app.tree.selection_set()
@@ -2277,7 +2312,7 @@ try:
     root.update()
     app._paint_overlays()
     hi = [int(str(lb.cget("highlightthickness"))) for lb in app._paint_labels]
-    n_cs = len(cols_p)
+    n_cs = len(cols_p) - 1   # listed 列由开关承载，不建贴片
     check("选中行的贴片有蓝描边", sum(1 for t in hi if t == 2) == n_cs, str(hi))
     check("未选中行的贴片无描边", sum(1 for t in hi if t == 0) == n_cs, str(hi))
     # 选中变化即时重画（TreeviewSelect 挂了重画钩子）
@@ -2384,7 +2419,7 @@ try:
     app.paint_cells("#FFD9D9")
     root.update()
     n_lab = len(app._paint_labels)
-    check("滚动测试：整行上色生成贴片", n_lab == len(cols_p), str(n_lab))
+    check("滚动测试：整行上色生成贴片", n_lab == len(cols_p) - 1, str(n_lab))
     # 模拟"上色行滚出可视区"（贴片清零但颜色数据还在）再滚回来：贴片必须恢复
     app._forget_overlays()
     app._after_scroll()
@@ -2414,6 +2449,7 @@ try:
         app.tree.yview_moveto(0.0)
         app._after_scroll()
         root.update()
+    app.hover.row_at = _real_row_at      # 恢复真实指针判定
     # 清理滚动测试数据与颜色
     _sc = [r for r in app.store.all_records()
            if (r.get("code") or "").startswith("WL-S")]

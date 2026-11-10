@@ -1030,32 +1030,32 @@ class App(object):
         self._build_detail(main)
 
     def _tree_yview(self, *args):
-        """滚动条回调：滚动后让上色贴片跟着单元格走。"""
+        """滚动条命令：滚动后由 yscrollcommand 同步重排贴片（位置没变不触发）。"""
         self.tree.yview(*args)
-        self._after_scroll()
 
     def _tree_xview(self, *args):
         self.tree.xview(*args)
-        self._after_scroll()
 
     def _on_yscroll(self, first, last):
         """表格滚动位置变化（含拖动滚动条）→ 同步滚动条并重排覆盖层。
 
         拖滚动条时 tree 不会给任何绑定事件，只有 yscrollcommand 会被调用，
         不在这里挂钩子的话开关和网格线就停在原地不跟（快速拖动时整列消失）。
+        必须同步重排：after_idle 在拖动的事件洪流里会被饿死（idle 只在
+        事件队列空时才跑），贴片就停在旧位置看起来"不见了"。
         """
         try:
             self._vs.set(first, last)
         except Exception:
             pass
-        self._after_scroll_soon()
+        self._after_scroll()
 
     def _on_xscroll(self, first, last):
         try:
             self._hs.set(first, last)
         except Exception:
             pass
-        self._after_scroll_soon()
+        self._after_scroll()
 
     def _build_pager(self, parent):
         p = tk.Frame(parent, bg=CLR_CARD)
@@ -2508,6 +2508,9 @@ class App(object):
                                  highlightcolor=CLR_HOVER_EDGE)
                 else:
                     lb.configure(highlightthickness=0)
+                sig = getattr(lb, "_sig", None)     # 签名同步，滚动复用才不会误判重建
+                if sig:
+                    lb._sig = sig[:3] + (rid == self.hover.row,)
             except Exception:
                 pass
 
@@ -2523,7 +2526,7 @@ class App(object):
             self.tree.yview_scroll(step, "units")
         except Exception:
             return None
-        self._after_scroll_soon()      # idle 合并：连滚多格只重排一次，不闪
+        # 重排由 yscrollcommand 同步完成（位置没变就不需要重排）
         return "break"
 
     def _after_scroll_soon(self):
@@ -2600,9 +2603,17 @@ class App(object):
         return int(self._head_h or 0)
 
     def _paint_overlays(self):
-        """把已上色的单元格用同位置贴片画出来（只画当前页）。"""
-        self._forget_overlays()
+        """把已上色的单元格用同位置贴片画出来（只画当前页）。
+
+        增量复用：滚动时文字/颜色/状态没变的贴片只挪位置，不再整批
+        销毁重建（销毁重建正是上色行滚动的闪烁来源）。
+        「上架状态」列不创建贴片——那格由开关整格承载（底色跟随用户
+        颜色，见 decor._row_bg），贴片会盖住开关还露出「已上架」字样。
+        """
         if not self.cell_colors:
+            self._forget_overlays()
+            if self.decor is not None:
+                self.decor.refresh_colors()   # 上过色的「上架」格可能被清掉，底色要跟着回
             return
         try:
             if not self.tree.winfo_exists() or not self.by_id:
@@ -2610,15 +2621,17 @@ class App(object):
             font = ttk.Style().lookup("Treeview", "font") or (self.fam, 10)
         except Exception:
             font = (self.fam, 10)
+        bold = None
         cols = self._cols()
         sel = set(self.tree.selection())
         head_h = self._head_height()
+        want = {}
         for iid, row in self.cell_colors.items():
             rec = self.by_id.get(str(iid))
             if rec is None:
                 continue
             for key, color in row.items():
-                if key not in cols:
+                if key not in cols or key == "listed":
                     continue
                 try:
                     bbox = self.tree.bbox(str(iid), column=key)
@@ -2628,27 +2641,65 @@ class App(object):
                     continue
                 if int(bbox[1]) < head_h:
                     continue   # 半行被表头压住：不画，免得贴片盖到表头上
-                is_sel = str(iid) in sel
-                lb = tk.Label(self.tree, text=self.fmt(key, rec), bg=color,
-                              fg=CLR_TEXT, font=font,
-                              anchor=FIELD_ANCHOR.get(key, "center"),
-                              bd=0, highlightthickness=0)
-                if is_sel:
-                    # 所在行被选中：蓝描边 + 加粗，避免贴片盖住系统选中高亮看不出选中
-                    lb.configure(highlightthickness=2,
-                                 highlightbackground=CLR_ACCENT,
-                                 highlightcolor=CLR_ACCENT)
-                    lb.configure(font=tkfont.Font(font=font, weight="bold"))
-                elif str(iid) == self.hover.row:
-                    # 划过的行：贴片盖住了背景色，用淡蓝描边代替整行高亮
-                    lb.configure(highlightthickness=1,
-                                 highlightbackground=CLR_HOVER_EDGE,
-                                 highlightcolor=CLR_HOVER_EDGE)
+                want[(str(iid), key)] = (
+                    self.fmt(key, rec), color,
+                    str(iid) in sel, str(iid) == self.hover.row, bbox)
+        # 先复用：内容签名一致（文字/颜色/选中/划过）的贴片只挪位置
+        keep, stale, used = [], [], set()
+        for lb in self._paint_labels:
+            k = getattr(lb, "_cell", None)
+            info = want.get(k)
+            if info is None or k in used:
+                stale.append(lb)
+                continue
+            text, bg, is_sel, is_hover, bbox = info
+            sig = (text, bg, is_sel, is_hover)
+            if getattr(lb, "_sig", None) != sig:
+                stale.append(lb)
+                continue
+            try:
                 lb.place(x=int(bbox[0]), y=int(bbox[1]),
                          width=int(bbox[2]), height=int(bbox[3]))
-                lb._row_iid = str(iid)     # 划过时按行改描边（不重建贴片）
-                self._bind_overlay_events(lb)
-                self._paint_labels.append(lb)
+            except Exception:
+                stale.append(lb)
+                continue
+            used.add(k)
+            keep.append(lb)
+        self._paint_labels = keep
+        for lb in stale:
+            try:
+                lb.destroy()
+            except Exception:
+                pass
+        # 重建复用不了的（新增 / 文字颜色状态变化）
+        for k, (text, bg, is_sel, is_hover, bbox) in want.items():
+            if k in used:
+                continue
+            lb = tk.Label(self.tree, text=text, bg=bg, fg=CLR_TEXT, font=font,
+                          anchor=FIELD_ANCHOR.get(k[1], "center"),
+                          bd=0, highlightthickness=0)
+            if is_sel:
+                # 所在行被选中：蓝描边 + 加粗，避免贴片盖住系统选中高亮看不出选中
+                if bold is None:
+                    bold = tkfont.Font(font=font, weight="bold")
+                lb.configure(highlightthickness=2,
+                             highlightbackground=CLR_ACCENT,
+                             highlightcolor=CLR_ACCENT, font=bold)
+            elif is_hover:
+                # 划过的行：贴片盖住了背景色，用淡蓝描边代替整行高亮
+                lb.configure(highlightthickness=1,
+                             highlightbackground=CLR_HOVER_EDGE,
+                             highlightcolor=CLR_HOVER_EDGE)
+            lb.place(x=int(bbox[0]), y=int(bbox[1]),
+                     width=int(bbox[2]), height=int(bbox[3]))
+            lb._row_iid = k[0]         # 划过时按行改描边（不重建贴片）
+            lb._cell = k               # 滚动时按格复用（增量重排）
+            lb._sig = (text, bg, is_sel, is_hover)
+            self._bind_overlay_events(lb)
+            self._paint_labels.append(lb)
+        if self.decor is not None:
+            self.decor.refresh_colors()   # 上过色的「上架」格：开关底色跟上用户颜色
+            self.decor.restack()          # 开关要盖住贴片、网格线要盖住开关
 
     def _bind_overlay_events(self, lb):
         """贴片也要能拖选 / 双击 / 右键 / 滚轮，否则鼠标经过上色格子就断了。"""

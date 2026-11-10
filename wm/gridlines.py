@@ -138,6 +138,25 @@ class TreeDecor(object):
         for y in hpos:
             self._hline(0, y, vw)
         self._recycle_lines()
+        self.restack()
+
+    def restack(self):
+        """显式定叠放：上色贴片 < 开关 < 网格线。
+
+        Tk 的叠放次序按控件的创建先后（place 顺序不作数），上色贴片
+        往往比开关晚创建、会盖住开关还露出「已上架」字样；所以每次
+        重排/重画贴片后都抬一遍，保证开关永远可见可点。
+        """
+        for cv in self._pills.values():
+            try:
+                cv.lift()
+            except Exception:
+                pass
+        for f in self._v + self._h:
+            try:
+                f.lift()
+            except Exception:
+                pass
 
     def _recycle_pills(self, live_pills):
         """收起本轮不可见的开关（放回池里等复用）。"""
@@ -222,9 +241,18 @@ class TreeDecor(object):
     def _row_bg(self, iid):
         """行底色：与 tree 的实际绘制顺序一致。
 
-        优先级：划过（hover tag 最高）> 下架灰/低库存橙/斑马纹 > 选中蓝 > 默认。
+        优先级：用户上色（开关替贴片扛住该格，底色必须跟上）>
+        划过（hover tag 最高）> 下架灰/低库存橙/斑马纹 > 选中蓝 > 默认。
         开关铺满整格，底色取错就会露出一个方框，所以必须逐层对齐。
         """
+        try:
+            cc = getattr(self.app, "cell_colors", None)
+            if cc:
+                c = cc.get(str(iid), {}).get("listed")
+                if c:
+                    return c
+        except Exception:
+            pass
         try:
             if self.app.hover is not None and str(iid) == self.app.hover.row:
                 return CLR_HOVER_BG
