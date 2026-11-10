@@ -52,16 +52,28 @@ class TreeDecor(object):
 
     # ------------------------------------------------------------ 入口
     def redraw(self):
-        self._hide()
+        """重排网格线与开关。
+
+        滚动时不能 "全部隐藏再重建"——那样每滚一格都会闪一下。
+        这里把活动对象先并回池，重新 place 到新坐标（同一次事件处理内完成，
+        Tk 只重绘最终状态），最后只把用不到的收起来。
+        """
         t = self.tree
         try:
             if not t.winfo_exists() or not t.winfo_ismapped():
+                self._hide()
                 return
             vw, vh = int(t.winfo_width()), int(t.winfo_height())
         except Exception:
+            self._hide()
             return
         if vw <= 4 or vh <= 4:
+            self._hide()
             return
+        self._vpool.extend(self._v)
+        self._hpool.extend(self._h)
+        self._v = []
+        self._h = []
         head_h = int(self.app._head_height())
         disp = t["displaycolumns"]
         # ttk 在没有自定义列顺序时返回 ('#all',)，不是 "all"
@@ -105,12 +117,49 @@ class TreeDecor(object):
                     pb = None
                 if pb and int(pb[1]) >= head_h:
                     pills.append((str(iid), pb))
+        live = set()
+        for iid, pb in pills:
+            live.add(iid)
+        self._recycle_pills(live)      # 先把滚出视口的收进池，新行才能复用同一批对象
         for iid, pb in pills:
             self._pill(iid, pb)
         for x in vpos:
             self._vline(x, head_h, vh)
         for y in hpos:
             self._hline(0, y, vw)
+        self._recycle_lines()
+
+    def _recycle_pills(self, live_pills):
+        """收起本轮不可见的开关（放回池里等复用）。"""
+        for iid in list(self._pills):
+            if iid in live_pills:
+                continue
+            cv = self._pills.pop(iid)
+            try:
+                cv.place_forget()
+            except Exception:
+                pass
+            cv._sig = None
+            if len(self._pill_pool) < 64:
+                self._pill_pool.append(cv)
+            else:
+                try:
+                    cv.destroy()
+                except Exception:
+                    pass
+
+    def _recycle_lines(self):
+        """收起本轮没用到的线与开关（滚出视口 / 行已删）。"""
+        for f in self._vpool:
+            try:
+                f.place_forget()
+            except Exception:
+                pass
+        for f in self._hpool:
+            try:
+                f.place_forget()
+            except Exception:
+                pass
 
     def _on_release(self, e):
         # 点在表头（列宽拖动）结束后重排；数据行点击无需处理
@@ -206,8 +255,18 @@ class TreeDecor(object):
         ph = min(int(16 * scale), h - int(10 * scale))
         if pw < 18 or ph < 8:
             return
-        self._draw_pill(cv, self._row_bg(iid), w, h, pw, ph, iid)
-        cv._geo = (w, h, pw, ph)   # 记下几何，悬停换行时只刷底色不重排
+        bg = self._row_bg(iid)
+        try:
+            rec = self.app.by_id.get(iid)
+            on = bool(rec and rec.get("listed"))
+        except Exception:
+            on = False
+        # 内容签名没变就只挪位置：滚动时不必每格都 delete + 重画
+        sig = (bg, w, h, pw, ph, on)
+        if getattr(cv, "_sig", None) != sig:
+            self._draw_pill(cv, bg, w, h, pw, ph, iid)
+            cv._sig = sig
+            cv._geo = (w, h, pw, ph)   # 悬停换行时只刷底色不重排
         try:
             cv.place(x=x, y=y, width=w, height=h)
         except Exception:
@@ -220,6 +279,7 @@ class TreeDecor(object):
             if not geo:
                 continue
             self._draw_pill(cv, self._row_bg(iid), geo[0], geo[1], geo[2], geo[3], iid)
+            cv._sig = None       # 内容改由 _draw_pill 直接画，签名作废以便下轮重认
 
     def _bind_pill_events(self, cv):
         """开关只接管左键；滚轮/划过/右键必须自己补，否则指针停在开关上就断。"""

@@ -977,7 +977,10 @@ class App(object):
                            command=self._tree_yview)
         hs = ttk.Scrollbar(table_card, orient="horizontal", style="Horizontal.TScrollbar",
                            command=self._tree_xview)
-        self.tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
+        self.tree.configure(yscrollcommand=self._on_yscroll,
+                            xscrollcommand=self._on_xscroll)
+        self._vs = vs
+        self._hs = hs
         # 先给滚动条占位，再让表格伸展：反过来的话窗口一缩小，
         # 表格会把滚动条挤没（pack 按顺序分配空间）
         vs.pack(side="right", fill="y")
@@ -1034,6 +1037,25 @@ class App(object):
     def _tree_xview(self, *args):
         self.tree.xview(*args)
         self._after_scroll()
+
+    def _on_yscroll(self, first, last):
+        """表格滚动位置变化（含拖动滚动条）→ 同步滚动条并重排覆盖层。
+
+        拖滚动条时 tree 不会给任何绑定事件，只有 yscrollcommand 会被调用，
+        不在这里挂钩子的话开关和网格线就停在原地不跟（快速拖动时整列消失）。
+        """
+        try:
+            self._vs.set(first, last)
+        except Exception:
+            pass
+        self._after_scroll_soon()
+
+    def _on_xscroll(self, first, last):
+        try:
+            self._hs.set(first, last)
+        except Exception:
+            pass
+        self._after_scroll_soon()
 
     def _build_pager(self, parent):
         p = tk.Frame(parent, bg=CLR_CARD)
@@ -2501,7 +2523,7 @@ class App(object):
             self.tree.yview_scroll(step, "units")
         except Exception:
             return None
-        self._after_scroll()
+        self._after_scroll_soon()      # idle 合并：连滚多格只重排一次，不闪
         return "break"
 
     def _after_scroll_soon(self):

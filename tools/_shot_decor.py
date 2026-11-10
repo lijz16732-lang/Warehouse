@@ -145,6 +145,63 @@ app._tree_xview("moveto", 0.0)
 root.update()
 shot("decor_inv.png")
 
+print("== 6.5 纵向拖滚动条（快速滚动不能丢贴片/不能重建） ==")
+extra = []
+for i in range(60):
+    rec = blank_record()
+    rec.update({"code": "WL-8%04d" % i, "brand": "滚动测试", "category": "变频器",
+                "model": "S%d" % i, "condition": "全新", "price": 1.0, "qty": 1,
+                "shelf": "1排A-1", "listed": 1 if i % 2 else 0, "remark": ""})
+    extra.append(rec)
+app.store.insert_many(extra)
+app.load_data()
+root.update()
+root.update_idletasks()
+root.update()
+chk("出现纵向滚动条", t.yview()[1] - t.yview()[0] < 0.95, t.yview())
+before_ids = set(id(cv) for cv in decor._pills.values())
+t.yview_moveto(0.5)            # 等价于拖滚动条到中间：只触发 yscrollcommand
+root.update()
+root.update_idletasks()
+root.update()
+seen = [str(i) for i in t.get_children() if t.bbox(str(i))]
+bad, missing = [], []
+for iid in seen:
+    cv = decor._pills.get(iid)
+    bb = t.bbox(iid, column="listed")
+    if cv is None:
+        missing.append(iid)
+        continue
+    info = cv.place_info()
+    got = tuple(int(float(info[k])) for k in ("x", "y", "width", "height"))
+    if bb and got != tuple(int(v) for v in bb):
+        bad.append((iid, got, tuple(bb)))
+chk("滚到中间后视口每行都有开关", not missing, missing[:3])
+chk("滚到中间后开关与单元格对齐", not bad, bad[:3])
+after_ids = set(id(cv) for cv in decor._pills.values())
+chk("开关控件是复用而非每次重建（不闪）",
+    len(after_ids & before_ids) >= max(1, len(after_ids) // 2),
+    "%d/%d reused" % (len(after_ids & before_ids), len(after_ids)))
+# 再快速连滚多次（模拟滚轮连发），确认最终仍贴合
+for _ in range(6):
+    t.yview_scroll(1, "units")
+root.update()
+root.update_idletasks()
+root.update()
+seen = [str(i) for i in t.get_children() if t.bbox(str(i))]
+bad = []
+for iid in seen:
+    cv = decor._pills.get(iid)
+    bb = t.bbox(iid, column="listed")
+    if cv is None:
+        bad.append((iid, "missing"))
+        continue
+    info = cv.place_info()
+    got = tuple(int(float(info[k])) for k in ("x", "y", "width", "height"))
+    if bb and got != tuple(int(v) for v in bb):
+        bad.append((iid, got))
+chk("连续滚动后仍无缺失/错位", not bad, bad[:3])
+
 print("== 7. 编辑弹窗里的开关 ==")
 rec = app.store.all_records()[0]
 dlg = RecordDialog(root, dict(rec), app.suggestions(), "编辑记录", app.fam, app=app)
