@@ -671,9 +671,11 @@ class PhoneTab(ttk.Frame):
                                           datetime.now().strftime("%Y%m%d_%H%M"))
         path = filedialog.asksaveasfilename(
             title="导出手机数据", parent=self.root(), defaultextension=".xlsx",
-            initialfile=default, filetypes=[("Excel 工作簿", "*.xlsx")])
+            initialdir=self.app._dialog_dir(), initialfile=default,
+            filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self.app._note_dir(path)
         try:
             self._export_to(path)
         except Exception as e:

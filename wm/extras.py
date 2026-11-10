@@ -557,10 +557,12 @@ class PurchaseListDialog(object):
             wh = ""
         path = filedialog.asksaveasfilename(
             title="导出采购记录", parent=self.win, defaultextension=".xlsx",
+            initialdir=self.app._dialog_dir(),
             initialfile="采购记录_%s_%s.xlsx" % (wh, datetime.now().strftime("%Y%m%d")),
             filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self.app._note_dir(path)
         try:
             export_purchases_xlsx(path, self.rows, wh)
         except Exception as e:

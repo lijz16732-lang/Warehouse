@@ -292,13 +292,15 @@ class ProfitTab(ttk.Frame):
                            self.var_end.get().strip() or "至今")
         path = filedialog.asksaveasfilename(
             title="导出销售利润表", parent=self.app.root, defaultextension=".csv",
+            initialdir=self.app._dialog_dir(),
             initialfile="销售利润_%s_%s_%s.csv"
                         % (GROUP_LABEL.get(group, ""), wh, scope),
             filetypes=[("CSV 表格", "*.csv")])
         if not path:
             return
+        self.app._note_dir(path)
         try:
-            with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            with open(path, "w", encoding=self.app._csv_enc(), newline="") as f:
                 wr = csv.writer(f)
                 wr.writerow([c[1] for c in cols])
                 for r in self.view:

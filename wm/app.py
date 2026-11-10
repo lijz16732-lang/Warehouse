@@ -161,6 +161,12 @@ class App(object):
             root.after(300, lambda: messagebox.showwarning("连不上主机", err,
                                                           parent=self.root))
 
+        # ---- 启动页面（设置里配置：记住上次 / 总是库存列表）----
+        if str(self.settings.get("startup_page") or "last") == "last":
+            lp = self.settings.get("last_page")
+            if isinstance(lp, int) and 0 < lp < self.nb.index("end"):
+                self.nb.select(lp)
+
     # ============================================================ 基础
     def _set_icon(self):
         try:
@@ -656,7 +662,9 @@ class App(object):
         m = getattr(self, "screen_metrics", None) or screen.screen_metrics(self.root)
         fit = screen.fit_window(m, saved=self.settings.get("geometry"))
         self.root.minsize(fit["min_w"], fit["min_h"])
-        if fit["maxed"] or (self.settings.get("maxed") and not fit["compact"]):
+        if fit["maxed"] or ((self.settings.get("maxed")
+                             or self.settings.get("start_maximized"))
+                            and not fit["compact"]):
             try:
                 self.root.state("zoomed")
                 # 启动期主窗口被 withdraw 防闪框，几何就绪后再显示
@@ -748,7 +756,7 @@ class App(object):
         m.add_cascade(label="数据", menu=dm)
 
         hm = tk.Menu(m, tearoff=0)
-        hm.add_command(label="设置（外观 / 快捷键）…", command=self.open_appearance)
+        hm.add_command(label="设置…", command=self.open_appearance)
         hm.add_separator()
         hm.add_command(label="使用说明", command=self.show_help)
         hm.add_command(label="关于", command=self.show_about)
@@ -1969,6 +1977,7 @@ class App(object):
     def _on_tab_changed(self, _e=None):
         try:
             idx = self.nb.index(self.nb.select())
+            self.settings["last_page"] = idx      # 启动行为「记住上次页面」用
             try:
                 self.nav.set_active(idx)
             except Exception:
@@ -2889,14 +2898,39 @@ class App(object):
         win.bind("<Escape>", lambda e: win.destroy())
 
     # ============================================================ 导入导出
+    def _dialog_dir(self):
+        """文件对话框初始目录（设置·默认路径）：上次文件夹 > 固定默认路径。"""
+        d = ""
+        if self.settings.get("remember_dir", True):
+            d = str(self.settings.get("last_dir") or "")
+        if not d:
+            d = str(self.settings.get("default_dir") or "")
+        return d if d and os.path.isdir(d) else ""
+
+    def _note_dir(self, path):
+        """记住本次使用的文件夹（设置里可关「记住上次使用的文件夹」）。"""
+        if not path or not self.settings.get("remember_dir", True):
+            return
+        p = str(path)
+        d = os.path.dirname(p) if os.path.isfile(p) else p
+        if d and os.path.isdir(d) and d != self.settings.get("last_dir"):
+            self.settings["last_dir"] = d
+            self._save_settings()
+
+    def _csv_enc(self):
+        """CSV 导出编码（设置·文件格式与兼容性，默认带 BOM 的 Excel 兼容）。"""
+        return str(self.settings.get("csv_encoding") or "utf-8-sig")
+
     def do_import(self):
         if self._guard_write():
             return
         path = filedialog.askopenfilename(
             title="选择要导入的 Excel 文件", parent=self.root,
+            initialdir=self._dialog_dir(),
             filetypes=[("Excel 工作簿", "*.xlsx *.xlsm"), ("所有文件", "*.*")])
         if not path:
             return
+        self._note_dir(path)
         res = ask_import(self.root, path, self.fam,
                          existing_models=self.store.model_keys(),
                          existing_blank=self.store.blank_content_keys())
@@ -3006,9 +3040,11 @@ class App(object):
         default = "库存数据_%s.xlsx" % datetime.now().strftime("%Y%m%d_%H%M")
         path = filedialog.asksaveasfilename(
             title="导出为 XLSX", parent=self.root, defaultextension=".xlsx",
-            initialfile=default, filetypes=[("Excel 工作簿", "*.xlsx")])
+            initialdir=self._dialog_dir(), initialfile=default,
+            filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self._note_dir(path)
         self._run_bg(lambda: xlsxio.export_xlsx(path, recs),
                      lambda r, e: self._export_done(r, e, path, len(recs)),
                      "正在导出…")
@@ -3033,9 +3069,11 @@ class App(object):
                                               datetime.now().strftime("%Y%m%d_%H%M"))
         path = filedialog.asksaveasfilename(
             title="导出统计报表", parent=self.root, defaultextension=".xlsx",
-            initialfile=default, filetypes=[("Excel 工作簿", "*.xlsx")])
+            initialdir=self._dialog_dir(), initialfile=default,
+            filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self._note_dir(path)
         stats = self.store.stats(recs)
         scope = self.tab_ana.scope_text
 
@@ -3048,9 +3086,11 @@ class App(object):
     def save_template(self):
         path = filedialog.asksaveasfilename(
             title="保存导入模板", parent=self.root, defaultextension=".xlsx",
-            initialfile="仓库导入模板.xlsx", filetypes=[("Excel 工作簿", "*.xlsx")])
+            initialdir=self._dialog_dir(), initialfile="仓库导入模板.xlsx",
+            filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self._note_dir(path)
         try:
             xlsxio.write_template(path)
             self._status("模板已保存到 %s" % os.path.basename(path))
@@ -3225,44 +3265,101 @@ class App(object):
             pass
 
     def open_appearance(self):
-        """设置：主题（即时生效）/ 字体大小（即时生效）/ 快捷键（即时生效）。"""
+        """设置：外观 / 启动行为 / 默认路径 / 文件格式与兼容性 / 快捷键。
+
+        卡片式分区，右侧滚动条（内容高随缩放变化，超出窗口即可滚）。
+        除「应用外观」外全部即时保存，无需确认。
+        """
         from .constants import UI_THEME
+        s = getattr(self, "ui_scale", 1.0)
+        fam = self.fam
         win = tk.Toplevel(self.root)
-        win.title("设置（外观 / 快捷键）")
-        win.configure(bg=CLR_CARD)
+        win.title("设置")
+        win.configure(bg=CLR_BG)
         win.transient(self.root)
         win.resizable(False, False)
         apply_window_icon(win)
         win.grab_set()
-        fam = self.fam
 
-        # ---- 主题 ----
-        tk.Label(win, text="界面主题", bg=CLR_CARD, fg=CLR_HEAD_FG,
-                 font=(fam, 10, "bold")).pack(anchor="w", padx=18, pady=(14, 2))
-        var_theme = tk.StringVar(value=str(self.settings.get("ui_theme") or UI_THEME))
-        rowt = tk.Frame(win, bg=CLR_CARD)
-        rowt.pack(anchor="w", padx=18)
+        # ---- 滚动容器：画布 + 滚动条，内容随主题色铺底 ----
+        outer = tk.Frame(win, bg=CLR_BG)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, bg=CLR_BG, highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        body = tk.Frame(canvas, bg=CLR_BG)
+        _body_win = canvas.create_window((0, 0), window=body, anchor="nw",
+                                         tags="body")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(
+            _body_win, width=e.width))
+        body.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+        def _wheel(e):
+            try:
+                canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+            except Exception:
+                pass
+
+        def _close():
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+            win.destroy()
+
+        canvas.bind_all("<MouseWheel>", _wheel)
+        win.protocol("WM_DELETE_WINDOW", _close)
+        win.bind("<Escape>", lambda e: _close())
+
+        def card(title, subtitle=None):
+            """一张设置卡片：左侧竖色条 + 标题 + 灰色说明 + 内容区。"""
+            c = tk.Frame(body, bg=CLR_CARD,
+                         highlightbackground=CLR_BORDER, highlightthickness=1)
+            c.pack(fill="x", padx=int(16 * s), pady=(int(12 * s), 0))
+            head = tk.Frame(c, bg=CLR_CARD)
+            head.pack(fill="x", padx=int(14 * s), pady=(int(12 * s), 0))
+            tk.Frame(head, bg=CLR_ACCENT, width=int(4 * s)).pack(
+                side="left", fill="y", padx=(0, int(8 * s)))
+            tk.Label(head, text=title, bg=CLR_CARD, fg=CLR_HEAD_FG,
+                     font=(fam, 11, "bold")).pack(side="left")
+            if subtitle:
+                tk.Label(c, text=subtitle, bg=CLR_CARD, fg=CLR_MUTED,
+                         font=(fam, 8)).pack(anchor="w", padx=int(26 * s),
+                                             pady=(2, 0))
+            inner = tk.Frame(c, bg=CLR_CARD)
+            inner.pack(fill="x", padx=int(26 * s), pady=(int(8 * s),
+                                                         int(12 * s)))
+            return inner
+
+        def hint(parent, text):
+            tk.Label(parent, text=text, bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(fam, 8)).pack(anchor="w", pady=(2, 0))
+
+        # ================================================== 外观
+        inner = card("外观", "选择后点「应用外观」，界面原地刷新（无需重启）")
+        var_theme = tk.StringVar(value=str(self.settings.get("ui_theme")
+                                           or UI_THEME))
+        rowt = tk.Frame(inner, bg=CLR_CARD)
+        rowt.pack(anchor="w")
         for val, txt in (("light", "浅色"), ("dark", "深色")):
             tk.Radiobutton(rowt, text=txt, value=val, variable=var_theme,
                            bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
-                           activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
-                                                                           padx=(0, 16))
-        tk.Label(win, text="选择主题后点下方「应用外观」，界面自动刷新（无需重启）",
-                 bg=CLR_CARD, fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w", padx=18)
-
-        # ---- 字体大小 ----
-        tk.Label(win, text="字体大小", bg=CLR_CARD, fg=CLR_HEAD_FG,
-                 font=(fam, 10, "bold")).pack(anchor="w", padx=18, pady=(10, 2))
-        var_font = tk.StringVar(value=str(float(self.settings.get("font_scale", 1.0) or 1.0)))
-        rowf = tk.Frame(win, bg=CLR_CARD)
-        rowf.pack(anchor="w", padx=18)
+                           activebackground=CLR_CARD,
+                           font=(fam, 10)).pack(side="left", padx=(0, 16))
+        var_font = tk.StringVar(
+            value=str(float(self.settings.get("font_scale", 1.0) or 1.0)))
+        rowf = tk.Frame(inner, bg=CLR_CARD)
+        rowf.pack(anchor="w", pady=(8, 0))
+        tk.Label(rowf, text="字体大小", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 10))
         for txt, val in FONT_SCALES:
             tk.Radiobutton(rowf, text=txt, value=str(val), variable=var_font,
                            bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
-                           activebackground=CLR_CARD, font=(fam, 10)).pack(side="left",
-                                                                           padx=(0, 16))
-        tk.Label(win, text="点「应用外观」立即生效（整窗等比放大 / 缩小）", bg=CLR_CARD,
-                 fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w", padx=18)
+                           activebackground=CLR_CARD,
+                           font=(fam, 10)).pack(side="left", padx=(0, 16))
 
         def apply_look():
             self.settings["ui_theme"] = var_theme.get()
@@ -3273,19 +3370,124 @@ class App(object):
             self._save_settings()
             self._soft_reboot()      # 原地重建界面，主题/字体立即生效
 
-        ttk.Button(win, text="应用外观", style="Accent.TButton",
-                   command=apply_look).pack(anchor="w", padx=18, pady=(8, 0))
+        ttk.Button(inner, text="应用外观", style="Accent.TButton",
+                   command=apply_look).pack(anchor="w", pady=(10, 0))
 
-        # ---- 快捷键 ----
-        tk.Label(win, text="快捷键（即时生效，输入框里打字不受影响）", bg=CLR_CARD,
-                 fg=CLR_HEAD_FG, font=(fam, 10, "bold")).pack(
-            anchor="w", padx=18, pady=(14, 2))
+        # ================================================== 启动行为
+        inner = card("启动行为")
+        var_page = tk.StringVar(value=str(self.settings.get("startup_page")
+                                          or "last"))
+        rowp = tk.Frame(inner, bg=CLR_CARD)
+        rowp.pack(anchor="w")
+        tk.Label(rowp, text="启动时打开", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 10))
+        for val, txt in (("last", "记住上次的页面"), ("home", "库存列表")):
+            tk.Radiobutton(rowp, text=txt, value=val, variable=var_page,
+                           bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                           activebackground=CLR_CARD,
+                           font=(fam, 10)).pack(side="left", padx=(0, 16))
+        var_maxed = tk.BooleanVar(
+            value=bool(self.settings.get("start_maximized", False)))
+        tk.Checkbutton(inner, text="启动时窗口最大化", variable=var_maxed,
+                       bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                       activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w", pady=(8, 0))
+        hint(inner, "启动行为在下次打开程序时生效")
+
+        def save_page(*_a):
+            self.settings["startup_page"] = var_page.get()
+            self._save_settings()
+
+        var_page.trace_add("write", save_page)
+
+        def save_maxed():
+            self.settings["start_maximized"] = bool(var_maxed.get())
+            self._save_settings()
+
+        var_maxed.trace_add("write", lambda *_a: save_maxed())
+
+        # ================================================== 默认路径
+        inner = card("默认路径", "对导入 XLSX、导出文件、生成模板、添加照片等对话框生效")
+        var_remember = tk.BooleanVar(
+            value=bool(self.settings.get("remember_dir", True)))
+        var_dir = tk.StringVar(
+            value=str(self.settings.get("default_dir") or ""))
+
+        def save_dir():
+            self.settings["default_dir"] = var_dir.get().strip()
+            self.settings["remember_dir"] = bool(var_remember.get())
+            self._save_settings()
+
+        rowd = tk.Frame(inner, bg=CLR_CARD)
+        rowd.pack(fill="x")
+        tk.Label(rowd, text="固定目录", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        ent = tk.Entry(rowd, textvariable=var_dir, font=(fam, 9),
+                       bg=CLR_INPUT, fg=CLR_TEXT,
+                       relief="solid", bd=1, highlightthickness=0)
+        ent.pack(side="left", fill="x", expand=True, ipady=3)
+
+        def pick_default():
+            d = filedialog.askdirectory(parent=win, title="选择默认文件夹",
+                                        mustexist=True,
+                                        initialdir=var_dir.get().strip()
+                                        or self._dialog_dir())
+            if d:
+                var_dir.set(d)
+                save_dir()
+
+        ttk.Button(rowd, text="浏览…", width=6,
+                   command=pick_default).pack(side="left", padx=(6, 0))
+
+        def clear_default():
+            var_dir.set("")
+            save_dir()
+
+        ttk.Button(rowd, text="清除", style="Ghost.TButton", width=5,
+                   command=clear_default).pack(side="left", padx=(6, 0))
+        tk.Checkbutton(inner, text="记住上次使用的文件夹（优先于固定目录）",
+                       variable=var_remember, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10),
+                       command=save_dir).pack(anchor="w", pady=(8, 0))
+        ent.bind("<FocusOut>", lambda e: save_dir())
+
+        # ================================================== 文件格式与兼容性
+        inner = card("文件格式与兼容性")
+        rowc = tk.Frame(inner, bg=CLR_CARD)
+        rowc.pack(anchor="w")
+        tk.Label(rowc, text="CSV 导出编码", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        enc_names = [("utf-8-sig", "Excel 兼容（推荐）"),
+                     ("gbk", "GBK（旧版简体中文 Excel）"),
+                     ("utf-8", "UTF-8（通用）")]
+        enc_map = dict(enc_names)
+        rev_map = {v: k for k, v in enc_names}
+        var_enc = tk.StringVar(
+            value=enc_map.get(str(self.settings.get("csv_encoding")
+                                  or "utf-8-sig"), enc_map["utf-8-sig"]))
+        cb = ttk.Combobox(rowc, textvariable=var_enc, state="readonly",
+                          width=26, font=(fam, 9),
+                          values=[v for _k, v in enc_names])
+
+        def on_enc(*_a):
+            self.settings["csv_encoding"] = rev_map.get(var_enc.get(),
+                                                        "utf-8-sig")
+            self._save_settings()
+
+        cb.bind("<<ComboboxSelected>>", on_enc)
+        cb.pack(side="left")
+        hint(inner, "影响操作日志、销售利润表的 CSV 导出；XLSX 导出不受影响。"
+                    "用 Excel 打开乱码时选「Excel 兼容」。")
+
+        # ================================================== 快捷键
+        inner = card("快捷键", "即时生效，输入框里打字不受影响")
         cols = ("act", "key")
-        tv = ttk.Treeview(win, columns=cols, show="headings", height=10)
+        tv = ttk.Treeview(inner, columns=cols, show="headings", height=8)
         for key, title, w in (("act", "功能", 160), ("key", "快捷键", 110)):
             tv.heading(key, text=title)
             tv.column(key, width=w, anchor="center")
-        tv.pack(fill="x", padx=18)
+        tv.pack(fill="x")
 
         sc_cfg = dict(self.settings.get("shortcuts") or {})
 
@@ -3293,14 +3495,16 @@ class App(object):
             tv.delete(*tv.get_children())
             for sid, label, dflt, _t in self.SC_DEFS:
                 tv.insert("", "end", iid=sid,
-                          values=(label, str(sc_cfg.get(sid, dflt) or "（禁用）")))
+                          values=(label, str(sc_cfg.get(sid, dflt)
+                                             or "（禁用）")))
 
         fill_sc()
 
         def capture_key():
             sel = tv.selection()
             if not sel:
-                messagebox.showinfo("修改快捷键", "请先在列表里选中一个功能。", parent=win)
+                messagebox.showinfo("修改快捷键", "请先在列表里选中一个功能。",
+                                    parent=win)
                 return
             sid = sel[0]
             cw = tk.Toplevel(win)
@@ -3310,8 +3514,9 @@ class App(object):
             cw.grab_set()
             cw.geometry("280x100")
             center_window(cw, win, size=(280, 100), force=True)
-            tk.Label(cw, text="请按下新的快捷键\n（按 Esc 取消）", bg=CLR_CARD, fg=CLR_TEXT,
-                     font=(fam, 10), justify="center").pack(expand=True)
+            tk.Label(cw, text="请按下新的快捷键\n（按 Esc 取消）", bg=CLR_CARD,
+                     fg=CLR_TEXT, font=(fam, 10),
+                     justify="center").pack(expand=True)
 
             def on_key(e):
                 ks = e.keysym
@@ -3349,20 +3554,22 @@ class App(object):
             cw.focus_set()
 
         def reset_sc():
-            if messagebox.askyesno("恢复默认", "把所有快捷键恢复为默认设置？", parent=win):
+            if messagebox.askyesno("恢复默认", "把所有快捷键恢复为默认设置？",
+                                   parent=win):
                 sc_cfg.clear()
                 self.settings.pop("shortcuts", None)
                 self._save_settings()
                 self._rebind_shortcuts()
                 fill_sc()
 
-        rowb = tk.Frame(win, bg=CLR_CARD)
-        rowb.pack(fill="x", padx=18, pady=(6, 14))
-        ttk.Button(rowb, text="修改选中项的快捷键", command=capture_key).pack(side="left")
+        rowb = tk.Frame(inner, bg=CLR_CARD)
+        rowb.pack(fill="x", pady=(8, 0))
+        ttk.Button(rowb, text="修改选中项的快捷键",
+                   command=capture_key).pack(side="left")
         ttk.Button(rowb, text="恢复默认", style="Ghost.TButton",
                    command=reset_sc).pack(side="left", padx=(8, 0))
-        win.bind("<Escape>", lambda e: win.destroy())
-        center_window(win, self.root, size=(360, 520), force=True)
+
+        center_window(win, self.root, size=(476, 620), force=True)
 
     def _soft_reboot(self):
         """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
@@ -3498,12 +3705,14 @@ class App(object):
             path = filedialog.asksaveasfilename(
                 parent=self.root, title="导出操作日志",
                 defaultextension=".csv",
+                initialdir=self._dialog_dir(),
                 initialfile="操作日志_%s.csv" % datetime.now().strftime("%Y%m%d_%H%M"),
                 filetypes=[("CSV 文件", "*.csv")])
             if not path:
                 return
+            self._note_dir(path)
             import csv
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            with open(path, "w", newline="", encoding=self._csv_enc()) as f:
                 w = csv.writer(f)
                 w.writerow(["时间", "来源", "操作", "编号", "明细"])
                 for iid in items:

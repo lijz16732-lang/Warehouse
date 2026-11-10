@@ -160,9 +160,11 @@ class PhotoStrip(tk.Frame):
         """文件多选添加（自动压缩、内容去重、上限拦截）。"""
         paths = filedialog.askopenfilenames(
             parent=self, title="选择照片（可多选）",
+            initialdir=self.app._dialog_dir(),
             filetypes=[("图片", "*.jpg *.jpeg *.png"), ("所有文件", "*.*")])
         if not paths:
             return
+        self.app._note_dir(paths[0])
         if self.pending:
             err = ""
             for p in paths:
@@ -572,11 +574,13 @@ class PhotoStrip(tk.Frame):
                     default = "%s_%s%s" % (self.code, stem, ext or ".jpg")
                     path = filedialog.asksaveasfilename(
                         parent=pv, title="保存图片", initialfile=default,
+                        initialdir=self.app._dialog_dir(),
                         defaultextension=ext or ".jpg",
                         filetypes=[("图片", "*.jpg *.jpeg *.png"),
                                    ("所有文件", "*.*")])
                     if not path:
                         return
+                    self.app._note_dir(path)
                     raw = self._bytes_of(nn)
                     if not raw:
                         messagebox.showerror("保存图片", "照片数据读取失败",
@@ -698,9 +702,11 @@ class PhotoStrip(tk.Frame):
                 tip.configure(text="请先单击选中要保存的照片")
                 return
             folder = filedialog.askdirectory(
-                parent=win, title="选择保存位置", mustexist=True)
+                parent=win, title="选择保存位置", mustexist=True,
+                initialdir=self.app._dialog_dir())
             if not folder:
                 return
+            self.app._note_dir(folder)
             used = set()
             ok, err = 0, ""
             for n in picked:

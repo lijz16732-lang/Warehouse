@@ -1577,10 +1577,12 @@ class SalesTab(ttk.Frame):
         label = "出库记录" if self.is_out else "出售记录"
         path = filedialog.asksaveasfilename(
             title="导出" + label, parent=self.app.root, defaultextension=".xlsx",
+            initialdir=self.app._dialog_dir(),
             initialfile="%s_%s_%s.xlsx" % (label, wh, scope.replace("~", "_至_")),
             filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
+        self.app._note_dir(path)
         try:
             _do_export(path, self.rows, "%s · 范围：%s" % (wh, scope))
         except Exception as e:
