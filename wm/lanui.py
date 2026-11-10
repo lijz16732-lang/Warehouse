@@ -77,8 +77,6 @@ class LanPanel(tk.Frame):
         self._cw = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
         self.body.bind("<Configure>", self._sync_scroll)
         self.canvas.bind("<Configure>", self._sync_scroll)
-        for w in (self.canvas, self.body):
-            w.bind("<MouseWheel>", self._on_wheel)
 
         # ---- ① 主机 ----
         host = self._card(
@@ -287,6 +285,11 @@ class LanPanel(tk.Frame):
         ttk.Button(rowpb, text="访问日志", style="Ghost.TButton", width=9,
                    command=self.show_access_log).pack(side="right", padx=(0, 6))
 
+        # 滚轮绑定放最后：此时全部子控件已创建，递归覆盖（点在卡片/文字上也能滚）
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+        self.body.bind("<MouseWheel>", self._on_wheel)
+        self._bind_wheel(self.body)
+
         # ---- 底部（仅独立窗口形态）----
         if not self.standalone:
             return
@@ -298,6 +301,14 @@ class LanPanel(tk.Frame):
                  bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(side="left")
 
     # ------------------------------------------------------------ 滚动
+    def _bind_wheel(self, w):
+        """递归把滚轮绑到所有子控件；已有绑定/自带滚动的控件跳过。"""
+        for c in w.winfo_children():
+            if c.winfo_class() in ("Treeview", "Listbox", "Text", "Scrollbar",
+                                   "Combobox") or c.bind("<MouseWheel>"):
+                continue
+            c.bind("<MouseWheel>", self._on_wheel)
+            self._bind_wheel(c)
     def _sync_scroll(self, event=None):
         """内容比可视区高时才显示滚动条（小屏笔记本用）。"""
         try:

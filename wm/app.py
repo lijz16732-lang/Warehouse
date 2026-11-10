@@ -3289,9 +3289,10 @@ class App(object):
         content = tk.Frame(win, bg=CLR_BG)
         content.pack(side="left", fill="both", expand=True)
 
-        pages = {}          # key -> 内容页 Frame
+        pages = {}          # key -> 内容页 Frame（顶层，供 show 切换）
         item_lbls = {}      # key -> 导航项 Label
         state = {"cur": "look"}
+        scroll_bodies = []  # (body_frame, on_wheel) —— 各页滚动内容区
 
         def show(key):
             state["cur"] = key
@@ -3329,7 +3330,44 @@ class App(object):
                 tk.Label(pf, text=title, bg=CLR_BG, fg=CLR_TEXT,
                          font=(fam, 13, "bold")).pack(anchor="w", padx=22,
                                                       pady=(16, 8))
-            return pf
+            if key == "lan":
+                return pf        # 局域网面板自带滚动体系
+            # 其余页包一层可滚动容器：Canvas + 纵向滚动条 + 滚轮
+            outer = tk.Frame(pf, bg=CLR_BG)
+            outer.pack(fill="both", expand=True)
+            cv = tk.Canvas(outer, bg=CLR_BG, highlightthickness=0, bd=0)
+            vsb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview)
+            cv.configure(yscrollcommand=vsb.set)
+            vsb.pack(side="right", fill="y")
+            cv.pack(side="left", fill="both", expand=True)
+            body = tk.Frame(cv, bg=CLR_BG)
+            _cw = cv.create_window((0, 0), window=body, anchor="nw")
+            body.bind("<Configure>",
+                      lambda _e: cv.configure(scrollregion=cv.bbox("all")))
+            cv.bind("<Configure>",
+                    lambda _e: cv.itemconfigure(_cw, width=cv.winfo_width()))
+
+            def _on_wheel(e, _cv=cv):
+                f, l = _cv.yview()
+                if f <= 0.0 and l >= 1.0:
+                    return                       # 内容不满一屏，无需滚
+                _cv.yview_scroll(int(-e.delta / 120), "units")
+                return "break"
+
+            def _bind_wheel(w, _on=_on_wheel):
+                # 已有滚轮绑定 / 自带滚动的控件不动（树、下拉、文本框等）
+                for c in w.winfo_children():
+                    if c.winfo_class() in ("Treeview", "Listbox", "Text",
+                                           "Scrollbar", "Combobox") \
+                            or c.bind("<MouseWheel>"):
+                        continue
+                    c.bind("<MouseWheel>", _on)
+                    _bind_wheel(c)
+
+            cv.bind("<MouseWheel>", _on_wheel)
+            body.bind("<MouseWheel>", _on_wheel)
+            scroll_bodies.append((body, _bind_wheel))
+            return body
 
         def card(parent, title, subtitle=None):
             """一张设置卡片：左侧竖色条 + 标题 + 灰色说明 + 内容区。"""
@@ -3613,6 +3651,10 @@ class App(object):
         tk.Label(side, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_MUTED,
                  font=(fam, 8)).pack(pady=(0, 10))
 
+        # 滚轮覆盖：页面内容此刻已全部创建，递归绑到每个子控件
+        for _body, _bindfn in scroll_bodies:
+            _bindfn(_body)
+
         def _close():
             try:
                 lan_panel._cleanup()
@@ -3623,7 +3665,7 @@ class App(object):
         win.protocol("WM_DELETE_WINDOW", _close)
         win.bind("<Escape>", lambda e: _close())
         show(page)
-        center_window(win, self.root, size=(880, 600), force=True)
+        center_window(win, self.root, size=(1040, 700), force=True)
     def _soft_reboot(self):
         """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
 
