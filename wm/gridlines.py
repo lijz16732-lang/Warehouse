@@ -100,7 +100,17 @@ class TreeDecor(object):
                 vpos.append(int(x))
         hpos = []
         pills = []
-        for iid in t.get_children():
+        # 只扫视口内的行：整页 2000+ 行时逐行问 bbox 要 10ms，滚动会发涩
+        kids = t.get_children()
+        try:
+            yf = t.yview()
+            n = len(kids)
+            i0 = max(0, int(yf[0] * n) - 2)
+            i1 = min(n, int(yf[1] * n) + 3)
+            scan = kids[i0:i1] if n else kids
+        except Exception:
+            scan = kids
+        for iid in scan:
             try:
                 bb = t.bbox(str(iid))
             except Exception:
