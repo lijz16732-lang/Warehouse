@@ -3264,11 +3264,11 @@ class App(object):
         except Exception:
             pass
 
-    def open_appearance(self):
+    def open_appearance(self, page="look"):
         """设置：左侧分类导航 + 右侧内容卡片（参考主流设置页样式）。
 
-        分类：外观 / 快捷键 / 通用组（启动行为 · 默认路径 · 文件格式与兼容性）。
-        除「应用外观」外全部即时保存；功能与旧版设置页一一对应，未增未减。
+        分类：外观 / 快捷键 / 局域网共享 / 通用组（启动行为 · 默认路径 ·
+        文件格式与兼容性）。除「应用外观」外全部即时保存，无需确认。
         """
         from .constants import UI_THEME
         s = getattr(self, "ui_scale", 1.0)
@@ -3282,7 +3282,7 @@ class App(object):
         win.grab_set()
 
         # ---- 左侧分类导航 ----
-        side = tk.Frame(win, bg=CLR_CARD, width=int(150 * s),
+        side = tk.Frame(win, bg=CLR_CARD, width=int(170 * s),
                         highlightbackground=CLR_BORDER, highlightthickness=1)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
@@ -3322,12 +3322,13 @@ class App(object):
                      lambda e, k=key: item_lbls[k].configure(
                          bg=CLR_CARD) if state["cur"] != k else None)
 
-        def _page(key, title):
+        def _page(key, title=None):
             pf = tk.Frame(content, bg=CLR_BG)
             pages[key] = pf
-            tk.Label(pf, text=title, bg=CLR_BG, fg=CLR_TEXT,
-                     font=(fam, 13, "bold")).pack(anchor="w", padx=22,
-                                                  pady=(16, 8))
+            if title:
+                tk.Label(pf, text=title, bg=CLR_BG, fg=CLR_TEXT,
+                         font=(fam, 13, "bold")).pack(anchor="w", padx=22,
+                                                      pady=(16, 8))
             return pf
 
         def card(parent, title, subtitle=None):
@@ -3591,9 +3592,19 @@ class App(object):
         hint(inner, "影响操作日志、销售利润表的 CSV 导出；XLSX 导出不受影响。"
                     "用 Excel 打开乱码时选「Excel 兼容」。")
 
+        # ================================================== 局域网共享
+        # 原独立「局域网共享」窗口整体并入（主机 / 连接主机 / 手机访问三卡片，
+        # 自带滚动；app.lan_dlg 指向面板，轮询刷新通道照旧）
+        pf = _page("lan")
+        from .lanui import LanPanel
+        lan_panel = LanPanel(pf, self, standalone=False)
+        lan_panel.pack(fill="both", expand=True)
+        self.lan_dlg = lan_panel
+
         # ---- 左侧导航装配 ----
         _side_item("\u25d0", "外观", "look")
         _side_item("\u2328", "快捷键", "keys")
+        _side_item("\u21c4", "局域网共享", "lan")
         _side_header("通用")
         _side_item("\u2302", "启动行为", "start")
         _side_item("\u2699", "默认路径", "paths")
@@ -3602,9 +3613,17 @@ class App(object):
         tk.Label(side, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_MUTED,
                  font=(fam, 8)).pack(pady=(0, 10))
 
-        win.bind("<Escape>", lambda e: win.destroy())
-        show("look")
-        center_window(win, self.root, size=(660, 560), force=True)
+        def _close():
+            try:
+                lan_panel._cleanup()
+            except Exception:
+                pass
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _close)
+        win.bind("<Escape>", lambda e: _close())
+        show(page)
+        center_window(win, self.root, size=(880, 600), force=True)
     def _soft_reboot(self):
         """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
 
@@ -3778,9 +3797,8 @@ class App(object):
 
     # ============================================================ 局域网共享
     def open_lan(self):
-        """打开「局域网共享」窗口（主机开关 / 连接主机 / 授权录入）。"""
-        from .lanui import LanDialog
-        LanDialog(self.root, self)
+        """局域网共享已并入设置窗口：打开设置并定位到「局域网共享」分类。"""
+        self.open_appearance(page="lan")
 
     def lan_status(self):
         srv = self.lan_server

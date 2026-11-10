@@ -169,8 +169,10 @@ def main():
                                          app.fam, "test"), "A9 帮助")
     close_all()
 
-    # A10 黑名单管理（LanDialog 的子窗口）
-    dlg_lan = open_case(app.open_lan, "A10-1 局域网共享（为黑名单复开）")
+    # A10 黑名单管理（LanDialog 独立窗口形态，设置内嵌面板无此子入口）
+    from wm.lanui import LanDialog
+    dlg_lan = open_case(lambda: LanDialog(app.root, app),
+                        "A10-1 局域网共享（为黑名单复开）")
     if dlg_lan is not None and dlg_lan.winfo_exists():
         open_case(lambda: dlg_lan.manage_blocked(), "A10 黑名单管理", parent=dlg_lan)
     close_all()

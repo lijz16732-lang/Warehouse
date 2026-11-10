@@ -18,30 +18,20 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
 from .lan import DEFAULT_PORT, local_ips
 
 
-class LanDialog(tk.Toplevel):
-    """『数据 → 局域网共享』窗口。"""
+class LanPanel(tk.Frame):
+    """局域网共享面板（可嵌入设置窗口，也可由 LanDialog 包成独立窗口）。
 
-    def __init__(self, master, app):
-        super().__init__(master)
+    standalone=True 时自带底部「关闭」按钮；嵌入模式下由宿主窗口负责关闭。
+    app.lan_dlg 指向本面板或外壳均可 —— refresh() / winfo_viewable() /
+    winfo_exists() 两个形态都有（app 轮询就用这三个）。
+    """
+
+    def __init__(self, master, app, standalone=True):
+        tk.Frame.__init__(self, master, bg=CLR_BG)
         self.app = app
         self.fam = app.fam
-        self.title("局域网共享")
-        self.configure(bg=CLR_BG)
-        self.transient(master)
-        apply_window_icon(self)
-        self.resizable(False, False)
+        self.standalone = standalone
         self._build()
-        # 窗口高度按实际内容计算（头部 + 卡片区 + 底部），1080p 上一屏显示完整；
-        # 1366×768 笔记本上被屏幕限制时内容区自动出现滚动条，不会裁掉「关闭」按钮
-        # 先隐藏再量尺寸：update_idletasks 会把未映射窗口按默认位置（左上角）显示
-        self.withdraw()
-        self.update_idletasks()
-        need = (self.body.winfo_reqheight() + self._head.winfo_reqheight()
-                + self._foot.winfo_reqheight() + 24)
-        center_window(self, master, size=(760, max(760, need)), force=True)
-        self.bind("<Escape>", lambda e: self.destroy())
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        app.lan_dlg = self
         self.refresh()
 
     # ------------------------------------------------------------ UI
@@ -297,10 +287,13 @@ class LanDialog(tk.Toplevel):
         ttk.Button(rowpb, text="访问日志", style="Ghost.TButton", width=9,
                    command=self.show_access_log).pack(side="right", padx=(0, 6))
 
-        # ---- 底部 ----
+        # ---- 底部（仅独立窗口形态）----
+        if not self.standalone:
+            return
         self._foot = foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=10)
-        ttk.Button(foot, text="关闭", width=10, command=self.destroy).pack(side="right")
+        ttk.Button(foot, text="关闭", width=10,
+                   command=self.winfo_toplevel().destroy).pack(side="right")
         tk.Label(foot, text="提示：主机首次开启共享时，Windows 可能询问是否允许防火墙访问，请选择「允许」。",
                  bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8)).pack(side="left")
 
@@ -1025,15 +1018,71 @@ class LanDialog(tk.Toplevel):
         self.app.ask_write_permission()
         self.refresh()
 
+    def _cleanup(self):
+        """临时二维码文件清理（宿主窗口关闭时应显式调用）。"""
+        try:
+            if self._qr_path and os.path.exists(self._qr_path):
+                os.remove(self._qr_path)
+        except Exception:
+            pass
+
+    def destroy(self):
+        self._cleanup()
+        try:
+            if getattr(self.app, "lan_dlg", None) is self:
+                self.app.lan_dlg = None
+        except Exception:
+            pass
+        tk.Frame.destroy(self)
+
+
+class LanDialog(tk.Toplevel):
+    """独立窗口版局域网共享（旧入口 / 测试探针兼容）：内容即 LanPanel。"""
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self.fam = app.fam
+        self.title("局域网共享")
+        self.configure(bg=CLR_BG)
+        self.transient(master)
+        apply_window_icon(self)
+        self.resizable(False, False)
+        self.panel = LanPanel(self, app, standalone=True)
+        self.panel.pack(fill="both", expand=True)
+        # 窗口高度按实际内容计算（头部 + 卡片区 + 底部），1080p 上一屏显示完整；
+        # 1366×768 笔记本上被屏幕限制时内容区自动出现滚动条，不会裁掉「关闭」按钮
+        # 先隐藏再量尺寸：update_idletasks 会把未映射窗口按默认位置（左上角）显示
+        self.withdraw()
+        self.update_idletasks()
+        need = (self.panel.body.winfo_reqheight()
+                + self.panel._head.winfo_reqheight()
+                + self.panel._foot.winfo_reqheight() + 24)
+        center_window(self, master, size=(760, max(760, need)), force=True)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        app.lan_dlg = self
+        self.panel.refresh()
+
+    def __getattr__(self, name):
+        """透传面板属性（btn_host / var_port / tree / ptree …），
+        让既有测试与探针的 dlg.xxx 用法零改动。"""
+        if name.startswith("panel") or name in ("app", "fam"):
+            raise AttributeError(name)
+        try:
+            return object.__getattribute__(self, "panel").__getattribute__(name)
+        except AttributeError:
+            raise AttributeError(
+                "'LanDialog' object has no attribute %r" % name) from None
+
+    def refresh(self):
+        self.panel.refresh()
+
     def destroy(self):
         try:
             if getattr(self.app, "lan_dlg", None) is self:
                 self.app.lan_dlg = None
         except Exception:
             pass
-        try:
-            if self._qr_path and os.path.exists(self._qr_path):
-                os.remove(self._qr_path)
-        except Exception:
-            pass
+        self.panel._cleanup()
         super().destroy()

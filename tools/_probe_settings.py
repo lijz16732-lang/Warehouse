@@ -112,7 +112,11 @@ chk("侧栏底部显示版本号", any(t.startswith("v1.") for t in texts),
 
 
 def find_mapped(win, cls=None, text_sub=None):
-    """找当前映射（可见）的控件。"""
+    """找当前真正可见的控件（viewable：所有祖先都已映射）。
+
+    注意不能用 winfo_ismapped：Canvas create_window 嵌入的控件
+    （局域网面板）在所在页未显示时 ismapped 仍为 True。
+    """
     found = []
     stack = [win]
     while stack:
@@ -127,7 +131,7 @@ def find_mapped(win, cls=None, text_sub=None):
             except Exception:
                 continue
         try:
-            if cur.winfo_ismapped():
+            if cur.winfo_viewable():
                 found.append(cur)
         except Exception:
             pass
@@ -135,6 +139,7 @@ def find_mapped(win, cls=None, text_sub=None):
 
 
 NAV_TEXTS = {"look": "\u25d0  外观", "keys": "\u2328  快捷键",
+             "lan": "\u21c4  局域网共享",
              "start": "\u2302  启动行为", "paths": "\u2699  默认路径",
              "format": "\u29c9  文件格式与兼容性"}
 
@@ -148,19 +153,23 @@ def click_nav(dlg, key):
         if isinstance(cur, tk.Label) and str(cur.cget("text")) == want:
             cur.event_generate("<Button-1>", x=5, y=5)
             root.update()
+            root.update_idletasks()
+            root.update()
             return True
     return False
 
 # 默认在外观页：快捷键树不可见
-chk("初始在外观页（快捷键树未显示）",
-    len(find_mapped(dlg, ttk.Treeview)) == 0)
+_mt = find_mapped(dlg, ttk.Treeview)
+chk("初始在外观页（快捷键树未显示）", len(_mt) == 0,
+    [(str(t), str(t.winfo_toplevel())) for t in _mt])
 chk("初始在外观页（应用外观按钮可见）",
     len(find_mapped(dlg, None, "应用外观")) >= 1)
 
 # 切到快捷键分类
 ok_nav = click_nav(dlg, "keys")
 chk("侧栏点击「快捷键」成功", ok_nav)
-chk("切到快捷键页（树可见）", len(find_mapped(dlg, ttk.Treeview)) == 1)
+chk("切到快捷键页（树可见）", len(find_mapped(dlg, ttk.Treeview)) >= 1,
+    len(find_mapped(dlg, ttk.Treeview)))
 chk("切到快捷键页（应用外观按钮隐藏）",
     len(find_mapped(dlg, None, "应用外观")) == 0)
 
@@ -173,6 +182,34 @@ chk("切到默认路径页（固定目录可见）",
 click_nav(dlg, "look")
 chk("切回外观页（应用外观按钮可见）",
     len(find_mapped(dlg, None, "应用外观")) >= 1)
+
+# 局域网共享分类（原独立窗口并入设置）
+ok_nav = click_nav(dlg, "lan")
+chk("侧栏点击「局域网共享」成功", ok_nav)
+chk("切到局域网共享页（本机地址可见）",
+    len(find_mapped(dlg, None, "本机地址")) >= 1)
+chk("切到局域网共享页（开启共享按钮可见）",
+    len(find_mapped(dlg, None, "开启共享")) >= 1)
+chk("app.lan_dlg 指向嵌入面板",
+    app.lan_dlg is not None and not isinstance(app.lan_dlg, tk.Toplevel),
+    type(app.lan_dlg))
+# open_lan 应打开设置窗口并定位到局域网共享页
+dlg.destroy()
+root.update()
+try:
+    root.unbind_all("<MouseWheel>")
+except Exception:
+    pass
+app.open_lan()
+root.update()
+wins = [w for w in root.winfo_children()
+        if isinstance(w, tk.Toplevel) and str(w.title()) == "设置"]
+chk("open_lan 打开设置窗口", len(wins) == 1, len(wins))
+chk("open_lan 定位到局域网共享页",
+    len(find_mapped(wins[0], None, "本机地址")) >= 1) if wins else \
+    chk("open_lan 定位到局域网共享页", False, "无设置窗口")
+wins[0].destroy() if wins else None
+root.update()
 
 dlg.destroy()
 root.update()
