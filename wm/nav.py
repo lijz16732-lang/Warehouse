@@ -104,8 +104,9 @@ class FunctionNav(tk.Frame):
                              bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9),
                              width=2)
             arrow.pack(side="left", padx=(14, 0), pady=pad_row)
-            tk.Label(head, text=title, bg=CLR_CARD, fg=CLR_TEXT,
-                     font=(self.fam, 10, "bold")).pack(side="left")
+            ttl = tk.Label(head, text=title, bg=CLR_CARD, fg=CLR_TEXT,
+                           font=(self.fam, 10, "bold"))
+            ttl.pack(side="left")
             def _hv(f, on, t=title):
                 bg = CLR_TAB_HV if on else CLR_CARD
                 f.configure(bg=bg)
@@ -114,7 +115,8 @@ class FunctionNav(tk.Frame):
                         c.configure(bg=bg)
                     except Exception:
                         pass
-            for w in (head, arrow):
+            # 组名文字、箭头、整行都响应点击（Tk 点击不冒泡，须逐个绑）
+            for w in (head, arrow, ttl):
                 w.bind("<Button-1>", lambda e, t=title: self._toggle(t))
                 w.bind("<Enter>", lambda e, f=head: _hv(f, True))
                 w.bind("<Leave>", lambda e, f=head: _hv(f, False))
