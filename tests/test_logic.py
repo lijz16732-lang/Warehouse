@@ -1954,6 +1954,12 @@ threading.excepthook = tk_hook
 import tkinter as tk
 from tkinter import ttk
 from wm.constants import center_window  # noqa: E402
+# 指针恰好停在被测窗口上时会触发 hover 高亮、污染 tag 断言（探针铁律②）
+try:
+    import ctypes as _ctypes  # noqa: E402
+    _ctypes.windll.user32.SetCursorPos(2, 2)
+except Exception:
+    pass
 root = tk.Tk()
 root.withdraw()
 try:

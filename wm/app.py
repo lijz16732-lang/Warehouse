@@ -33,6 +33,7 @@ from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
 from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
+from .gridlines import TreeDecor
 from .importer import MODE_APPEND, MODE_MERGE, MODE_REPLACE, MODE_TEXT, ask_import
 from .xlsxio import normalize_record
 from .store import Store, dedupe_records
@@ -117,6 +118,8 @@ class App(object):
         self._scroll_job = None       # 滚动后重画贴片的 idle 任务
         self._head_h = 0              # 表头高度（内容区上沿，用来裁剪贴片）
         self.hover = None             # 鼠标划过整行高亮（建表格时创建）
+        self.decor = None             # 网格线 + 上架开关覆盖层（v1.31.1）
+        self._decor_job = None        # 覆盖层重排的 idle 任务
 
         self._ui_queue = queue.Queue()
         self._stopped = False
@@ -1001,6 +1004,12 @@ class App(object):
         self.tree.bind("<KeyRelease>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._after_scroll_soon(), add="+")
 
+        # 网格线 + 「上架状态」拨动开关：Treeview 画不出单元格边框，
+        # 用 1px 细线覆盖层补齐；开关用小 Canvas 盖在该列上（v1.31.1）
+        self.decor = TreeDecor(self.tree, self)
+        # 斑马纹区间（隔行）变了以后线条也要跟着重排
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._decor_soon(), add="+")
+
         self._build_pager(table_card)
         self._build_detail(main)
 
@@ -1357,6 +1366,7 @@ class App(object):
                  % (total, self.page, pages, max(0, end - start)))
         self._update_detail()
         self._paint_overlays()
+        self._decor_soon()          # 行重建后重排网格线（等 bbox 稳定）
 
     def sort_column(self, col):
         if self.sort_key == col:
@@ -2092,6 +2102,44 @@ class App(object):
         self.load_data()
         self._status("已删除 %d 条记录（可在「数据 → 回收站」恢复）" % n)
 
+    def toggle_listed_iid(self, iid):
+        """表格「上架状态」列上的开关：单击就地切换。
+
+        不整页重载——重载会丢滚动位置和选中行；这里只改这一行的数据、
+        单元格文字与 tag，然后重刷覆盖层。
+        """
+        iid = str(iid)
+        rec = self.by_id.get(iid)
+        if rec is None:
+            return
+        if self._guard_write():
+            return
+        if int(rec.get("sold_out") or 0):
+            self._status("「%s」已售完，不能直接上架" % (rec.get("code") or "该记录"))
+            return
+        val = 0 if int(rec.get("listed") or 0) else 1
+        try:
+            self.store.set_listed([rec["id"]], val)
+        except Exception as e:
+            messagebox.showerror("操作失败", "无法修改上架状态：\n%s" % e,
+                                 parent=self.root)
+            return
+        rec["listed"] = val          # by_id 里存的就是 self.records 的同一个 dict
+        try:
+            self.tree.set(iid, "listed", self.fmt("listed", rec))
+        except Exception:
+            pass
+        try:
+            tags = [t for t in self.tree.item(iid, "tags") if t != "unlisted"]
+            if self._unlisted_hl_on() and not val:
+                tags.append("unlisted")      # 下架灰显（tag 优先级由创建先后定）
+            self.tree.item(iid, tags=tuple(tags))
+        except Exception:
+            pass
+        if self.decor is not None:
+            self.decor.redraw()
+        self._status("已%s：%s" % ("上架" if val else "下架", rec.get("code") or ""))
+
     def set_listed(self, val):
         recs = self._selected_records()
         if not recs:
@@ -2390,6 +2438,12 @@ class App(object):
         """划过的是上色行：贴片盖住了背景色，改描边作为划过提示（不重建贴片）。"""
         if self._row_has_paint(old) or self._row_has_paint(new):
             self._update_hover_outline()
+        # 开关整格铺底：换行就得重刷底色，否则旧行留下一个方框
+        if self.decor is not None:
+            try:
+                self.decor.refresh_colors()
+            except Exception:
+                self.decor.redraw()
 
     def _row_has_paint(self, iid):
         return bool(iid and self.cell_colors.get(str(iid)))
@@ -2439,6 +2493,25 @@ class App(object):
         self._scroll_job = None
         self._after_scroll()
 
+    # ------------------------------------------------ 网格线覆盖层（v1.31.1）
+    def _decor_soon(self):
+        """推迟到本轮事件处理完再排线（等 bbox / 列宽定下来）。"""
+        if self.decor is None or self._decor_job is not None:
+            return
+        try:
+            self._decor_job = self.root.after_idle(self._do_decor_job)
+        except Exception:
+            self._decor_job = None
+
+    def _do_decor_job(self):
+        self._decor_job = None
+        if self.decor is None:
+            return
+        try:
+            self.decor.redraw()
+        except Exception:
+            pass
+
     def _has_paintable(self):
         """当前页是否有已上色的单元格（滚出可视区也算，滚回来要能重画）。"""
         if not self.cell_colors or not self.by_id:
@@ -2460,6 +2533,8 @@ class App(object):
         """
         if self.hover:
             self.hover.sync()       # 行位置变了，划过的高亮要跟着换行
+        if self.decor is not None:
+            self.decor.redraw()     # 网格线/开关跟着滚动走
         if self._has_paintable():
             self._paint_overlays()
         elif self._paint_labels:

@@ -9,6 +9,7 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         FIELD_LABEL,
                         FIELD_TYPE, LISTED_TEXT, apply_window_icon, center_window)
 from .photos import PhotoStrip
+from .toggle import Toggle
 
 LISTED_OPTIONS = ["已上架", "未上架"]
 
@@ -71,9 +72,16 @@ class RecordDialog(tk.Toplevel):
                 if FIELD_TYPE[key] == "bool":
                     v = tk.StringVar(value=LISTED_TEXT.get(int(rec.get(key, 0) or 0), "未上架"))
                     self.vars[key] = v
-                    cb = ttk.Combobox(body, textvariable=v, values=LISTED_OPTIONS,
-                                      state="readonly", width=22, font=(self.fam, 10))
-                    cb.grid(row=r, column=col + 1, sticky="w", pady=6)
+                    # 拨动开关替代下拉框：状态一眼可见，单击即切（v1.31.1）
+                    # 取值仍是「已上架/未上架」，保存路径与旧逻辑完全一致
+                    box = tk.Frame(body, bg=CLR_BG)
+                    box.grid(row=r, column=col + 1, sticky="w", pady=6)
+                    sc = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
+                    Toggle(box, v, on_value=LISTED_OPTIONS[0],
+                           off_value=LISTED_OPTIONS[1], bg=CLR_BG,
+                           scale=sc).pack(side="left")
+                    tk.Label(box, textvariable=v, bg=CLR_BG, fg=CLR_MUTED,
+                             font=(self.fam, 9), anchor="w").pack(side="left", padx=(8, 0))
                 elif key == "remark":
                     txt = tk.Text(body, height=3, width=1, wrap="word", relief="solid",
                                   bd=1, highlightthickness=1, bg=CLR_INPUT, fg=CLR_TEXT,
