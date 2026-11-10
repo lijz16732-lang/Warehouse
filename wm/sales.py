@@ -1561,7 +1561,20 @@ class SalesTab(ttk.Frame):
                                 % ("出库" if self.is_out else "出售"),
                                 parent=self.app.root)
             return
-        if self.is_out:
+        fmt = "xlsx"
+        try:
+            fmt = self.app._export_fmt()
+        except Exception:
+            pass
+        if fmt == "csv":
+            from . import csvio
+            if self.is_out:
+                _do_export = lambda p, rows, _s: csvio.export_out_csv(
+                    p, rows, encoding=self.app._csv_enc())
+            else:
+                _do_export = lambda p, rows, _s: csvio.export_sales_csv(
+                    p, rows, encoding=self.app._csv_enc())
+        elif self.is_out:
             from .xlsxio import export_out_xlsx as _do_export
         else:
             from .xlsxio import export_sales_xlsx as _do_export
@@ -1575,11 +1588,13 @@ class SalesTab(ttk.Frame):
             scope = "%s~%s" % (self.var_start.get().strip() or "开始",
                                self.var_end.get().strip() or "至今")
         label = "出库记录" if self.is_out else "出售记录"
+        ext = ".csv" if fmt == "csv" else ".xlsx"
         path = filedialog.asksaveasfilename(
-            title="导出" + label, parent=self.app.root, defaultextension=".xlsx",
+            title="导出" + label, parent=self.app.root, defaultextension=ext,
             initialdir=self.app._dialog_dir(),
-            initialfile="%s_%s_%s.xlsx" % (label, wh, scope.replace("~", "_至_")),
-            filetypes=[("Excel 工作簿", "*.xlsx")])
+            initialfile="%s_%s_%s%s" % (label, wh, scope.replace("~", "_至_"), ext),
+            filetypes=[("CSV 表格", "*.csv")] if fmt == "csv"
+            else [("Excel 工作簿", "*.xlsx")])
         if not path:
             return
         self.app._note_dir(path)

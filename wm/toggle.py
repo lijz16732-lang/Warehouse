@@ -10,6 +10,14 @@ import tkinter as tk
 
 from .constants import CLR_ACCENT, CLR_ACCENT_LT, CLR_BORDER_LT, CLR_CARD
 
+# 全局开关动效（设置里可关）。app 启动时按 settings["toggle_anim"] 同步；
+# 关掉后拨动开关瞬间跳变，不跑动画。
+ANIM = {"enabled": True}
+
+
+def set_anim(flag):
+    ANIM["enabled"] = bool(flag)
+
 
 class Toggle(tk.Canvas):
     """拨动开关。variable.get() 为 on_value 时显示开启态。"""
@@ -26,7 +34,9 @@ class Toggle(tk.Canvas):
         self.off_value = off_value
         self.command = command
         self._tw, self._th = w, h
-        variable.trace_add("write", lambda *_: self._draw())
+        self._job = None                          # 动画 after id
+        self._pos = 1.0 if self.is_on() else 0.0  # 白钮位置：0=左（关）1=右（开）
+        variable.trace_add("write", lambda *_: self._sync_from_var())
         self.bind("<Button-1>", self._flip)
         self._draw()
 
@@ -41,6 +51,43 @@ class Toggle(tk.Canvas):
         if self.command:
             self.command()
 
+    def _sync_from_var(self):
+        """变量变化 → 目标位置。能动画就滑过去，关掉动效时瞬间到位。"""
+        target = 1.0 if self.is_on() else 0.0
+        if ANIM["enabled"] and abs(target - self._pos) > 0.001:
+            self._animate_to(target)   # 动画中再点会取消旧动画、从当前位置重来
+        else:
+            if self._job is not None:
+                try:
+                    self.after_cancel(self._job)
+                except Exception:
+                    pass
+                self._job = None
+            self._pos = target
+            self._draw()
+
+    def _animate_to(self, target, steps=8):
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+        start = self._pos
+        delta = target - start
+
+        def step(i):
+            self._pos = start + delta * (i / float(steps))
+            self._draw()
+            if i < steps:
+                self._job = self.after(16, lambda: step(i + 1))
+            else:
+                self._pos = target
+                self._job = None
+                self._draw()
+
+        step(1)
+
     def _draw(self):
         self.delete("all")
         w, h = self._tw, self._th
@@ -53,7 +100,7 @@ class Toggle(tk.Canvas):
         self.create_oval(w - m - d, m, w - m, m + d, fill=fill, outline=fill)
         self.create_rectangle(m + d / 2, m, w - m - d / 2, m + d,
                               fill=fill, outline=fill)
-        # 白钮
-        kx = (w - m - d) if on else m           # 开在右，关在左
+        # 白钮：按当前动画进度插值位置
+        kx = m + (w - 2 * m - d) * self._pos
         self.create_oval(kx, m, kx + d, m + d, fill="#FFFFFF",
                          outline=CLR_ACCENT_LT if on else "#9AA3B2")

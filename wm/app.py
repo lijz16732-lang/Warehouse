@@ -130,6 +130,16 @@ class App(object):
         self._reboot = False          # _soft_reboot 置位 → main() 原地重建界面
         self._busy = False
         self._debounce = None
+        self.tray = None              # 托盘图标（按设置延迟创建）
+        self._quitting = False        # 正在真正退出（避免关闭时又最小化到托盘）
+
+        # 开关动效（设置里可关）：必须在建界面前同步，弹窗里的开关才会生效
+        try:
+            from .toggle import set_anim as _set_toggle_anim
+            self._toggle_anim = _set_toggle_anim
+            _set_toggle_anim(bool(self.settings.get("toggle_anim", True)))
+        except Exception:
+            self._toggle_anim = None
 
         self._build_menubar()
         self._build()
@@ -157,6 +167,9 @@ class App(object):
         self._lan_last_ok = True
         root.after(2000, self._lan_tick)
         root.after(1500, self._startup_auto_backup)
+        root.after(1800, self._startup_housekeeping)
+        root.after(900, self._ensure_tray)
+        root.bind("<Unmap>", self._on_unmap)
         if self._lan_error:
             err, self._lan_error = self._lan_error, ""
             root.after(300, lambda: messagebox.showwarning("连不上主机", err,
@@ -217,6 +230,8 @@ class App(object):
         cfg.setdefault("host", "")
         cfg.setdefault("default_allow", False)
         cfg.setdefault("phone_access", True)
+        cfg.setdefault("code_rotate", "off")      # off / daily / weekly
+        cfg.setdefault("last_code_rotate", 0.0)
         cfg.setdefault("client_name", socket.gethostname()[:40])
         cfg.setdefault("client_id", "%s-%04d" % (socket.gethostname(),
                                                 random.randint(1000, 9999)))
@@ -1384,10 +1399,11 @@ class App(object):
         self.by_id = {}
         hl = self._low_hl_on()
         un_hl = self._unlisted_hl_on()
+        zebra = self._zebra_on()
         for i, rec in enumerate(self.filtered[start:end]):
             rid = str(rec["id"])
             self.by_id[rid] = rec
-            tags = ["odd"] if i % 2 else []
+            tags = ["odd"] if (zebra and i % 2) else []
             if int(rec.get("sold_out") or 0):
                 tags.append("sold")          # 已售完：灰显
             else:
@@ -2459,6 +2475,18 @@ class App(object):
         self._status("低库存橙色高亮已%s" % ("开启" if on else "关闭"))
 
     # ------------------------------------------------- 下架（未上架）灰显
+    def _zebra_on(self):
+        """斑马纹（隔行浅底）是否开启，默认开启。设置里可关。"""
+        try:
+            return bool(self.settings.get("zebra", True))
+        except Exception:
+            return True
+
+    def set_zebra(self, flag):
+        self.settings["zebra"] = bool(flag)
+        self._save_settings()
+        self.render_page()
+
     def _unlisted_hl_on(self):
         """下架行灰显是否开启（默认开启，方便一眼区分没上架的货）。"""
         try:
@@ -2924,6 +2952,163 @@ class App(object):
         except Exception:
             pass
 
+    # ------------------------------------------------------------ 启动维护
+    def _startup_housekeeping(self):
+        """启动时的后台维护：回收站按天数自动清理 + 连接码定期自动更换。
+
+        两项都在窗口显示后延迟执行，失败静默（不影响正常使用）。
+        """
+        self._purge_recycle_auto()
+        self._rotate_code_auto()
+
+    def _purge_recycle_auto(self):
+        """回收站保留天数（0 = 永久保留，默认）。客户端不碰本地库。"""
+        if self.lan_mode == "client":
+            return 0
+        try:
+            days = int(self.settings.get("recycle_days", 0) or 0)
+        except (TypeError, ValueError):
+            days = 0
+        if days <= 0:
+            return 0
+        try:
+            n = self.store.purge_trash_older(days)
+        except Exception:
+            return 0
+        if n:
+            self._status("已自动清理回收站中超过 %d 天的 %d 条记录" % (days, n))
+        return n
+
+    def _rotate_code_auto(self):
+        """连接码定期自动更换（off / daily / weekly）；客户端不是主机，跳过。"""
+        if self.lan_mode == "client":
+            return False
+        freq = str(self.lan_cfg.get("code_rotate") or "off")
+        interval = {"daily": 86400, "weekly": 7 * 86400}.get(freq, 0)
+        if not interval:
+            return False
+        last = float(self.lan_cfg.get("last_code_rotate") or 0)
+        if last and time.time() - last < interval:
+            return False
+        self.rotate_lan_code()
+        return True
+
+    def set_lan_code_rotate(self, key):
+        """设置连接码自动更换周期（off / daily / weekly）；从现在起计时。"""
+        key = key if key in ("off", "daily", "weekly") else "off"
+        self.lan_cfg["code_rotate"] = key
+        self.lan_cfg["last_code_rotate"] = time.time()
+        self._save_lan_cfg()
+
+    def rotate_lan_code(self, silent=False):
+        """换一个新连接码；主机开着就顺手重启主机让新码立即生效。"""
+        code = "%06d" % random.randint(0, 999999)
+        self.lan_cfg["code"] = code
+        self.lan_cfg["last_code_rotate"] = time.time()
+        self._save_lan_cfg()
+        restarted = False
+        if self.lan_mode == "host":
+            try:
+                self.stop_lan_host()
+                ok, msg = self.start_lan_host(self.lan_cfg.get("port"), code)
+                restarted = bool(ok)
+                if not ok:
+                    self._status("换码后重启共享失败：%s" % msg)
+            except Exception as e:
+                self._status("换码后重启共享失败：%s" % e)
+        for fn in ("on_lan_code_changed",):
+            cb = getattr(self, fn, None)
+            if callable(cb):
+                try:
+                    cb()
+                except Exception:
+                    pass
+        hook = getattr(self, "_lan_code_hook", None)   # 设置页里的连接码输入框
+        if callable(hook):
+            try:
+                hook(code)
+            except Exception:
+                pass
+        if not silent:
+            msg = "连接码已更换为 %s" % code
+            if restarted:
+                msg += "，已连接的电脑需用新码重新连接"
+            self._status(msg)
+        return code
+
+    # ------------------------------------------------------------ 托盘
+    def _tray_wanted(self):
+        """是否需要托盘图标：任一托盘相关开关打开就要有图标。"""
+        return bool(self.settings.get("close_to_tray")
+                    or self.settings.get("min_to_tray"))
+
+    def _ensure_tray(self):
+        """按设置启动/关闭托盘图标（幂等，可在设置里来回切换）。"""
+        if self._tray_wanted():
+            if getattr(self, "tray", None) is not None:
+                return
+            try:
+                from .tray import TrayIcon
+                from .constants import app_icon_path
+                tr = TrayIcon(APP_SHORT, app_icon_path(),
+                              tooltip="%s · %s" % (APP_SHORT, self.cur_wh()["name"]),
+                              on_show=self._tray_show,
+                              on_settings=self._tray_settings,
+                              on_exit=self._tray_exit, master=self.root)
+                if tr.start():
+                    self.tray = tr
+                else:
+                    self.tray = None
+                    self._status("托盘图标启动失败，最小化/关闭仍按原方式处理")
+            except Exception as e:
+                self.tray = None
+                self._status("托盘图标不可用：%s" % e)
+        else:
+            tr, self.tray = getattr(self, "tray", None), None
+            if tr is not None:
+                try:
+                    tr.stop()
+                except Exception:
+                    pass
+
+    def _tray_show(self):
+        """托盘「显示主窗口」/ 左键单击：恢复窗口并置顶。"""
+        try:
+            self.root.deiconify()
+            self.root.state("normal")
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def _tray_settings(self):
+        self._tray_show()
+        self.open_appearance()
+
+    def _tray_exit(self):
+        self._quitting = True
+        self.on_close()
+
+    def _on_unmap(self, _e=None):
+        """最小化到托盘：窗口被最小化（iconic）时隐藏到托盘。"""
+        if self._quitting or not self.settings.get("min_to_tray"):
+            return
+        try:
+            if self.root.state() == "iconic" and self.tray is not None:
+                self.root.withdraw()
+                self.tray.balloon("程序已最小化到托盘，双击图标可恢复。")
+        except Exception:
+            pass
+
+    def _hide_to_tray(self):
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+        if self.tray is not None:
+            self.tray.balloon("程序仍在后台运行（局域网共享 / 手机访问不受影响），"
+                              "双击托盘图标可恢复窗口。")
+
     def clear_all(self):
         if self._guard_write():
             return
@@ -3172,15 +3357,34 @@ class App(object):
         messagebox.showinfo("导入完成", msg, parent=self.root)
         self._status(txt)
 
+    def _export_fmt(self):
+        """默认导出格式（设置里可选 XLSX / CSV），默认 XLSX。"""
+        return "csv" if str(self.settings.get("export_format") or "xlsx").lower() == "csv" \
+            else "xlsx"
+
     def do_export(self, all_data=False):
         recs = self.records if all_data else self.filtered
         if not recs:
             messagebox.showinfo("无数据", "当前没有可导出的数据。", parent=self.root)
             return
-        default = "库存数据_%s.xlsx" % datetime.now().strftime("%Y%m%d_%H%M")
+        ts = datetime.now().strftime("%Y%m%d_%H%M")
+        if self._export_fmt() == "csv":
+            from . import csvio
+            path = filedialog.asksaveasfilename(
+                title="导出为 CSV", parent=self.root, defaultextension=".csv",
+                initialdir=self._dialog_dir(), initialfile="库存数据_%s.csv" % ts,
+                filetypes=[("CSV 表格", "*.csv"), ("所有文件", "*.*")])
+            if not path:
+                return
+            self._note_dir(path)
+            enc = self._csv_enc()
+            self._run_bg(lambda: csvio.export_records_csv(path, recs, encoding=enc),
+                         lambda r, e: self._export_done(r, e, path, len(recs)),
+                         "正在导出…")
+            return
         path = filedialog.asksaveasfilename(
             title="导出为 XLSX", parent=self.root, defaultextension=".xlsx",
-            initialdir=self._dialog_dir(), initialfile=default,
+            initialdir=self._dialog_dir(), initialfile="库存数据_%s.xlsx" % ts,
             filetypes=[("Excel 工作簿", "*.xlsx")])
         if not path:
             return
@@ -3287,6 +3491,12 @@ class App(object):
                 break
             try:
                 fn(*args)
+            except Exception:
+                pass
+        tr = getattr(self, "tray", None)
+        if tr is not None:
+            try:
+                tr.poll()          # 托盘菜单命令（主线程执行）
             except Exception:
                 pass
         try:
@@ -3411,6 +3621,25 @@ class App(object):
         文件格式与兼容性）。除「应用外观」外全部即时保存，无需确认。
         """
         from .constants import UI_THEME
+        # 防重入：托盘菜单 / 状态条 / 菜单栏都可能同时要求打开设置，
+        # 已有窗口就把它提到最前并切到对应分类，不再开第二个
+        old = getattr(self, "_settings_win", None)
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.deiconify()
+                    old.lift()
+                    old.focus_force()
+                    fn = getattr(old, "_show_page", None)
+                    if callable(fn):
+                        try:
+                            fn(page)
+                        except Exception:
+                            pass
+                    return
+            except Exception:
+                pass
+            self._settings_win = None
         s = getattr(self, "ui_scale", 1.0)
         fam = self.fam
         win = tk.Toplevel(self.root)
@@ -3583,6 +3812,43 @@ class App(object):
                        selectcolor=CLR_INPUT, activebackground=CLR_CARD,
                        font=(fam, 10)).pack(anchor="w")
         hint(inner, "改过的标题按仓库保存：新建仓库也可以按自己的记录习惯改名。")
+
+        inner = card(pf, "表格显示", "这几项只影响本机界面显示，不改变任何数据")
+        try:
+            if not hasattr(self, "var_show_detail"):
+                self.var_show_detail = tk.BooleanVar(
+                    value=bool(self.settings.get("show_detail", True)))
+        except Exception:
+            pass
+        tk.Checkbutton(inner, text="显示详情面板（表格下方，选中行即可看完整信息）",
+                       variable=self.var_show_detail, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10),
+                       command=self._toggle_detail).pack(anchor="w")
+
+        var_zebra = tk.BooleanVar(value=self._zebra_on())
+        tk.Checkbutton(inner, text="斑马纹（隔行浅色底，长列表更容易对齐行）",
+                       variable=var_zebra, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10),
+                       command=lambda: self.set_zebra(var_zebra.get())
+                       ).pack(anchor="w")
+
+        var_anim = tk.BooleanVar(
+            value=bool(self.settings.get("toggle_anim", True)))
+
+        def save_anim(*_a):
+            self.settings["toggle_anim"] = bool(var_anim.get())
+            self._save_settings()
+            if self._toggle_anim is not None:
+                self._toggle_anim(bool(var_anim.get()))
+
+        var_anim.trace_add("write", save_anim)
+        tk.Checkbutton(inner, text="开关动效（编辑弹窗里的上架开关滑动动画）",
+                       variable=var_anim, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+        hint(inner, "关掉后拨动开关瞬间切换，低配电脑上更跟手。")
 
         # ================================================== 快捷键
         pf = _page("keys", "快捷键")
@@ -3855,6 +4121,134 @@ class App(object):
         hint(inner, "影响操作日志、销售利润表的 CSV 导出；XLSX 导出不受影响。"
                     "用 Excel 打开乱码时选「Excel 兼容」。")
 
+        inner = card(pf, "默认导出格式",
+                     "「导出库存」和「出售 / 出库记录」默认用这种格式，"
+                     "统计报表与采购记录仍是 XLSX")
+        row_f = tk.Frame(inner, bg=CLR_CARD)
+        row_f.pack(anchor="w")
+        tk.Label(row_f, text="默认格式", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        fmt_names = ["Excel 工作簿（.xlsx）", "CSV 表格（.csv）"]
+        var_fmt = tk.StringVar(value=fmt_names[1] if self._export_fmt() == "csv"
+                               else fmt_names[0])
+
+        def on_fmt(*_a):
+            self.settings["export_format"] = (
+                "csv" if str(var_fmt.get()).startswith("CSV") else "xlsx")
+            self._save_settings()
+
+        cb_f = ttk.Combobox(row_f, textvariable=var_fmt, state="readonly",
+                            width=24, font=(fam, 9), values=fmt_names)
+        cb_f.bind("<<ComboboxSelected>>", on_fmt)
+        cb_f.pack(side="left")
+        hint(inner, "XLSX 带样式和汇总表；CSV 用 Excel / WPS 都能直接打开，"
+                    "适合给别的软件导入。")
+
+        # ================================================== 系统与后台
+        pf = _page("system", "系统与后台")
+        inner = card(pf, "开机与托盘", "托盘功能只在本机生效，可随时关掉")
+        from . import autostart as _autostart
+        var_boot = tk.BooleanVar(value=False)
+        try:
+            var_boot.set(_autostart.is_enabled())
+        except Exception:
+            pass
+
+        def save_boot(*_a):
+            want = bool(var_boot.get())
+            try:
+                got, msg = _autostart.sync(want)
+            except Exception as e:
+                got, msg = want, str(e)
+            self.settings["autostart"] = bool(got)
+            self._save_settings()
+            if got != want:
+                messagebox.showwarning(
+                    "开机自启", "设置失败：%s\n\n可稍后再试，或用管理员身份运行一次本程序。"
+                                % msg, parent=win)
+                var_boot.set(bool(got))
+
+        var_boot.trace_add("write", save_boot)
+        tk.Checkbutton(inner, text="开机时自动启动（登录 Windows 后自动打开仓管家）",
+                       variable=var_boot, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+
+        var_tray_min = tk.BooleanVar(
+            value=bool(self.settings.get("min_to_tray", False)))
+
+        def save_tray_min(*_a):
+            self.settings["min_to_tray"] = bool(var_tray_min.get())
+            self._save_settings()
+            self._ensure_tray()
+
+        var_tray_min.trace_add("write", save_tray_min)
+        tk.Checkbutton(inner, text="最小化时隐藏到托盘（不在任务栏占位置）",
+                       variable=var_tray_min, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+
+        var_tray_close = tk.BooleanVar(
+            value=bool(self.settings.get("close_to_tray", False)))
+
+        def save_tray_close(*_a):
+            self.settings["close_to_tray"] = bool(var_tray_close.get())
+            self._save_settings()
+            self._ensure_tray()
+
+        var_tray_close.trace_add("write", save_tray_close)
+        tk.Checkbutton(inner, text="点关闭按钮时最小化到托盘（共享服务继续运行）",
+                       variable=var_tray_close, bg=CLR_CARD, fg=CLR_TEXT,
+                       selectcolor=CLR_INPUT, activebackground=CLR_CARD,
+                       font=(fam, 10)).pack(anchor="w")
+        hint(inner, "开启后右下角托盘会出现图标：左键单击显示窗口，右键可打开设置或真正退出。"
+                    "局域网共享、手机访问在托盘状态下照常工作。")
+
+        inner = card(pf, "回收站", "删除的记录先进回收站，超过保留天数的会在启动时自动彻底删除")
+        row_r = tk.Frame(inner, bg=CLR_CARD)
+        row_r.pack(anchor="w")
+        tk.Label(row_r, text="保留时间", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        day_names = [("永久保留", 0), ("30 天", 30), ("60 天", 60),
+                     ("90 天", 90), ("180 天", 180)]
+        day_to_name = {d: n for n, d in day_names}
+        name_to_day = {n: d for n, d in day_names}
+        try:
+            cur_days = int(self.settings.get("recycle_days", 0) or 0)
+        except (TypeError, ValueError):
+            cur_days = 0
+        var_days = tk.StringVar(value=day_to_name.get(cur_days, "永久保留"))
+
+        def on_days(*_a):
+            days = name_to_day.get(var_days.get(), 0)
+            self.settings["recycle_days"] = days
+            self._save_settings()
+            if days > 0:
+                n = self._purge_recycle_auto()
+                messagebox.showinfo("回收站", "已设置保留 %d 天。%s"
+                                    % (days, "本次清理了 %d 条旧记录。" % n
+                                       if n else "暂无需要清理的旧记录。"),
+                                    parent=win)
+
+        cb_d = ttk.Combobox(row_r, textvariable=var_days, state="readonly",
+                            width=14, font=(fam, 9),
+                            values=[n for n, _d in day_names])
+        cb_d.bind("<<ComboboxSelected>>", on_days)
+        cb_d.pack(side="left")
+
+        def clean_now():
+            if name_to_day.get(var_days.get(), 0) <= 0:
+                messagebox.showinfo("回收站", "当前是「永久保留」，"
+                                              "先选择保留天数再清理。", parent=win)
+                return
+            n = self._purge_recycle_auto()
+            messagebox.showinfo("回收站", "已清理 %d 条超过保留时间的记录。" % n
+                                if n else "没有超过保留时间的记录。", parent=win)
+
+        ttk.Button(row_r, text="立即清理", style="Ghost.TButton",
+                   command=clean_now).pack(side="left", padx=(10, 0))
+        hint(inner, "回收站里的记录在保留期内随时可以恢复；改成「永久保留」则永不自动删除。")
+
         # ================================================== 局域网共享
         # 原独立「局域网共享」窗口整体并入（主机 / 连接主机 / 手机访问三卡片，
         # 自带滚动；app.lan_dlg 指向面板，轮询刷新通道照旧）
@@ -3873,6 +4267,7 @@ class App(object):
         _side_item("\u2699", "默认路径", "paths")
         _side_item("\u2726", "数据安全", "backup")
         _side_item("\u29c9", "文件格式与兼容性", "format")
+        _side_item("\u26a1", "系统与后台", "system")
         tk.Frame(side, bg=CLR_CARD).pack(expand=True)   # 底部占位
         tk.Label(side, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_MUTED,
                  font=(fam, 8)).pack(pady=(0, 10))
@@ -3886,12 +4281,17 @@ class App(object):
                 lan_panel._cleanup()
             except Exception:
                 pass
+            if getattr(self, "_settings_win", None) is win:
+                self._settings_win = None
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", _close)
         win.bind("<Escape>", lambda e: _close())
+        self._settings_win = win
+        win._show_page = show
         show(page)
         center_window(win, self.root, size=(1040, 700), force=True)
+
     def _soft_reboot(self):
         """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
 
@@ -4007,7 +4407,7 @@ class App(object):
                 tv.insert("", "end", values=(
                     t, r.get("src") or "", r.get("act") or "",
                     r.get("code") or "", r.get("detail") or ""),
-                    tags=("odd",) if i % 2 else ())
+                    tags=("odd",) if (i % 2 and self._zebra_on()) else ())
             self.lbl_log_stat.configure(
                 text="共 %d 条（最多显示最近 2000 条；日志保留 180 天自动清理）" % len(rows))
         except Exception as e:
@@ -4084,6 +4484,8 @@ class App(object):
                                  else self.lan_cfg.get("phone_access", True)),
             "can_write": bool(self.can_write),
             "client_name": str(self.lan_cfg.get("client_name") or ""),
+            "code_rotate": str(self.lan_cfg.get("code_rotate") or "off"),
+            "last_code_rotate": float(self.lan_cfg.get("last_code_rotate") or 0),
         }
 
     # ------------------------------------------------------------ 顶部状态条
@@ -4527,7 +4929,19 @@ class App(object):
             pass
 
     def on_close(self):
+        # 关闭按钮：设置了「关闭时最小化到托盘」就只隐藏，真正退出走托盘菜单
+        if (not self._quitting and self.tray is not None
+                and bool(self.settings.get("close_to_tray"))):
+            self._hide_to_tray()
+            return
+        self._quitting = True
         self._stopped = True
+        tr, self.tray = getattr(self, "tray", None), None
+        if tr is not None:
+            try:
+                tr.stop()
+            except Exception:
+                pass
         if self.lan_server:
             try:
                 self.lan_server.stop()

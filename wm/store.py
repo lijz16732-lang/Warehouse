@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .constants import (FIELD_KEYS, FIELD_TYPE, LISTED_TEXT, MODEL_BLANK,
                         MULTI_SEP, OUT_TYPE_SALE, is_blank_model, norm_model)
@@ -1061,6 +1061,38 @@ class Store(object):
         self.log_op("彻底删除", "、".join(codes[:6]) + ("…" if len(codes) > 6 else ""),
                     "%d 条（回收站）" % cur.rowcount)
         return cur.rowcount
+
+    def purge_trash_older(self, days):
+        """回收站自动清理：删除 deleted_at 早于 days 天前的记录（days<=0 表示永久保留）。
+
+        返回实际清理条数。照片一并清理，并写一条操作日志。
+        """
+        try:
+            days = int(days)
+        except (TypeError, ValueError):
+            days = 0
+        if days <= 0:
+            return 0
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            rows = self.conn.execute(
+                'SELECT id, code FROM items WHERE deleted_at IS NOT NULL '
+                'AND deleted_at < ?', (cutoff,)).fetchall()
+            if not rows:
+                return 0
+            ph = ", ".join(["?"] * len(rows))
+            ids = [r["id"] for r in rows]
+            self.conn.execute(
+                "DELETE FROM items WHERE id IN ({ph})".format(ph=ph), ids)
+            self.conn.commit()
+        for r in rows:
+            if r["code"]:
+                try:
+                    self.photos_wipe("item", r["code"])
+                except Exception:
+                    pass
+        self.log_op("自动清理", "", "回收站中超过 %d 天的 %d 条记录" % (days, len(rows)))
+        return len(rows)
 
     def purge_all_deleted(self):
         codes = [r["code"] for r in

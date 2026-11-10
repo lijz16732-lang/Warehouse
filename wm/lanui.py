@@ -5,6 +5,7 @@ import os
 import tempfile
 import threading
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, ttk
 
 try:
@@ -16,6 +17,9 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN,
                         apply_window_icon, center_window)
 from .lan import DEFAULT_PORT, local_ips
+
+ROTATE_LABEL = {"off": "不自动更换", "daily": "每天换一次", "weekly": "每周换一次"}
+ROTATE_KEY = {v: k for k, v in ROTATE_LABEL.items()}
 
 
 class LanPanel(tk.Frame):
@@ -32,6 +36,22 @@ class LanPanel(tk.Frame):
         self.fam = app.fam
         self.standalone = standalone
         self._build()
+        # 连接码被自动更换时，设置页里的输入框要跟着变
+        try:
+            app._lan_code_hook = self._apply_code
+        except Exception:
+            pass
+        self.refresh()
+
+    def _apply_code(self, code):
+        try:
+            self.var_code.set(str(code or ""))
+        except Exception:
+            pass
+
+    def on_rotate_change(self, _e=None):
+        key = ROTATE_KEY.get(str(self.var_rotate.get()), "off")
+        self.app.set_lan_code_rotate(key)
         self.refresh()
 
     # ------------------------------------------------------------ UI
@@ -112,6 +132,21 @@ class LanPanel(tk.Frame):
         self.btn_newcode = ttk.Button(row2, text="换一个", style="Ghost.TButton", width=7,
                                       command=self.new_code)
         self.btn_newcode.pack(side="left")
+
+        # 连接码定期自动更换（防止码长期不变）
+        row_rot = tk.Frame(host, bg=CLR_CARD)
+        row_rot.pack(fill="x", padx=14, pady=(0, 6))
+        tk.Label(row_rot, text="自动更换连接码", bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        self.var_rotate = tk.StringVar(value="不自动更换")
+        self.cb_rotate = ttk.Combobox(row_rot, textvariable=self.var_rotate,
+                                      state="readonly", width=10,
+                                      values=("不自动更换", "每天换一次", "每周换一次"))
+        self.cb_rotate.pack(side="left", padx=(4, 8))
+        self.cb_rotate.bind("<<ComboboxSelected>>", self.on_rotate_change)
+        self.lbl_rotate = tk.Label(row_rot, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                                   font=(self.fam, 8))
+        self.lbl_rotate.pack(side="left")
 
         row3 = tk.Frame(host, bg=CLR_CARD)
         row3.pack(fill="x", padx=14, pady=(0, 6))
@@ -387,6 +422,19 @@ class LanPanel(tk.Frame):
             self.var_code.set(st["code"])
         self.var_allow_new.set(bool(st["default_allow"]))
         self.var_phone_access.set(bool(st.get("phone_access", True)))
+        # 连接码自动更换状态
+        rot = str(st.get("code_rotate") or "off")
+        self.var_rotate.set(ROTATE_LABEL.get(rot, "不自动更换"))
+        last = float(st.get("last_code_rotate") or 0)
+        if rot == "off":
+            hint = "连接码长期不变"
+        elif last:
+            hint = "上次更换：%s" % datetime.fromtimestamp(last).strftime("%m-%d %H:%M")
+        else:
+            hint = "开启后按设定周期自动更换"
+        self.lbl_rotate.configure(text=hint)
+        self.cb_rotate.configure(state="disabled" if st["mode"] == "client"
+                                 else "readonly")
         # 客户端时「开启共享」直接置灰，防止误点顶掉当前连接（v1.11.2）
         in_client = mode == "client"
         self.btn_host.configure(text="停止共享" if st["running"] else "开启共享",
@@ -673,10 +721,12 @@ class LanPanel(tk.Frame):
 
     def new_code(self):
         import random
-        self.var_code.set("%06d" % random.randint(0, 999999))
         if self.app.lan_mode == "host":
-            self.app.stop_lan_host()
-            self.toggle_host()
+            self.app.rotate_lan_code(silent=True)   # 主机运行中：换码并重启共享
+            self.var_code.set(str(self.app.lan_cfg.get("code") or ""))
+            self.refresh()
+            return
+        self.var_code.set("%06d" % random.randint(0, 999999))
 
     def toggle_host(self):
         st = self.app.lan_status()
