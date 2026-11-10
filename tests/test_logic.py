@@ -1964,6 +1964,11 @@ root = tk.Tk()
 root.withdraw()
 try:
     app = wapp.App(root)
+    # 启动行为「记住上次的页面」可能恢复到其它页（上一轮测试退出时停留的页），
+    # 测试所有几何/贴片断言都基于库存页 → 强制回到页 0
+    if app.nb.index(app.nb.select()) != 0:
+        app.nb.select(0)
+        root.update()
     root.deiconify()
     root.update()
     # ---- 屏幕自适应（v1.12.0）：窗口尺寸 / 最小尺寸 / 行高跟随屏幕与 DPI ----

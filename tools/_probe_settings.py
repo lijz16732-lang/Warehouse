@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import tkinter as tk
+from tkinter import ttk
 
 sys.path.insert(0, ".")
 sys.path.insert(0, "tools")
@@ -103,15 +104,75 @@ for need in ("外观", "启动行为", "默认路径", "文件格式与兼容性
     chk("设置页含「%s」" % need, any(need in t for t in texts),
         [t for t in texts if len(t) > 3][:8])
 
-# 滚动容器存在
-canvases = []
-stack = [dlg]
-while stack:
-    cur = stack.pop()
-    stack.extend(cur.winfo_children())
-    if isinstance(cur, tk.Canvas):
-        canvases.append(cur)
-chk("设置页有滚动画布", len(canvases) == 1)
+# 左侧分类导航存在 + 分组标题 + 版本号
+for need in ("通用",):
+    chk("侧栏含「%s」分组" % need, need in texts)
+chk("侧栏底部显示版本号", any(t.startswith("v1.") for t in texts),
+    [t for t in texts if t.startswith("v")][:4])
+
+
+def find_mapped(win, cls=None, text_sub=None):
+    """找当前映射（可见）的控件。"""
+    found = []
+    stack = [win]
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.winfo_children())
+        if cls is not None and not isinstance(cur, cls):
+            continue
+        if text_sub is not None:
+            try:
+                if text_sub not in str(cur.cget("text")):
+                    continue
+            except Exception:
+                continue
+        try:
+            if cur.winfo_ismapped():
+                found.append(cur)
+        except Exception:
+            pass
+    return found
+
+
+NAV_TEXTS = {"look": "\u25d0  外观", "keys": "\u2328  快捷键",
+             "start": "\u2302  启动行为", "paths": "\u2699  默认路径",
+             "format": "\u29c9  文件格式与兼容性"}
+
+
+def click_nav(dlg, key):
+    want = NAV_TEXTS[key]
+    stack = [dlg]
+    while stack:
+        cur = stack.pop()
+        stack.extend(cur.winfo_children())
+        if isinstance(cur, tk.Label) and str(cur.cget("text")) == want:
+            cur.event_generate("<Button-1>", x=5, y=5)
+            root.update()
+            return True
+    return False
+
+# 默认在外观页：快捷键树不可见
+chk("初始在外观页（快捷键树未显示）",
+    len(find_mapped(dlg, ttk.Treeview)) == 0)
+chk("初始在外观页（应用外观按钮可见）",
+    len(find_mapped(dlg, None, "应用外观")) >= 1)
+
+# 切到快捷键分类
+ok_nav = click_nav(dlg, "keys")
+chk("侧栏点击「快捷键」成功", ok_nav)
+chk("切到快捷键页（树可见）", len(find_mapped(dlg, ttk.Treeview)) == 1)
+chk("切到快捷键页（应用外观按钮隐藏）",
+    len(find_mapped(dlg, None, "应用外观")) == 0)
+
+# 切到默认路径分类
+ok_nav = click_nav(dlg, "paths")
+chk("切到默认路径页（固定目录可见）",
+    len(find_mapped(dlg, None, "固定目录")) >= 1)
+
+# 切回外观
+click_nav(dlg, "look")
+chk("切回外观页（应用外观按钮可见）",
+    len(find_mapped(dlg, None, "应用外观")) >= 1)
 
 dlg.destroy()
 root.update()
