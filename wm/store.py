@@ -2390,7 +2390,8 @@ class Store(object):
         {"name": "其他", "fields": []},
     ]
     WF_ACTIONS = {"create": "发起", "advance": "推进", "back": "退回",
-                  "cancel": "取消", "resume": "恢复", "stock": "入库"}
+                  "cancel": "取消", "resume": "恢复", "stock": "入库",
+                  "finish": "结单"}
 
     def wf_stages(self):
         """流程节点名称列表（meta 可自定义；无自定义用默认五节点）。"""
@@ -2638,12 +2639,12 @@ class Store(object):
             if new > len(stages) - 1:
                 return False, "已在最后节点（%s）" % stages[-1]
             ts = now_str()
-            done = forward and new == len(stages) - 1
+            # v1.42.8：推进到最后一站（入库）不再立即结束——单据停在入库站，
+            # 由入库员执行入库（wf_stock_in）或直接结单（wf_finish）才算走完
             self.conn.execute(
-                "UPDATE workflows SET stage = ?, status = ?, updated_at = ?,"
-                " done_at = CASE WHEN ? THEN ? ELSE NULL END WHERE id = ?",
-                (new, "done" if done else "active", ts, 1 if done else 0,
-                 ts, int(wf_id)))
+                "UPDATE workflows SET stage = ?, status = 'active',"
+                " updated_at = ?, done_at = NULL WHERE id = ?",
+                (new, ts, int(wf_id)))
             act = "advance" if forward else "back"
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
@@ -2658,8 +2659,9 @@ class Store(object):
         else:
             self.log_op("制作流程", head.get("no") or "",
                         "%s 退回 %s（%s）" % (stages[st], stages[new], by))
-        if done:
-            return True, "已完成！单据走完流程「%s」" % stages[-1]
+        if forward and new == len(stages) - 1:
+            return True, ("已推进到「%s」——请在该站完成收尾（填库存信息或结单）"
+                          % stages[-1])
         return True, "已%s到「%s」（%s）" % ("推进" if forward else "退回",
                                             stages[new], by)
 
@@ -2746,6 +2748,11 @@ class Store(object):
         if r is None:
             return False, "制作单不存在"
         rec = dict(r)
+        if str(rec.get("status") or "active") != "active":
+            return False, "该单已结束，如需重新处理请先退回重开"
+        stages = self.wf_stages()
+        if int(rec.get("stage") or 0) != len(stages) - 1:
+            return False, "该单还没到「%s」，不能入库" % stages[-1]
         f = dict(fields or {})
         model = str(f.get("model") or "").strip()
         if not model:
@@ -2781,7 +2788,42 @@ class Store(object):
         except Exception:
             pass
         extra = ("，已带入 %d 张照片" % n) if n else ""
-        return True, "已入库：%s（%s ×%d%s）" % (code, model, qty, extra)
+        ts = now_str()
+        with self._lock:                   # 入库完成 = 单据走完流程
+            self.conn.execute(
+                "UPDATE workflows SET status = 'done', updated_at = ?,"
+                " done_at = ? WHERE id = ?", (ts, ts, int(wf_id)))
+            self.conn.commit()
+        return True, "已入库：%s（%s ×%d%s）——单据已完成" % (code, model, qty, extra)
+
+    def wf_finish(self, wf_id, by, note=""):
+        """入库站直接结单：不新增库存（如报废 / 库存已在），单据标记完成。"""
+        by = (by or "").strip()
+        if not by:
+            return False, "请先填写你的名字（操作人）"
+        stages = self.wf_stages()
+        note = (note or "").strip()
+        with self._lock:
+            head = self.conn.execute(
+                "SELECT status, stage FROM workflows WHERE id = ?",
+                (int(wf_id),)).fetchone()
+            if head is None:
+                return False, "制作单不存在"
+            if str(head["status"] or "active") != "active":
+                return False, "该单已结束"
+            if int(head["stage"] or 0) != len(stages) - 1:
+                return False, "该单还没到「%s」，不能结单" % stages[-1]
+            ts = now_str()
+            self.conn.execute(
+                "UPDATE workflows SET status = 'done', updated_at = ?,"
+                " done_at = ? WHERE id = ?", (ts, ts, int(wf_id)))
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), len(stages) - 1, "finish", by, ts, note))
+            self.conn.commit()
+        self.log_op("制作流程", "", "结单 #%d（%s）" % (int(wf_id), by))
+        return True, "已结单（未新增库存）——单据已完成"
 
     def wf_set_target(self, wf_id, target, by="", note=""):
         """入库后把生成的库存编号回写到单据（target），并留痕。"""

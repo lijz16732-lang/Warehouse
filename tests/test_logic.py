@@ -801,10 +801,23 @@ check("流转留痕带姓名", _lg[-1]["by"] == "李四" and _lg[-1]["action"] =
       _lg[-1])
 for _ in range(3):
     ss.wf_advance(_wid, "王五")
-check("走完全流程状态为已完成",
-      any(r["id"] == _wid for r in ss.wf_list("done")))
+check("推进到最后一站仍为进行中（等人收尾）",
+      [r for r in ss.wf_list("active") if r["id"] == _wid][0]["stage_name"]
+      == "入库")
+check("入库执行后单据才完成",
+      ss.wf_stock_in(_wid, {"model": "TST-M1", "qty": "1"}, by="王五")[0]
+      is True and any(r["id"] == _wid for r in ss.wf_list("done")))
+check("已完成的单不能再次入库",
+      ss.wf_stock_in(_wid, {"model": "TST-M1"}, by="王五")[0] is False)
 check("经手人取最近一步",
       [r for r in ss.wf_list("done") if r["id"] == _wid][0]["handler"] == "王五")
+_w2, _ = ss.wf_create("报废结单", by="张三")
+for _ in range(len(ss.wf_stages()) - 1):
+    ss.wf_advance(_w2, "王五")
+check("最后一站可不新增库存直接结单",
+      ss.wf_finish(_w2, "王五", "报废")[0] is True
+      and any(r["id"] == _w2 for r in ss.wf_list("done")))
+ss.wf_delete(_w2)
 check("已完成单可退回重开", ss.wf_back(_wid, "张三")[0] is True
       and any(r["id"] == _wid for r in ss.wf_list("active")))
 check("跨站退回：质检直接退到制作标签",

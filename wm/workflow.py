@@ -249,26 +249,36 @@ class NewWfDialog(tk.Toplevel):
 
 
 class FlowDialog(tk.Toplevel):
-    """推进 / 退回。ask 名字 + 备注；推进到最后节点时可勾选同时新增库存。"""
+    """推进 / 退回 / 入库。ask 名字 + 备注。
+
+    v1.42.8 起单据推进到最后一站（入库）不再立即结束，而是停在入库站；
+    在入库站再点「推进」打开的即是入库窗口（填库存信息 / 直接结单）。
+    """
 
     def __init__(self, master, tab, rec, forward):
         super().__init__(master)
-        self.result = None          # (by, note, stock_rec 或 None)
+        self.result = None          # (by, note, stock_rec 或 None, target)
         self.tab = tab
         self.rec = rec
         self.forward = forward
         self.fam = tab.fam
-        self.title("推进 ▸ %s" % rec["stage_name"] if forward
-                   else "退回 ◂ %s" % rec["stage_name"])
-        self.configure(bg=CLR_BG)
-        self.resizable(False, False)
-        self.transient(master)
-        apply_window_icon(self)
 
         stages = tab.app.store.wf_stages()
         st = int(rec.get("stage") or 0)
         new_stage = st + 1 if forward else max(0, st - 1)
-        self.to_last = forward and new_stage == len(stages) - 1
+        # 单据已停在最后一站（入库）：这个弹窗就是「执行入库」
+        self.at_last = forward and st == len(stages) - 1
+
+        if self.at_last:
+            self.title("%s ▸ 完成结单" % stages[-1])
+        elif forward:
+            self.title("推进 ▸ %s" % rec["stage_name"])
+        else:
+            self.title("退回 ◂ %s" % rec["stage_name"])
+        self.configure(bg=CLR_BG)
+        self.resizable(False, False)
+        self.transient(master)
+        apply_window_icon(self)
 
         body = tk.Frame(self, bg=CLR_BG)
         body.pack(fill="both", expand=True, padx=18, pady=14)
@@ -288,12 +298,24 @@ class FlowDialog(tk.Toplevel):
         tk.Label(body, text="目标节点", bg=CLR_BG, fg="#41506B",
                  font=(self.fam, 10), anchor="w").grid(
             row=row, column=0, sticky="w", padx=(0, 10), pady=6)
-        if forward:
+        if self.at_last:
+            tk.Label(body, text="%s（最后一步）——确认后单据完成"
+                     % stages[-1],
+                     bg=CLR_BG, fg=CLR_ACCENT,
+                     font=(self.fam, 10, "bold"), anchor="w").grid(
+                row=row, column=1, sticky="w", pady=6)
+        elif forward:
             tk.Label(body, text="%s（第 %d / %d 站）" % (
                         stages[new_stage], new_stage + 1, len(stages)),
                      bg=CLR_BG, fg=CLR_ACCENT,
                      font=(self.fam, 10, "bold"), anchor="w").grid(
                 row=row, column=1, sticky="w", pady=6)
+            if new_stage == len(stages) - 1:
+                tk.Label(body, text="推进后单据停在「%s」站，由该站的人完成收尾"
+                         % stages[-1],
+                         bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8),
+                         anchor="w").grid(row=row + 1, column=0,
+                                          columnspan=2, sticky="w")
         else:
             # 跨站退回：质检 / 入库发现问题，可直接退回到任何更早的节点
             # （如「制作标签」），不必一站一站退
@@ -330,10 +352,10 @@ class FlowDialog(tk.Toplevel):
                   font=(self.fam, 10)).grid(row=row, column=1, sticky="ew", pady=6)
         row += 1
 
-        # 推进到最后节点（入库）：可顺带把商品写进库存
+        # 在入库站（最后节点）执行入库：可把商品写进库存，或直接结单
         self.stock_vars = {}
         self._stock_widgets = []
-        if self.to_last:
+        if self.at_last:
             # 「更换后型号」自动带进入库的型号框
             pre_model = ""
             ex = rec.get("extra")
@@ -343,7 +365,8 @@ class FlowDialog(tk.Toplevel):
                         pre_model = str(v)
                         break
             self.var_stock = tk.BooleanVar(value=True)
-            ck = ttk.Checkbutton(body, text="同时把该商品新增到库存（自动生成编号）",
+            ck = ttk.Checkbutton(body, text="把该商品新增到库存"
+                                 "（不勾选 = 直接结单，不新增库存）",
                                  variable=self.var_stock,
                                  command=self._toggle_stock)
             ck.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 2))
@@ -373,7 +396,8 @@ class FlowDialog(tk.Toplevel):
                            highlightthickness=1)
             box.grid(row=row + 2, column=0, columnspan=2, sticky="ew",
                      pady=(10, 2))
-            tk.Label(box, text="入库照片（可多选；新增库存时会一并带到库存记录）",
+            tk.Label(box, text="%s照片（可多选；新增库存时会一并带到库存记录）"
+                     % stages[-1],
                      bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9), anchor="w"
                      ).pack(fill="x", padx=12, pady=(8, 0))
             self.photo_strip = PhotoStrip(box, tab.app, kind="wf")
@@ -416,7 +440,7 @@ class FlowDialog(tk.Toplevel):
             self.msg.configure(text="⚠ 请填写你的名字（每个节点都要留名）")
             return
         stock_rec = None
-        if self.to_last and self.var_stock.get():
+        if self.at_last and self.var_stock.get():
             stock_rec = {k: v.get().strip() for k, v in self.stock_vars.items()}
             try:
                 if int(float(stock_rec.get("qty") or 1)) <= 0:
@@ -1231,6 +1255,12 @@ class WorkflowTab(ttk.Frame):
             messagebox.showinfo("制作流程", "该单已取消，请先在「已取消」列表里恢复",
                                 parent=self)
             return
+        if forward and rec.get("status") == "done":
+            messagebox.showinfo(
+                "制作流程",
+                "该单已完成。如需重新处理，请在「已完成」列表里退回重开。",
+                parent=self)
+            return
         mine = self._my_stage()
         if mine >= 0 and int(rec.get("stage") or 0) != mine:
             messagebox.showinfo(
@@ -1244,7 +1274,14 @@ class WorkflowTab(ttk.Frame):
         if not dlg.result:
             return
         by, note, stock_rec, target = dlg.result
-        if forward:
+        if forward and getattr(dlg, "at_last", False):
+            # 单据已停在最后一站：这一步是「执行入库 / 结单」，不再是推进
+            if stock_rec is not None:
+                ok, msg = self.app.store.wf_stock_in(int(rec["id"]),
+                                                     stock_rec, by=by)
+            else:
+                ok, msg = self.app.store.wf_finish(int(rec["id"]), by, note)
+        elif forward:
             ok, msg = self.app.store.wf_advance(int(rec["id"]), by, note)
         else:
             ok, msg = self.app.store.wf_back(int(rec["id"]), by, note,

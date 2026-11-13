@@ -39,11 +39,12 @@ store = app.store
 stages = store.wf_stages()
 wf_id, no = store.wf_create("保德型号更换", kind="更换型号标签", by="张三",
                             extra={"原型号": "WL-00012", "更换后型号": "S10MD"})
-# 推到质检（倒数第二站）
-for i in range(len(stages) - 2):
+# 推到入库站（最后一站）——v1.42.8 起推进到最后一站不再立即结束
+for i in range(len(stages) - 1):
     store.wf_advance(wf_id, "工位%d" % i, "")
 rec = [r for r in store.wf_list("active", "") if int(r["id"]) == wf_id][0]
-chk("单据停在质检站", rec["stage_name"] == stages[-2], rec["stage_name"])
+chk("推进到入库站仍是进行中", rec["stage_name"] == stages[-1],
+    rec["stage_name"])
 
 # 一张最小 PNG（1x1）
 png = base64.b64decode(
@@ -97,6 +98,9 @@ chk("数量/单价写对", int(it.get("qty") or 0) == 2 and float(it.get("price"
 chk("备注标了制作入库", "制作入库" in (it.get("remark") or ""), it.get("remark"))
 chk("入库照片带到了库存记录", len(store.photos_list("item", it["code"])) == 1,
     store.photos_list("item", it["code"]))
+wf_done = store.wf_one(wf_id)
+chk("入库后单据标记完成", wf_done.get("status") == "done",
+    wf_done.get("status"))
 
 wf_now = store.wf_one(wf_id)
 chk("单据回写了关联编号", wf_now.get("target") == it["code"], wf_now.get("target"))
@@ -105,18 +109,26 @@ chk("流转记录里有入库一步",
     any(g.get("action") == "stock" for g in logs),
     [g.get("action") for g in logs])
 
-# 列表 📷 列
+# 列表 📷 列（单据已完成 → 切到「已完成」列表看）
+tab.var_status.set("done")
 tab.refresh_rows()
 root.update()
 iid = str(wf_id)
 chk("列表显示照片标记", tab.tree.set(iid, "photo") == "📷",
     tab.tree.set(iid, "photo"))
 
-# 缺型号拦截
-ok3, msg3 = store.wf_stock_in(wf_id, {"model": "", "qty": "1"}, by="李四")
+# 缺型号拦截（用另一张停在入库站的进行中单据测）
+wid2, _ = store.wf_create("拦截测试", by="张三")
+for i in range(len(stages) - 1):
+    store.wf_advance(wid2, "工位%d" % i, "")
+ok3, msg3 = store.wf_stock_in(wid2, {"model": "", "qty": "1"}, by="李四")
 chk("型号为空被拦", ok3 is False and "型号" in msg3, msg3)
-ok4, msg4 = store.wf_stock_in(wf_id, {"model": "X", "qty": "0"}, by="李四")
+ok4, msg4 = store.wf_stock_in(wid2, {"model": "X", "qty": "0"}, by="李四")
 chk("数量为 0 被拦", ok4 is False and "数量" in msg4, msg4)
+ok5, msg5 = store.wf_finish(wid2, "李四", "不要了")
+chk("不新增库存直接结单", ok5, msg5)
+chk("结单后单据完成", store.wf_one(wid2).get("status") == "done",
+    store.wf_one(wid2).get("status"))
 
 # 删除单连带清照片
 store.wf_delete(wf_id)

@@ -36,7 +36,7 @@ root.update()
 stages = app.store.wf_stages()
 wf_id, no = app.store.wf_create("保德型号更换", kind="更换型号标签", by="张三",
                                 extra={"原型号": "WL-00012", "更换后型号": "S10MD"})
-for i in range(len(stages) - 2):
+for i in range(len(stages) - 1):   # 推到入库站（最后一站），弹窗即入库窗口
     app.store.wf_advance(wf_id, "工位%d" % i, "")
 png = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAAYAAf8B9W8lAAAAAElFTkSuQmCC")
@@ -91,7 +91,7 @@ def step2():
         all(e.winfo_ismapped() and e.winfo_rooty() - dlg.winfo_rooty()
             + e.winfo_height() <= h for e in ents),
         [(e.winfo_rooty() - dlg.winfo_rooty(), e.winfo_height()) for e in ents])
-    screenshot.capture_window("推进", os.path.join(OUT, "_wf_inbound.png"))
+    screenshot.capture_window("完成结单", os.path.join(OUT, "_wf_inbound.png"))
     dlg.destroy()
     root.after(200, done)
 

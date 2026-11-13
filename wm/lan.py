@@ -64,7 +64,8 @@ BLOCKED_METHODS = {"backup_to", "photos_dir", "photo_path"}
 # 制作流程：不对「允许录入」做授权，各工位电脑直接可用；
 # 能推哪一站由各电脑在制作流程页自己选的「本机工位」决定（见 _wf_stage_error）。
 WF_METHODS = {"wf_create", "wf_advance", "wf_back", "wf_cancel",
-              "wf_resume", "wf_delete", "wf_set_target", "wf_stock_in"}
+              "wf_resume", "wf_delete", "wf_set_target", "wf_stock_in",
+              "wf_finish"}
 # 入库照片：制作单（kind="wf"）的增删照片不受「允许录入」限制
 WF_PHOTO_METHODS = {"photo_add", "photo_del", "photos_list", "photo_data"}
 # 推进一步：必须与绑定的工位一致
@@ -440,6 +441,24 @@ class LanServer(object):
             if st not in (last, last - 1):
                 return ("本机是「%s」工位，入库只能由「%s」或「%s」操作"
                         % (sname(st), sname(max(0, last - 1)), sname(last)))
+            return ""
+        if method == "wf_finish":
+            # 结单（不新增库存）：单据必须到最后一步，且由最后一站操作
+            wf_id = kwargs.get("wf_id")
+            if wf_id is None and args:
+                wf_id = args[0]
+            try:
+                rec = store.wf_one(int(wf_id))
+            except Exception:
+                rec = None
+            if not rec:
+                return "制作单不存在"
+            last = max(0, len(stages) - 1)
+            if int(rec.get("stage") or 0) != last:
+                return "该单还没到「%s」，不能结单" % sname(last)
+            if st != last:
+                return ("本机是「%s」工位，结单请由「%s」操作"
+                        % (sname(st), sname(last)))
             return ""
         if method not in WF_MOVE_METHODS:
             return ("本机是「%s」工位，只能推进本站的单，"
