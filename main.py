@@ -58,6 +58,14 @@ def _install_noflash_toplevel():
 
 def main():
     _bootstrap()
+    # 单实例保护：已有实例在运行（可能在托盘里）时，唤起它并退出本进程，
+    # 否则每点一次桌面图标就多一个进程、一个托盘图标，还两边写同一个库。
+    try:
+        from wm.single import first_instance
+        if not first_instance():
+            return 0
+    except Exception:
+        pass          # 单实例检测失败不应挡住正常启动
     # 开启 DPI 感知：Win10/Win11 笔记本常见 125%/150% 缩放，不开启会整窗发虚。
     # 必须在创建任何 Tk 窗口之前调用。
     try:

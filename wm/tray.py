@@ -25,6 +25,8 @@ shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 
 WM_APP = 0x8000
 WM_TRAY_CALLBACK = WM_APP + 20
+WM_APP_ACTIVATE = WM_APP + 21   # wm/single.py 用它唤起已运行实例
+TRAY_WIN_TITLE = "WmTray_CGM"   # 供 FindWindowW 寻址（单实例激活）
 WM_CLOSE = 0x0010
 WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
@@ -229,7 +231,7 @@ class TrayIcon(object):
                 self._ready.set()
                 return
             self.hwnd = user32.CreateWindowExW(
-                0, self._cls, "WmTray", 0, 0, 0, 0, 0,
+                0, self._cls, TRAY_WIN_TITLE, 0, 0, 0, 0, 0,
                 None, None, hinst, None)
             if not self.hwnd:
                 self._ready.set()
@@ -281,6 +283,10 @@ class TrayIcon(object):
                     self._post("settings")
                 elif cmd == CMD_EXIT:
                     self._post("exit")
+                return 0
+            if msg == WM_APP_ACTIVATE:
+                # 第二个实例启动 → 单实例模块发来激活消息，恢复主窗口
+                self._post("show")
                 return 0
             if msg == WM_CLOSE:
                 nid = self._nid()

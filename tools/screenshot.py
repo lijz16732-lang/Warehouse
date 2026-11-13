@@ -191,3 +191,58 @@ def capture_window(title_sub, path):
 if __name__ == "__main__":
     title = sys.argv[2] if len(sys.argv) > 2 else "仓管家"
     print("saved:", capture_window(title, sys.argv[1]))
+
+
+def capture_hwnd(hwnd, path):
+    """PrintWindow 直接抓指定窗口（含被遮挡的弹窗）。"""
+    import time
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    user32.SetProcessDPIAware()
+    for _ in range(40):
+        if user32.IsWindowVisible(hwnd):
+            break
+        time.sleep(0.25)
+    r = wintypes.RECT()
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    w, h = r.right - r.left, r.bottom - r.top
+    if w <= 0 or h <= 0:
+        raise RuntimeError("bad rect %s" % (r))
+    gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    hdc = user32.GetDC(hwnd)
+    mem = gdi32.CreateCompatibleDC(hdc)
+    bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
+    gdi32.SelectObject(mem, bmp)
+    # PW_RENDERFULLCONTENT = 2（Win8.1+，可抓 DirectComposition 内容）
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, ctypes.c_uint]
+    user32.PrintWindow(hwnd, mem, 2)
+    bmi = (ctypes.c_int32 * 5)(40, w, -h, 1, 32)
+    buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(mem, bmp, 0, h, buf, bmi, 0)
+    data = bytes(buf)
+    raw = bytearray()
+    stride = w * 4
+    for y in range(h):
+        row = bytearray(data[y * stride:(y + 1) * stride])
+        for x in range(0, stride, 4):
+            row[x], row[x + 2] = row[x + 2], row[x]
+        raw.append(0)
+        raw.extend(row)
+
+    def chunk(t, d):
+        return (len(d).to_bytes(4, "big") + t + d +
+                (zlib.crc32(t + d) & 0xffffffff).to_bytes(4, "big"))
+
+    out = b"\x89PNG\r\n\x1a\n"
+    out += chunk(b"IHDR", w.to_bytes(4, "big") + h.to_bytes(4, "big") +
+                 bytes([8, 6, 0, 0, 0]))
+    out += chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+    out += chunk(b"IEND", b"")
+    with open(path, "wb") as f:
+        f.write(out)
+    gdi32.DeleteObject(bmp)
+    gdi32.DeleteDC(mem)
+    user32.ReleaseDC(hwnd, hdc)
+    return path

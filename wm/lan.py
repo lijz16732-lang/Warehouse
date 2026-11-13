@@ -27,7 +27,10 @@ from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
                      handle_request_write, handle_sales, handle_sell,
                      handle_update_all, handle_whoami, handle_items,
                      handle_photos, handle_photo_get, handle_photo_add,
-                     handle_photo_del)
+                     handle_photo_del, handle_return_sale, handle_sale_undo,
+                     handle_stats, handle_customers, handle_trash,
+                     handle_del_item, handle_restore, handle_purge,
+                     handle_stocktake, handle_returns, handle_settle)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -45,14 +48,35 @@ READ_METHODS = {
     "list_purchases", "purchase_totals", "list_deleted", "deleted_count",
     "duplicate_models", "model_keys", "blank_content_keys",
     "sales_totals", "out_totals", "stats", "revision",
+    "sales_stats_by_src",
+    # v1.34.0 自定义列题（读）；只读客户端也要能读到列题才能显示表格
+    "col_titles",
     "photos_list", "photo_data", "photo_codes",
     # v1.32.0 客户 / 退货 / 利润 / 盘点（只读查询）
     "list_customers", "list_returns", "returns_total", "returnable_qty",
     "profit_rows", "list_stocktakes", "stocktake_detail",
+    # v1.42.1 制作流程（只读）：各工位电脑要看得到当前流转到哪一步
+    "wf_stages", "wf_list", "wf_counts", "wf_logs", "wf_stamp", "wf_one",
 }
 WRITE_METHODS = RPC_METHODS - READ_METHODS
 # 这些操作和主机本地文件有关，客户端不准调用
 BLOCKED_METHODS = {"backup_to", "photos_dir", "photo_path"}
+# 制作流程：不对「允许录入」做授权，各工位电脑直接可用；
+# 能推哪一站由各电脑在制作流程页自己选的「本机工位」决定（见 _wf_stage_error）。
+WF_METHODS = {"wf_create", "wf_advance", "wf_back", "wf_cancel",
+              "wf_resume", "wf_delete", "wf_set_target", "wf_stock_in"}
+# 入库照片：制作单（kind="wf"）的增删照片不受「允许录入」限制
+WF_PHOTO_METHODS = {"photo_add", "photo_del", "photos_list", "photo_data"}
+# 推进一步：必须与绑定的工位一致
+WF_MOVE_METHODS = {"wf_advance", "wf_back"}
+
+
+def _wf_photo_call(args, kwargs):
+    """这次照片调用是不是作用在制作单（kind="wf"）上。"""
+    kind = (kwargs or {}).get("kind")
+    if kind is None and args:
+        kind = args[0]
+    return str(kind or "") == "wf"
 
 
 def local_ips():
@@ -87,11 +111,13 @@ class LanServer(object):
         self.code = str(code or "")
         self.port = int(port or DEFAULT_PORT)
         self.on_event = on_event or (lambda *a, **k: None)
-        self.clients = {}          # ip -> {name, id, allowed, last_seen, requests}
+        self.clients = {}          # ip -> {name, id, allowed, stage, last_seen, requests}
+        self.name_overrides = {}   # ip -> 主机指定的显示名（覆盖客户端上报名）
         self.default_allow = False  # 新连接电脑默认是否可录入
         self.phone_access = True    # 允许手机访问（设置里可关，关后 /m 全部 403）
         self.blocked = {}          # 黑名单：ip -> {name, time}（持久保存在主机配置里）
         self.kicked = {}           # 被移除连接：ip -> 到期时间（短暂拒绝，防 4 秒轮询立刻重连）
+        self.stage_reqs = {}       # 工位变更申请：ip -> {stage, status, name, ts}
         self._lock = threading.Lock()
         self.httpd = None
         self._thread = None
@@ -148,6 +174,52 @@ class LanServer(object):
     def set_default_allow(self, flag):
         self.default_allow = bool(flag)
         self.on_event("clients", None)
+
+    # ---- 工位变更申请（v1.42.2）：选定后锁定，再改要主机点头
+    def request_stage(self, ip, stage, name=""):
+        """客户端申请改成某个工位；主机窗口会弹窗询问。"""
+        try:
+            idx = int(stage)
+        except (TypeError, ValueError):
+            idx = -1
+        with self._lock:
+            self.stage_reqs[ip] = {"stage": idx, "status": "pending",
+                                   "name": name or "未知电脑", "ts": time.time()}
+        self.on_event("stage_req", {"ip": ip, "stage": idx,
+                                    "name": name or "未知电脑"})
+        return True
+
+    def answer_stage(self, ip, ok):
+        """主机点「同意 / 不同意」。"""
+        with self._lock:
+            r = self.stage_reqs.get(ip)
+            if r is None:
+                return False
+            r["status"] = "ok" if ok else "no"
+            r["ts"] = time.time()
+        return True
+
+    def stage_result(self, ip):
+        """客户端轮询结果：pending / ok / no（没有申请过返回空状态）。"""
+        with self._lock:
+            r = self.stage_reqs.get(ip)
+            if r is None:
+                return {"status": "", "stage": -1}
+            return {"status": str(r.get("status") or ""),
+                    "stage": int(r.get("stage", -1))}
+
+    def rename_client(self, ip, name):
+        """主机改某台客户端的显示名（覆盖客户端上报的名字）。返回是否成功。"""
+        name = str(name or "").strip()[:20]
+        if not name:
+            return False
+        with self._lock:
+            if ip not in self.clients:
+                return False
+            self.clients[ip]["name"] = name
+            self.name_overrides[ip] = name
+        self.on_event("clients", None)
+        return True
 
     def set_phone_access(self, flag):
         self.phone_access = bool(flag)
@@ -228,10 +300,15 @@ class LanServer(object):
         with self._lock:
             items = []
             for ip, c in self.clients.items():
+                try:
+                    st = int(c.get("stage", -1))
+                except (TypeError, ValueError):
+                    st = -1
                 items.append({"ip": ip, "name": c.get("name") or "未知电脑",
                               "id": c.get("id") or "",
                               "allowed": bool(self.default_allow or c.get("allowed")),
                               "explicit": bool(c.get("allowed")),
+                              "stage": st,
                               "last_seen": c.get("last_seen") or 0,
                               "requests": c.get("requests") or 0})
         items.sort(key=lambda x: -x["last_seen"])
@@ -243,10 +320,12 @@ class LanServer(object):
             c = self.clients.get(ip)
             new = c is None
             if new:
-                c = {"name": "", "id": "", "allowed": False, "last_seen": 0.0,
-                     "requests": 0}
+                c = {"name": "", "id": "", "allowed": False, "stage": -1,
+                     "last_seen": 0.0, "requests": 0}
                 self.clients[ip] = c
-            if name:
+            if ip in self.name_overrides:
+                c["name"] = self.name_overrides[ip]   # 主机改过名，以主机为准
+            elif name:
                 c["name"] = name
             if cid:
                 c["id"] = cid
@@ -286,13 +365,28 @@ class LanServer(object):
             return 400, {"ok": False, "error": "不支持的操作：%s" % method}
         if method in BLOCKED_METHODS:
             return 400, {"ok": False, "error": "该操作只能在主机上执行"}
-        if method in WRITE_METHODS and not self.can_write(ip):
-            return 403, {"ok": False, "readonly": True,
-                         "error": "主机未授权本机录入（只读模式）"}
         args = payload.get("args") or []
         kwargs = payload.get("kwargs") or {}
         if not isinstance(args, list) or not isinstance(kwargs, dict):
             return 400, {"ok": False, "error": "参数格式不正确"}
+        # 制作流程不需要「允许录入」授权；各电脑在制作流程页自己选工位，
+        # 只能推进停在自己这一站的单（这里做服务端校验，主机界面同样受约束）
+        if method in WF_METHODS:
+            try:
+                claimed = int(payload.get("wf_stage", -1))
+            except (TypeError, ValueError):
+                claimed = -1
+            with self._lock:
+                c = self.clients.get(ip)
+                if c is not None:
+                    c["stage"] = claimed      # 让主机列表能看到各电脑选的工位
+            err = self._wf_stage_error(claimed, method, args, kwargs)
+            if err:
+                return 403, {"ok": False, "stage_denied": True, "error": err}
+        elif method in WRITE_METHODS and not self.can_write(ip):
+            if not (method in WF_PHOTO_METHODS and _wf_photo_call(args, kwargs)):
+                return 403, {"ok": False, "readonly": True,
+                             "error": "主机未授权本机录入（只读模式）"}
         try:
             store = self.get_store()
             with self._lock:
@@ -305,6 +399,65 @@ class LanServer(object):
         except Exception as e:
             return 500, {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
         return 200, {"ok": True, "result": result}
+
+    def _wf_stage_error(self, st, method, args, kwargs):
+        """工位校验：电脑只能推进停在自己这一站的单。
+
+        st 由客户端在每次请求里上报（制作流程页顶部的「本机工位」）。
+        v1.42.3 起「不限」只留给主机：客户端上报 -1 说明还没选工位，
+        直接拒绝，避免任何一台工位电脑都能替别人推进。
+        """
+        if st < 0:
+            return ("本机还没选工位，请先在制作流程页右上角选择你负责的节点"
+                    "（「不限」只在主机上可用）")
+        store = self.get_store()
+        try:
+            stages = store.wf_stages()
+        except Exception:
+            stages = []
+
+        def sname(i):
+            return stages[i] if 0 <= i < len(stages) else ("节点%d" % (i + 1))
+
+        if method == "wf_create":
+            if st != 0:
+                return "本机是「%s」工位，不能发起制作单" % sname(st)
+            return ""
+        if method == "wf_stock_in":
+            # 入库：单据必须已经到最后一步；由最后一站或倒数第二站（刚推进来的）操作
+            wf_id = kwargs.get("wf_id")
+            if wf_id is None and args:
+                wf_id = args[0]
+            try:
+                rec = store.wf_one(int(wf_id))
+            except Exception:
+                rec = None
+            if not rec:
+                return "制作单不存在"
+            last = max(0, len(stages) - 1)
+            if int(rec.get("stage") or 0) != last:
+                return "该单还没到「%s」，不能入库" % sname(last)
+            if st not in (last, last - 1):
+                return ("本机是「%s」工位，入库只能由「%s」或「%s」操作"
+                        % (sname(st), sname(max(0, last - 1)), sname(last)))
+            return ""
+        if method not in WF_MOVE_METHODS:
+            return ("本机是「%s」工位，只能推进本站的单，"
+                    "取消 / 删除请到主机上操作" % sname(st))
+        wf_id = kwargs.get("wf_id")
+        if wf_id is None and args:
+            wf_id = args[0]
+        try:
+            rec = store.wf_one(int(wf_id))
+        except Exception:
+            rec = None
+        if not rec:
+            return "制作单不存在"
+        cur = int(rec.get("stage") or 0)
+        if cur != st:
+            return ("该单现在在「%s」，本机负责「%s」，只能在本站操作"
+                    % (sname(cur), sname(st)))
+        return ""
 
     def _code_ok(self, code):
         try:
@@ -368,7 +521,7 @@ def _make_handler(srv):
         def do_GET(self):
             path = urlparse(self.path).path
             if not (path.startswith("/ping") or path == "/m" or path == "/m/"
-                    or path.startswith("/m/api/")):
+                    or path.startswith("/m/api/") or path.startswith("/stage_result")):
                 return self._send(404, {"ok": False, "error": "not found"})
             ip = self._client_ip()
             gate = srv._gate(ip)
@@ -390,6 +543,16 @@ def _make_handler(srv):
                     return self._send_full(*handle_items(srv, ip, token, q))
                 if path.startswith("/m/api/sales"):
                     return self._send_full(*handle_sales(srv, ip, token, q))
+                if path.startswith("/m/api/stats"):
+                    return self._send_full(*handle_stats(srv, ip, token, q))
+                if path.startswith("/m/api/returns"):
+                    return self._send_full(*handle_returns(srv, ip, token, q))
+                if path.startswith("/m/api/customers"):
+                    return self._send_full(*handle_customers(srv, ip, token, q))
+                if path.startswith("/m/api/trash"):
+                    return self._send_full(*handle_trash(srv, ip, token, q))
+                if path.startswith("/m/api/stocktake"):
+                    return self._send_full(*handle_stocktake(srv, ip, token, q))
                 if path.startswith("/m/api/coltitles"):
                     return self._send_full(*handle_coltitles(srv, ip, token))
                 if path.startswith("/m/api/photos"):
@@ -397,6 +560,14 @@ def _make_handler(srv):
                 if path.startswith("/m/api/photo_get"):
                     return self._send_full(*handle_photo_get(srv, ip, token, q))
                 return self._send(404, {"ok": False, "error": "not found"})
+            # 工位变更申请的结果（客户端轮询）
+            if path.startswith("/stage_result"):
+                q = self._query()
+                if not srv._code_ok(q.get("code", "")):
+                    return self._send(401, {"ok": False, "error": "连接码不正确"})
+                res = srv.stage_result(ip)
+                return self._send(200, {"ok": True, "status": res["status"],
+                                        "stage": res["stage"]})
             # /ping（电脑客户端 4 秒轮询）
             q = self._query()
             if not srv._code_ok(q.get("code", "")):
@@ -444,6 +615,20 @@ def _make_handler(srv):
                 with st_.as_source("手机(%s)" % ip):
                     if path.startswith("/m/api/sell"):
                         return self._send_full(*handle_sell(srv, ip, token, payload))
+                    if path.startswith("/m/api/return_sale"):
+                        return self._send_full(*handle_return_sale(srv, ip, token, payload))
+                    if path.startswith("/m/api/sale_undo"):
+                        return self._send_full(*handle_sale_undo(srv, ip, token, payload))
+                    if path.startswith("/m/api/del"):
+                        return self._send_full(*handle_del_item(srv, ip, token, payload))
+                    if path.startswith("/m/api/restore"):
+                        return self._send_full(*handle_restore(srv, ip, token, payload))
+                    if path.startswith("/m/api/purge"):
+                        return self._send_full(*handle_purge(srv, ip, token, payload))
+                    if path.startswith("/m/api/stocktake"):
+                        return self._send_full(*handle_stocktake(srv, ip, token, None, payload))
+                    if path.startswith("/m/api/settle"):
+                        return self._send_full(*handle_settle(srv, ip, token, payload))
                     if path.startswith("/m/api/add"):
                         return self._send_full(*handle_add(srv, ip, token, payload))
                     if path.startswith("/m/api/update_all"):
@@ -471,6 +656,13 @@ def _make_handler(srv):
                 with srv._lock:
                     c["requests"] = int(c.get("requests") or 0) + 1
                 srv.on_event("request", {"ip": ip, "name": name})
+                return self._send(200, {"ok": True})
+            if path.startswith("/request_stage"):
+                if not srv._code_ok(str(payload.get("code") or "")):
+                    return self._send(401, {"ok": False, "error": "连接码不正确"})
+                name = str(payload.get("name") or "") or "未知电脑"
+                srv._touch(ip, name, str(payload.get("id") or ""))
+                srv.request_stage(ip, payload.get("stage", -1), name)
                 return self._send(200, {"ok": True})
             if not path.startswith("/rpc"):
                 return self._send(404, {"ok": False, "error": "not found"})

@@ -103,3 +103,43 @@ def capsule_b64(pw, ph, fill, on, knob="#FFFFFF", pad=2):
     if not png:
         return None
     return base64.b64encode(png).decode("ascii")
+
+
+def roundrect_png(pw, ph, fill, radius):
+    """抗锯齿圆角矩形 PNG 字节串（RGBA，四角透明）。
+
+    与胶囊同一套 4× 超采样思路：圆角矩形 = 中心距场
+    dx = max(|x-cx| - (w/2-r), 0)，dy 同理，dx²+dy² ≤ r² 即在圆角内。
+    """
+    pw, ph = int(pw), int(ph)
+    if pw < 4 or ph < 4:
+        return None
+    r = max(1, min(int(radius), min(pw, ph) // 2)) * SS
+    W, H = pw * SS, ph * SS
+    x0, y0, x1, y1 = r, r, W - r, H - r
+    tr, tg, tb = _hex2rgb(fill)
+    pix = bytearray()
+    inv = 1.0 / (SS * SS)
+    for py in range(ph):
+        yy0 = py * SS
+        for px in range(pw):
+            xx0 = px * SS
+            t_in = 0
+            for sy in range(SS):
+                y = yy0 + sy + 0.5
+                dy = max(y0 - y, y - y1, 0.0)
+                for sx in range(SS):
+                    x = xx0 + sx + 0.5
+                    dx = max(x0 - x, x - x1, 0.0)
+                    if dx * dx + dy * dy <= r * r:
+                        t_in += 1
+            a = int(t_in * inv * 255 + 0.5)
+            pix += bytes((tr, tg, tb, a))
+    return _encode(pw, ph, pix)
+
+
+def roundrect_b64(pw, ph, fill, radius):
+    png = roundrect_png(pw, ph, fill, radius)
+    if not png:
+        return None
+    return base64.b64encode(png).decode("ascii")

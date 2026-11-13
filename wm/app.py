@@ -25,6 +25,7 @@ from .profit import ProfitTab
 from .returns import ReturnTab
 from .sales import SalesTab, ask_sale
 from .stocktake import StocktakeTab
+from .workflow import WorkflowTab
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
                         CLR_ACCENT_LT, CLR_HEAD_FG, CLR_HOVER_EDGE, CLR_INPUT, CLR_LOW_BG,
@@ -33,7 +34,7 @@ from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         FIELD_ANCHOR, FIELD_KEYS, FIELD_LABEL, FIELD_TYPE,
                         FIELD_WIDTH, FONT_SCALES, LISTED_TEXT, MULTI_SEP,
                         apply_window_icon, app_dir, center_window,
-                        is_blank_model, resolve_data_dir)
+                        guard_combobox, is_blank_model, resolve_data_dir)
 from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
@@ -46,6 +47,31 @@ from .remote import HostUnreachable, PermissionDenied, RemoteError, RemoteStore
 from .theme import CellHover, RowHover, apply_theme, dot_check
 
 PAGE_SIZES = ["100", "200", "500", "1000", "全部"]
+
+# 默认排序：(settings 值, 界面文字)。new = 按 id 倒序（最新添加在最前）
+SORT_CHOICES = {
+    "none": "保持录入顺序",
+    "code": "编号（小号在前）",
+    "price": "价格（高到低）",
+    "qty": "数量（少到多）",
+    "new": "最新添加（新到旧）",
+}
+SORT_DESC = {"code": False, "price": True, "qty": False, "new": True}
+
+
+def fmt_bytes(n):
+    """字节数转成人看的字符串（1.2 MB / 860 KB）。"""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "—"
+    if n < 1024:
+        return "%d B" % int(n)
+    for unit in ("KB", "MB", "GB"):
+        n /= 1024.0
+        if n < 1024 or unit == "GB":
+            return "%.1f %s" % (n, unit)
+    return "%.1f GB" % n
 
 
 def shelf_parts(value):
@@ -75,6 +101,12 @@ class App(object):
         self._lan_error = ""           # 启动时连不上主机的提示（界面建好后弹）
         self.can_write = True
         self.store = self._open_store()
+        # 自动编号规则（每台电脑自己的习惯；只影响之后新生成的编号）
+        try:
+            self.store.set_code_rule(self.settings.get("code_prefix"),
+                                     self.settings.get("code_digits"))
+        except Exception:
+            pass                     # 客户端模式连的是主机库，编号由主机生成
 
         root.title("%s  v%s · %s" % (APP_NAME, APP_VERSION,
                                      self.warehouses[self.wh_index]["name"]))
@@ -105,8 +137,14 @@ class App(object):
         self.by_id = {}
         self.page = 1
         self.page_size = self.settings.get("page_size", 200)
-        self.sort_key = None
-        self.sort_desc = False
+        # 默认排序（设置里可选；none = 保持录入顺序）
+        self.default_sort = str(self.settings.get("default_sort") or "none")
+        if self.default_sort not in SORT_CHOICES:
+            self.default_sort = "none"
+        self.sort_key = None if self.default_sort == "none" else self.default_sort
+        self.sort_desc = bool(SORT_DESC.get(self.sort_key, False))
+        # 关键字搜索范围：all = 全部字段，key = 只看编号/型号（大库更快）
+        self.search_scope = str(self.settings.get("search_scope") or "all")
         self.visible_cols = list(self.settings.get("visible_cols") or FIELD_KEYS)
         self._cell_col = FIELD_KEYS[0]
         self.low_threshold = int(self.settings.get("low_stock_threshold", 3) or 3)
@@ -166,6 +204,7 @@ class App(object):
         self._update_lan_ui()
         self._lan_last_ok = True
         root.after(2000, self._lan_tick)
+        root.after(2500, self._start_auto_reconnect)
         root.after(1500, self._startup_auto_backup)
         root.after(1800, self._startup_housekeeping)
         root.after(900, self._ensure_tray)
@@ -232,6 +271,7 @@ class App(object):
         cfg.setdefault("phone_access", True)
         cfg.setdefault("code_rotate", "off")      # off / daily / weekly
         cfg.setdefault("last_code_rotate", 0.0)
+        cfg.setdefault("auto_reconnect", True)    # 开机自动连回上次主机
         cfg.setdefault("client_name", socket.gethostname()[:40])
         cfg.setdefault("client_id", "%s-%04d" % (socket.gethostname(),
                                                 random.randint(1000, 9999)))
@@ -266,13 +306,15 @@ class App(object):
                 rs = RemoteStore(cfg.get("host"), cfg.get("port") or DEFAULT_PORT,
                                  cfg.get("code") or "", cfg.get("client_id") or "",
                                  cfg.get("client_name") or "")
+                rs.wf_stage = self._wf_my_stage()
                 info = rs.ping()
             except Exception as e:
                 cfg["mode"] = "off"
                 self._save_lan_cfg()
                 self._lan_error = (
-                    "连不上主机 %s:%s\n\n%s\n\n已切回本机数据。主机开机后，"
-                    "可在「数据 → 局域网共享」里重新连接。"
+                    "连不上主机 %s:%s\n\n%s\n\n已切回本机数据。主机会被自动重连："
+                    "主机开机上线后（约半分钟内）会自动连上，"
+                    "不用重新填写地址和连接码。"
                     % (cfg.get("host"), cfg.get("port"), e))
                 return Store(self.db_path)
             self.lan_mode = "client"
@@ -428,8 +470,9 @@ class App(object):
         self.var_kw.set("")
         self.var_pmin.set("")
         self.var_pmax.set("")
-        self.sort_key = None
-        self.sort_desc = False
+        # 换库后回到设置里的默认排序（不是"无排序"）
+        self.sort_key = None if self.default_sort == "none" else self.default_sort
+        self.sort_desc = bool(SORT_DESC.get(self.sort_key, False))
         self.page = 1
         self._drag_anchor = None
         self._drag_block = None
@@ -520,7 +563,8 @@ class App(object):
         head.pack(fill="x", padx=12, pady=(12, 8))
         tk.Label(head, text="仓库管理", bg=CLR_CARD, fg=CLR_TEXT,
                  font=(self.fam, 13, "bold")).pack(anchor="w", padx=16, pady=(12, 0))
-        tk.Label(head, text="每个仓库一套独立数据、独立编号（各自从 WL-00001 开始）",
+        tk.Label(head, text="每个仓库一套独立数据、独立编号（各自从 %s 开始）"
+                            % self.store.code_sample(),
                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9)).pack(anchor="w",
                                                                      padx=16, pady=(2, 10))
 
@@ -815,6 +859,8 @@ class App(object):
         self.nav_add("销售管理", self.tab_return, "销售退货")
         self.nav_add("数据报表", self.tab_profit, "销售利润表")
         self.nav_add("库存管理", self.tab_stocktake, "盘点单")
+        self.tab_workflow = WorkflowTab(self.nb, self, self.fam)
+        self.nav_add("库存管理", self.tab_workflow, "制作流程")
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_toolbar()
@@ -1269,9 +1315,12 @@ class App(object):
             if pmax is not None and price > pmax:
                 continue
             if kw:
-                blob = " ".join(str(r.get(k) or "") for k in
-                                ("code", "brand", "category", "model",
-                                 "condition", "shelf", "remark")).lower()
+                if self.search_scope == "key":     # 只看编号与型号（大库时更快）
+                    keys = ("code", "model")
+                else:
+                    keys = ("code", "brand", "category", "model",
+                            "condition", "shelf", "remark")
+                blob = " ".join(str(r.get(k) or "") for k in keys).lower()
                 if kw not in blob:
                     continue
             out.append(r)
@@ -1283,13 +1332,14 @@ class App(object):
         self._update_side_stats()
 
     def _sort(self, rows):
-        if not self.sort_key:
-            return rows
         key = self.sort_key
-        t = FIELD_TYPE[key]
+        if not key:
+            return rows
+        field = "id" if key == "new" else key
+        t = FIELD_TYPE.get(field, "int")
 
         def kf(r):
-            v = r.get(key)
+            v = r.get(field)
             if t in ("money", "int", "bool"):
                 try:
                     return float(v or 0)
@@ -1353,8 +1403,8 @@ class App(object):
             arrow = ""
             if self.sort_key == c:
                 arrow = " ▼" if self.sort_desc else " ▲"
-            elif self.sort_key is None and c == "code":
-                arrow = " ▲"      # 默认按编号升序
+            elif self.sort_key == "new" and c == "code":
+                arrow = " ⇣"      # 最新添加：编号列给个提示，说明当前按 id 倒序
             self.tree.heading(c, text=(titles.get(c) or FIELD_LABEL[c]) + arrow,
                               command=lambda cc=c: self.sort_column(cc))
             self.tree.column(c, width=int(FIELD_WIDTH[c] * self.ui_scale),
@@ -2119,6 +2169,8 @@ class App(object):
                 self.tab_profit.refresh_tab()
             elif idx == 9:
                 self.tab_stocktake.refresh_tab()
+            elif idx == 10:
+                self.tab_workflow.refresh_tab()
         except Exception:
             pass
 
@@ -2157,6 +2209,12 @@ class App(object):
                 pt._fill(pt.tree_items, pt.item_rows, pt.PHONE_ITEM_COLS,
                          pt._item_state,
                          photo_codes=self.store.photo_codes("phone"))
+            except Exception:
+                pass
+            return
+        if kind == "wf":                  # 制作单照片：刷新列表的 📷 列
+            try:
+                self.tab_workflow.refresh_rows()
             except Exception:
                 pass
             return
@@ -3115,7 +3173,8 @@ class App(object):
         if not messagebox.askyesno(
                 "危险操作",
                 "将删除数据库中的全部 %d 条记录（连同出库记录）。\n\n"
-                "清空后编号计数器会归零，下一次导入将从 WL-00001 重新开始编号。\n"
+                "清空后编号计数器会归零，下一次导入将从 %s 重新开始编号。\n"
+                                % self.store.code_sample(),
                 "清空前会自动备份一份到 data\\backups（可随时找回）。\n\n确定继续吗？"
                 % len(self.records), parent=self.root, icon="warning"):
             return
@@ -3127,10 +3186,11 @@ class App(object):
         self.load_data()
         self._on_sale_changed()
         if bak:
-            self._status("已清空全部数据，编号将从 WL-00001 重新开始 · 已备份到 %s"
-                         % os.path.basename(bak))
+            self._status("已清空全部数据，编号将从 %s 重新开始 · 已备份到 %s"
+                         % (self.store.code_sample(), os.path.basename(bak)))
         else:
-            self._status("已清空全部数据，编号将从 WL-00001 重新开始")
+            self._status("已清空全部数据，编号将从 %s 重新开始"
+                             % self.store.code_sample())
 
     # ============================================================ 重复检查
     def dedupe_duplicates(self):
@@ -3658,43 +3718,211 @@ class App(object):
         content = tk.Frame(win, bg=CLR_BG)
         content.pack(side="left", fill="both", expand=True)
 
+        # ---- 顶部：搜索设置项 ----
+        PLACEHOLDER = "\U0001f50d  搜索设置项…（回车跳到第一项）"
+        search_index = []       # (key, 文本, 卡片Frame)，页面建完后填充
+        search_hits = []
+        srch_bar = tk.Frame(content, bg=CLR_BG)
+        srch_bar.pack(fill="x", padx=22, pady=(12, 2))
+        var_srch = tk.StringVar()
+        srch_ent = tk.Entry(srch_bar, textvariable=var_srch, bg=CLR_INPUT,
+                       fg=CLR_MUTED, font=(fam, 9), relief="flat",
+                       highlightthickness=1, highlightbackground=CLR_BORDER,
+                       highlightcolor=CLR_ACCENT, insertbackground=CLR_TEXT)
+        srch_ent.pack(fill="x", ipady=int(3 * s))
+        srch_ent.insert(0, PLACEHOLDER)
+        srch_lb = tk.Listbox(srch_bar, font=(fam, 9), bg=CLR_CARD, fg=CLR_TEXT,
+                        relief="flat", highlightthickness=1,
+                        highlightbackground=CLR_BORDER, activestyle="none")
+        _srch_lb_open = {"n": 0}
+
+        def _placeholder(on):
+            if on:
+                srch_ent.configure(fg=CLR_MUTED)
+                if not var_srch.get():
+                    srch_ent.insert(0, PLACEHOLDER)
+            else:
+                srch_ent.configure(fg=CLR_TEXT)
+                if var_srch.get() == PLACEHOLDER:
+                    srch_ent.delete(0, "end")
+
+        def _do_search(*_a):
+            q = var_srch.get().strip().lower()
+            if q == PLACEHOLDER.strip().lower() or not q:
+                srch_lb.place_forget()
+                return
+            srch_lb.delete(0, "end")
+            search_hits.clear()
+            seen = set()
+            pool = []
+            for key, txt, card_f in search_index:
+                if q in txt.lower() and (key, txt) not in seen:
+                    seen.add((key, txt))
+                    pool.append((len(txt), key, txt, card_f))
+            # 短文本（标题/字段名）排前，长说明句排后
+            pool.sort(key=lambda t: t[0])
+            search_hits.extend((k, t, c) for _n, k, t, c in pool[:9])
+            if not search_hits:
+                srch_lb.insert("end", "（没有匹配的设置项）")
+                srch_lb.configure(height=1)
+            else:
+                for key, txt, _c in search_hits:
+                    srch_lb.insert("end", "%s ｜ %s" % (page_titles.get(key, key),
+                                                   txt[:40]))
+                srch_lb.configure(height=len(search_hits))
+            _srch_lb_open["n"] += 1
+            srch_lb.place(in_=srch_ent, relx=0, rely=1.0, y=2, relwidth=1.0,
+                     height=min(len(search_hits) or 1, 9) * int(22 * s) + 6)
+            srch_lb.lift()
+
+        def _flash_card(card_f, n=0):
+            cols = (CLR_LOW_BG, CLR_CARD)
+            try:
+                card_f.configure(bg=cols[n % 2])
+            except Exception:
+                return
+            if n < 5:
+                win.after(170, lambda: _flash_card(card_f, n + 1))
+            else:
+                try:
+                    card_f.configure(bg=CLR_CARD)
+                except Exception:
+                    pass
+
+        def _pick(i):
+            if not (0 <= i < len(search_hits)):
+                return
+            key, _txt, card_f = search_hits[i]
+            srch_lb.place_forget()
+            var_srch.set("")
+            _placeholder(True)
+            show(key)
+
+            def go():
+                cv = canvases.get(key)
+                body = bodies.get(key)
+                try:
+                    if cv and body:
+                        frac = card_f.winfo_y() / float(
+                            max(1, body.winfo_reqheight()))
+                        cv.yview_moveto(max(0.0, frac - 0.04))
+                except Exception:
+                    pass
+                _flash_card(card_f)
+            win.after(90, go)
+
+        def _search_key(e):
+            if e.keysym == "Return":
+                _pick(0)
+            elif e.keysym == "Escape":
+                srch_lb.place_forget()
+                var_srch.set("")
+                _placeholder(True)
+
+        def _focus_ent(_e):
+            _placeholder(False)
+            srch_ent.icursor("end")
+
+        srch_ent.bind("<FocusIn>", _focus_ent)
+        srch_ent.bind("<FocusOut>", lambda e: win.after(150, lambda: (
+            srch_lb.place_forget(),
+            _placeholder(True) if not var_srch.get() else None)))
+        srch_ent.bind("<Return>", _search_key)
+        srch_ent.bind("<Escape>", _search_key)
+        srch_ent.bind("<KeyRelease>", _do_search, add="+")
+        srch_lb.bind("<<ListboxSelect>>", lambda e: (
+            srch_lb.curselection() and _pick(srch_lb.curselection()[0])))
+        srch_lb.bind("<Double-Button-1>", lambda e: (
+            srch_lb.nearest(e.y) >= 0 and _pick(srch_lb.nearest(e.y))))
+
         pages = {}          # key -> 内容页 Frame（顶层，供 show 切换）
-        item_lbls = {}      # key -> 导航项 Label
-        state = {"cur": "look"}
+        item_cvs = {}       # key -> 导航项 Canvas（圆角胶囊背景）
+        icons = {}
+        titles = {}
+        state = {"cur": "look", "hover": None}
         scroll_bodies = []  # (body_frame, on_wheel) —— 各页滚动内容区
+        canvases = {}       # key -> 页面滚动画布（搜索跳转用）
+        bodies = {}         # key -> 卡片宿主 Frame
+        page_titles = {}    # key -> 分类名（搜索结果显示用）
+
+        _pill_cache = {}
+
+        def _pill_img(color):
+            w, h = int(156 * s), int(30 * s)
+            ck = (color, w, h)
+            img = _pill_cache.get(ck)
+            if img is None:
+                from . import pillimg
+                img = tk.PhotoImage(data=pillimg.roundrect_b64(w, h, color, 9),
+                                    master=side)
+                _pill_cache[ck] = img
+            return img
+
+        def _draw_item(key):
+            cv = item_cvs.get(key)
+            if cv is None:
+                return
+            try:
+                if not cv.winfo_exists():
+                    return
+            except Exception:
+                return
+            on = state["cur"] == key
+            hv = state["hover"] == key
+            cv.delete("all")
+            if on:
+                cv.create_image(0, 0, image=_pill_img(CLR_ACCENT_LT),
+                                anchor="nw")
+            elif hv:
+                cv.create_image(0, 0, image=_pill_img(CLR_TAB_HV), anchor="nw")
+            label = "%s  %s" % (icons[key], titles[key])
+            import tkinter.font as tkfont
+            fnt = tkfont.Font(family=fam, size=10,
+                              weight="bold" if on else "normal")
+            maxw = max(int(110 * s),
+                       (cv.winfo_width() or int(156 * s)) - int(14 * s))
+            if fnt.measure(label) > maxw:      # 超宽截断，防画布边缘裁字
+                while len(label) > 2 and fnt.measure(label + "…") > maxw:
+                    label = label[:-1]
+                label += "…"
+            cv.create_text(int(12 * s), cv.winfo_height() // 2,
+                           text=label, anchor="w", font=fnt,
+                           fill=CLR_ACCENT if on else CLR_HEAD_FG)
+
+        def _redraw_side():
+            for k in item_cvs:
+                _draw_item(k)
 
         def show(key):
             state["cur"] = key
             for f in pages.values():
                 f.pack_forget()
             pages[key].pack(fill="both", expand=True)
-            for k, lbl in item_lbls.items():
-                on = (k == key)
-                lbl.configure(bg=CLR_TAB_HV if on else CLR_CARD,
-                              fg=CLR_TEXT if on else CLR_HEAD_FG,
-                              font=(fam, 10, "bold" if on else "normal"))
+            _redraw_side()
 
         def _side_header(text):
             tk.Label(side, text=text, bg=CLR_CARD, fg=CLR_MUTED,
                      font=(fam, 8)).pack(anchor="w", padx=16, pady=(14, 2))
 
         def _side_item(icon, text, key):
-            lbl = tk.Label(side, text="%s  %s" % (icon, text), bg=CLR_CARD,
-                           fg=CLR_HEAD_FG, font=(fam, 10), anchor="w",
-                           padx=16, pady=6, cursor="hand2")
-            lbl.pack(fill="x")
-            item_lbls[key] = lbl
-            lbl.bind("<Button-1>", lambda e, k=key: show(k))
-            lbl.bind("<Enter>",
-                     lambda e, k=key: item_lbls[k].configure(
-                         bg=CLR_TAB_HV) if state["cur"] != k else None)
-            lbl.bind("<Leave>",
-                     lambda e, k=key: item_lbls[k].configure(
-                         bg=CLR_CARD) if state["cur"] != k else None)
+            icons[key] = icon
+            titles[key] = text
+            cv = tk.Canvas(side, width=int(156 * s), height=int(30 * s),
+                           bg=CLR_CARD, highlightthickness=0, bd=0,
+                           cursor="hand2")
+            cv.pack(padx=int(7 * s), pady=(int(1 * s), 0))
+            item_cvs[key] = cv
+            cv.bind("<Configure>", lambda e, k=key: _draw_item(k))
+            cv.bind("<Button-1>", lambda e, k=key: show(k))
+            cv.bind("<Enter>", lambda e, k=key: (
+                state.__setitem__("hover", k), _draw_item(k)))
+            cv.bind("<Leave>", lambda e, k=key: (
+                state.__setitem__("hover", None), _draw_item(k)))
 
         def _page(key, title=None):
             pf = tk.Frame(content, bg=CLR_BG)
             pages[key] = pf
+            page_titles[key] = title or key
             if title:
                 tk.Label(pf, text=title, bg=CLR_BG, fg=CLR_TEXT,
                          font=(fam, 13, "bold")).pack(anchor="w", padx=22,
@@ -3735,6 +3963,8 @@ class App(object):
 
             cv.bind("<MouseWheel>", _on_wheel)
             body.bind("<MouseWheel>", _on_wheel)
+            canvases[key] = cv
+            bodies[key] = body
             scroll_bodies.append((body, _bind_wheel))
             return body
 
@@ -3849,6 +4079,88 @@ class App(object):
                        selectcolor=CLR_INPUT, activebackground=CLR_CARD,
                        font=(fam, 10)).pack(anchor="w")
         hint(inner, "关掉后拨动开关瞬间切换，低配电脑上更跟手。")
+
+        inner = card(pf, "显示的列", "只留常用的列，一行能多显示几列（右键点表头也能改）")
+        grid = tk.Frame(inner, bg=CLR_CARD)
+        grid.pack(fill="x")
+        col_vars = {}
+
+        def on_col(k, v):
+            self._toggle_col(k, bool(v.get()))
+            if (k in self.visible_cols) != bool(v.get()):
+                v.set(k in self.visible_cols)     # 被「至少留一列」挡回时复原
+
+        for i, k in enumerate(FIELD_KEYS):
+            cv_ = tk.BooleanVar(value=k in self.visible_cols)
+            col_vars[k] = cv_
+            tk.Checkbutton(grid, text=FIELD_LABEL[k], variable=cv_,
+                           bg=CLR_CARD, fg=CLR_TEXT, selectcolor=CLR_INPUT,
+                           activebackground=CLR_CARD, font=(fam, 10),
+                           anchor="w", width=8,
+                           command=lambda kk=k, vv=cv_: on_col(kk, vv)
+                           ).grid(row=i % 5, column=i // 5, sticky="w",
+                                  padx=(0, 10), pady=1)
+
+        def all_cols():
+            self.visible_cols = list(FIELD_KEYS)
+            for k, v in col_vars.items():
+                v.set(True)
+            self.render_page()
+            self._save_settings()
+
+        ttk.Button(inner, text="显示全部列", style="Ghost.TButton", width=10,
+                   command=all_cols).pack(anchor="w", pady=(8, 0))
+        hint(inner, "至少保留一列；隐藏只影响本机显示，导出的表格仍是全部字段。")
+
+        inner = card(pf, "列表与搜索", "只影响本机的查看习惯，不改动任何数据")
+        row_s = tk.Frame(inner, bg=CLR_CARD)
+        row_s.pack(fill="x")
+        tk.Label(row_s, text="默认排序", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        var_sort = tk.StringVar(value=SORT_CHOICES.get(self.default_sort,
+                                                       SORT_CHOICES["none"]))
+        cb_sort = guard_combobox(ttk.Combobox(row_s, textvariable=var_sort,
+                                              state="readonly",
+                               width=18, font=(fam, 9),
+                               values=list(SORT_CHOICES.values())))
+        cb_sort.pack(side="left")
+
+        def on_sort(*_a):
+            val = "none"
+            for k, txt in SORT_CHOICES.items():
+                if txt == var_sort.get():
+                    val = k
+            self.default_sort = val
+            self.settings["default_sort"] = val
+            self.sort_key = None if val == "none" else val
+            self.sort_desc = bool(SORT_DESC.get(val, False))
+            self._save_settings()
+            self.apply_filters()
+
+        cb_sort.bind("<<ComboboxSelected>>", on_sort)
+
+        row_k = tk.Frame(inner, bg=CLR_CARD)
+        row_k.pack(fill="x", pady=(8, 0))
+        tk.Label(row_k, text="搜索范围", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        scope_names = ["全部字段", "仅编号和型号"]
+        var_scope = tk.StringVar(value=scope_names[0] if self.search_scope == "all"
+                                 else scope_names[1])
+        cb_scope = guard_combobox(ttk.Combobox(row_k, textvariable=var_scope,
+                                               state="readonly",
+                                               width=14, font=(fam, 9),
+                                               values=scope_names))
+        cb_scope.pack(side="left")
+
+        def on_scope(*_a):
+            self.search_scope = "key" if var_scope.get() == scope_names[1] else "all"
+            self.settings["search_scope"] = self.search_scope
+            self._save_settings()
+            self.apply_filters()
+
+        cb_scope.bind("<<ComboboxSelected>>", on_scope)
+        hint(inner, "「仅编号和型号」搜得更快，也不会被备注里的字误命中；"
+                    "「全部字段」还能搜品牌、品类、成色、货架。")
 
         # ================================================== 快捷键
         pf = _page("keys", "快捷键")
@@ -4020,7 +4332,89 @@ class App(object):
                        selectcolor=CLR_INPUT, activebackground=CLR_CARD,
                        font=(fam, 10),
                        command=save_dir).pack(anchor="w", pady=(8, 0))
-        ent.bind("<FocusOut>", lambda e: save_dir())
+        ent.bind("<FocusOut>", lambda e=None: save_dir())
+
+        # ================================================== 编号规则
+        pf = _page("code", "编号规则")
+        inner = card(pf, "自动编号",
+                     "只影响之后新生成的编号；已有编号一律原样保留")
+        cur_prefix = str(self.settings.get("code_prefix") or "WL")
+        try:
+            cur_digits = int(self.settings.get("code_digits") or 5)
+        except (TypeError, ValueError):
+            cur_digits = 5
+        var_pf = tk.StringVar(value=cur_prefix)
+        var_dg = tk.StringVar(value=str(cur_digits))
+        lbl_sample = tk.Label(inner, text="", bg=CLR_CARD, fg=CLR_ACCENT,
+                              font=(fam, 10, "bold"))
+
+        def sample():
+            p = (var_pf.get() or "WL").strip().upper()
+            try:
+                d = max(3, min(8, int(var_dg.get())))
+            except (TypeError, ValueError):
+                d = 5
+            return "%s-%s" % (p, "0" * (d - 1) + "1")
+
+        def refresh_sample(*_a):
+            lbl_sample.configure(text="新编号示例：%s" % sample())
+
+        row_c = tk.Frame(inner, bg=CLR_CARD)
+        row_c.pack(fill="x")
+        tk.Label(row_c, text="前缀", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        ent_pf = tk.Entry(row_c, textvariable=var_pf, width=8, font=(fam, 10),
+                          bg=CLR_INPUT, fg=CLR_TEXT, relief="solid", bd=1,
+                          highlightthickness=0)
+        ent_pf.pack(side="left", ipady=3, padx=(0, 16))
+        tk.Label(row_c, text="位数", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        ttk.Spinbox(row_c, from_=3, to=8, width=4, textvariable=var_dg,
+                    font=(fam, 10), command=refresh_sample).pack(side="left")
+        lbl_sample.pack(anchor="w", pady=(8, 0))
+        var_pf.trace_add("write", lambda *_a: refresh_sample())
+        var_dg.trace_add("write", lambda *_a: refresh_sample())
+        refresh_sample()
+
+        def save_code_rule():
+            p = (var_pf.get() or "").strip().upper()
+            p = "".join(ch for ch in p if ch.isalnum() or ch in "_-")[:8]
+            try:
+                d = max(3, min(8, int(var_dg.get())))
+            except (TypeError, ValueError):
+                d = 5
+            if not p:
+                messagebox.showwarning("编号规则", "前缀不能为空，例如 WL、SP、A1。",
+                                       parent=win)
+                return
+            var_pf.set(p)
+            var_dg.set(str(d))
+            self.settings["code_prefix"] = p
+            self.settings["code_digits"] = d
+            self._save_settings()
+            ok = True
+            try:
+                self.store.set_code_rule(p, d)      # 立即对下一次新增生效
+            except Exception:
+                ok = False                         # 客户端模式：编号由主机生成
+            self._status("编号规则已改为 %s-%s"
+                         % (p, "0" * (d - 1) + "1")
+                         + ("" if ok else "（连接主机时以主机规则为准）"))
+
+        def reset_code_rule():
+            var_pf.set("WL")
+            var_dg.set("5")
+            save_code_rule()
+
+        row_b = tk.Frame(inner, bg=CLR_CARD)
+        row_b.pack(anchor="w", pady=(10, 0))
+        ttk.Button(row_b, text="保存规则", style="Accent.TButton", width=9,
+                   command=save_code_rule).pack(side="left")
+        ttk.Button(row_b, text="恢复 WL-00001", style="Ghost.TButton", width=14,
+                   command=reset_code_rule).pack(side="left", padx=(8, 0))
+        hint(inner, "库里已有编号时，新编号接着「最大尾号」往下排，不会重号；"
+                    "改了前缀同理（旧的 WL-00012 之后是新的 SP-00013）。")
+        hint(inner, "「覆盖全部」或清空数据后，计数器归零，从 1 号重新开始。")
 
         # ================================================== 数据安全
         pf = _page("backup", "数据安全")
@@ -4107,9 +4501,10 @@ class App(object):
         var_enc = tk.StringVar(
             value=enc_map.get(str(self.settings.get("csv_encoding")
                                   or "utf-8-sig"), enc_map["utf-8-sig"]))
-        cb = ttk.Combobox(rowc, textvariable=var_enc, state="readonly",
-                          width=26, font=(fam, 9),
-                          values=[v for _k, v in enc_names])
+        cb = guard_combobox(ttk.Combobox(
+            rowc, textvariable=var_enc, state="readonly",
+            width=26, font=(fam, 9),
+            values=[v for _k, v in enc_names]))
 
         def on_enc(*_a):
             self.settings["csv_encoding"] = rev_map.get(var_enc.get(),
@@ -4137,8 +4532,10 @@ class App(object):
                 "csv" if str(var_fmt.get()).startswith("CSV") else "xlsx")
             self._save_settings()
 
-        cb_f = ttk.Combobox(row_f, textvariable=var_fmt, state="readonly",
-                            width=24, font=(fam, 9), values=fmt_names)
+        cb_f = guard_combobox(ttk.Combobox(row_f, textvariable=var_fmt,
+                                           state="readonly",
+                                           width=24, font=(fam, 9),
+                                           values=fmt_names))
         cb_f.bind("<<ComboboxSelected>>", on_fmt)
         cb_f.pack(side="left")
         hint(inner, "XLSX 带样式和汇总表；CSV 用 Excel / WPS 都能直接打开，"
@@ -4230,9 +4627,10 @@ class App(object):
                                        if n else "暂无需要清理的旧记录。"),
                                     parent=win)
 
-        cb_d = ttk.Combobox(row_r, textvariable=var_days, state="readonly",
-                            width=14, font=(fam, 9),
-                            values=[n for n, _d in day_names])
+        cb_d = guard_combobox(ttk.Combobox(row_r, textvariable=var_days,
+                                           state="readonly",
+                                           width=14, font=(fam, 9),
+                                           values=[n for n, _d in day_names]))
         cb_d.bind("<<ComboboxSelected>>", on_days)
         cb_d.pack(side="left")
 
@@ -4249,6 +4647,44 @@ class App(object):
                    command=clean_now).pack(side="left", padx=(10, 0))
         hint(inner, "回收站里的记录在保留期内随时可以恢复；改成「永久保留」则永不自动删除。")
 
+        inner = card(pf, "局域网端口",
+                     "共享服务用的端口；被别的软件占用导致开不了共享时改这里")
+        row_pt = tk.Frame(inner, bg=CLR_CARD)
+        row_pt.pack(fill="x")
+        tk.Label(row_pt, text="端口", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 10)).pack(side="left", padx=(0, 8))
+        var_port = tk.StringVar(value=str(self.lan_cfg.get("port") or DEFAULT_PORT))
+        tk.Entry(row_pt, textvariable=var_port, width=8, font=(fam, 10),
+                 bg=CLR_INPUT, fg=CLR_TEXT, relief="solid", bd=1,
+                 highlightthickness=0).pack(side="left", ipady=3)
+
+        def save_port():
+            try:
+                p = int(str(var_port.get()).strip())
+                if not 1024 <= p <= 65535:
+                    raise ValueError
+            except (TypeError, ValueError):
+                messagebox.showwarning("局域网端口",
+                                       "请填 1024-65535 之间的数字（常用 8080）。",
+                                       parent=win)
+                var_port.set(str(self.lan_cfg.get("port") or DEFAULT_PORT))
+                return
+            self.lan_cfg["port"] = p
+            self._save_lan_cfg()
+            try:
+                self.lan_dlg.var_port.set(str(p))   # 同步到局域网面板的输入框
+            except Exception:
+                pass
+            self._status("局域网端口已设为 %d%s"
+                         % (p, "（正在共享，重新开启共享后生效）"
+                            if self.lan_server else ""))
+
+        ttk.Button(row_pt, text="保存", width=6,
+                   command=save_port).pack(side="left", padx=(8, 0))
+        hint(inner, "默认 %d。改完如果共享正在运行，需要先停止再开启共享才生效；"
+                    "连接主机那一端要填同样的端口。"
+                    % DEFAULT_PORT)
+
         # ================================================== 局域网共享
         # 原独立「局域网共享」窗口整体并入（主机 / 连接主机 / 手机访问三卡片，
         # 自带滚动；app.lan_dlg 指向面板，轮询刷新通道照旧）
@@ -4258,6 +4694,327 @@ class App(object):
         lan_panel.pack(fill="both", expand=True)
         self.lan_dlg = lan_panel
 
+        # ================================================== 关于与维护
+        pf = _page("about", "关于与维护")
+        inner = card(pf, "关于", "所有数据都保存在本机，不上传任何服务器")
+        rowv = tk.Frame(inner, bg=CLR_CARD)
+        rowv.pack(fill="x")
+        tk.Label(rowv, text=APP_SHORT, bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(fam, 15, "bold")).pack(side="left")
+        tk.Label(rowv, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_ACCENT,
+                 font=(fam, 10, "bold")).pack(side="left", padx=(8, 0),
+                                              pady=(5, 0))
+        tk.Label(inner, text="当前仓库：%s    （%s）"
+                 % (self.cur_wh()["name"],
+                    os.path.basename(self.db_path) or "远程主机"),
+                 bg=CLR_CARD, fg=CLR_TEXT, font=(fam, 9)).pack(anchor="w",
+                                                               pady=(6, 0))
+        tk.Label(inner, text="数据文件夹：%s" % self.data_dir, bg=CLR_CARD,
+                 fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w")
+        hint(inner, "整个数据文件夹复制到别的电脑，就是一套完整的数据（含照片与备份）。")
+
+        inner = card(pf, "存储占用", "只统计不清理，数字随正常使用增长")
+        store_vars = {}
+
+        def _kv(label, key, bold=False):
+            r = tk.Frame(inner, bg=CLR_CARD)
+            r.pack(fill="x", pady=1)
+            tk.Label(r, text=label, bg=CLR_CARD, fg=CLR_MUTED, font=(fam, 9),
+                     width=9, anchor="w").pack(side="left")
+            v = tk.StringVar(value="…")
+            tk.Label(r, textvariable=v, bg=CLR_CARD,
+                     fg=CLR_ACCENT if bold else CLR_TEXT,
+                     font=(fam, 9, "bold" if bold else "normal"),
+                     anchor="w").pack(side="left", fill="x", expand=True)
+            store_vars[key] = v
+
+        _kv("数据库", "db")
+        _kv("记录", "cnt")
+        _kv("照片", "photo")
+        _kv("备份", "backup")
+        _kv("合计", "all", True)
+
+        def _backup_stat():
+            d = os.path.join(self.data_dir, "backups")
+            n = sz = 0
+            try:
+                for e in os.scandir(d):
+                    try:
+                        if not e.is_file() or not e.name.lower().endswith(".db"):
+                            continue
+                        n += 1
+                        sz += e.stat().st_size
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            return n, sz
+
+        def refresh_store():
+            def work():
+                pn, ps = self.store.photo_stats()
+                return {"db": self.store.db_size(), "pn": pn, "ps": ps,
+                        "bk": _backup_stat(), "cnt": self.store.table_counts()}
+
+            def done(res, err):
+                try:
+                    if err or not res:
+                        store_vars["db"].set("统计失败：%s" % (err or "未知原因"))
+                        return
+                    c = res["cnt"]
+                    bn, bs = res["bk"]
+                    store_vars["db"].set(fmt_bytes(res["db"]))
+                    store_vars["cnt"].set(
+                        "库存 %d（售完 %d · 回收站 %d）　出售 %d · 采购 %d · 客户 %d"
+                        % (c["items"], c["sold"], c["trash"], c["sales"],
+                           c["purchases"], c["customers"]))
+                    store_vars["photo"].set("%d 张，%s"
+                                            % (res["pn"], fmt_bytes(res["ps"])))
+                    store_vars["backup"].set("%d 份，%s" % (bn, fmt_bytes(bs)))
+                    store_vars["all"].set(fmt_bytes(res["db"] + res["ps"] + bs))
+                finally:
+                    self._end_busy()
+
+            self._run_bg(work, done, "正在统计占用…")
+
+        rowr = tk.Frame(inner, bg=CLR_CARD)
+        rowr.pack(anchor="w", pady=(6, 0))
+        ttk.Button(rowr, text="重新统计", style="Ghost.TButton", width=8,
+                   command=refresh_store).pack(side="left")
+        hint(inner, "手机端上传的照片算在「照片」里；备份是各仓库共用的一份备份目录。")
+
+        # ---- 数据体检 ----
+        inner = card(pf, "数据体检",
+                     "检查导入、出售留下的常见问题；只读，不改动任何数据")
+        res_box = tk.Frame(inner, bg=CLR_CARD)
+        res_box.pack(fill="x")
+        lbl_health = tk.Label(inner, text="点「开始体检」查看当前数据的状况。",
+                              bg=CLR_CARD, fg=CLR_MUTED, font=(fam, 8),
+                              anchor="w", justify="left")
+        lbl_health.pack(fill="x", pady=(4, 0))
+        health_cache = {"rows": []}
+
+        def show_health_detail(r):
+            dlg = tk.Toplevel(win)
+            dlg.title(r["title"])
+            dlg.configure(bg=CLR_BG)
+            dlg.transient(win)
+            dlg.grab_set()
+            apply_window_icon(dlg)
+            tk.Label(dlg, text=r["hint"], bg=CLR_BG, fg=CLR_MUTED,
+                     font=(fam, 9), wraplength=520, justify="left",
+                     anchor="w").pack(fill="x", padx=14, pady=(12, 6))
+            wrap = tk.Frame(dlg, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                            highlightthickness=1)
+            wrap.pack(fill="both", expand=True, padx=14)
+            txt = tk.Text(wrap, height=min(18, max(5, r["count"])), width=56,
+                          bg=CLR_CARD, fg=CLR_TEXT, font=(fam, 9),
+                          relief="flat", bd=0, wrap="none")
+            sb = ttk.Scrollbar(wrap, orient="vertical", command=txt.yview)
+            txt.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            txt.pack(side="left", fill="both", expand=True)
+            for line in r["rows"]:
+                txt.insert("end", "%s\n" % line)
+            txt.configure(state="disabled")
+            ttk.Button(dlg, text="关闭", width=6,
+                       command=dlg.destroy).pack(pady=12)
+            center_window(dlg, win, size=(600, 420), force=True)
+
+        def render_health(rows):
+            health_cache["rows"] = rows
+            for w in res_box.winfo_children():
+                w.destroy()
+            bad = 0
+            for r in rows:
+                ok = r["count"] == 0
+                warn = (not ok) and r["level"] == "warn"
+                if warn:
+                    bad += 1
+                line = tk.Frame(res_box, bg=CLR_CARD)
+                line.pack(fill="x", pady=1)
+                tk.Label(line, text="✓" if ok else ("!" if warn else "·"),
+                         bg=CLR_CARD,
+                         fg=CLR_OK if ok else (CLR_DANGER if warn else CLR_WARN),
+                         font=(fam, 10, "bold"), width=2).pack(side="left")
+                tk.Label(line, text=r["title"], bg=CLR_CARD, fg=CLR_TEXT,
+                         font=(fam, 9), width=17, anchor="w").pack(side="left")
+                tk.Label(line, text="正常" if ok else "%d 条" % r["count"],
+                         bg=CLR_CARD,
+                         fg=CLR_MUTED if ok else CLR_TEXT,
+                         font=(fam, 9), width=6,
+                         anchor="w").pack(side="left")
+                if not ok:
+                    ttk.Button(line, text="查看", style="Ghost.TButton",
+                               width=5,
+                               command=lambda rr=r: show_health_detail(rr)
+                               ).pack(side="right")
+                    sample = "、".join(str(x) for x in r["samples"][:3])
+                    tk.Label(line, text="例：%s" % sample[:34], bg=CLR_CARD,
+                             fg=CLR_MUTED, font=(fam, 8),
+                             anchor="w").pack(side="left")
+            lbl_health.configure(
+                text=("共 %d 项检查，%d 项建议处理。" % (len(rows), bad)) if bad
+                else ("共 %d 项检查，全部正常。" % len(rows)))
+
+        def run_health(silent=False):
+            lbl_health.configure(text="正在检查…")
+            if silent:
+                try:
+                    render_health(self.store.health_check())
+                except Exception as e:
+                    lbl_health.configure(text="检查失败：%s" % e)
+                return
+            def done(r, e):
+                try:
+                    if r and not e:
+                        render_health(r)
+                    else:
+                        lbl_health.configure(text="检查失败：%s" % e)
+                finally:
+                    self._end_busy()
+
+            self._run_bg(self.store.health_check, done, "正在体检数据…")
+
+        def clean_orphans():
+            orphans = self.store.orphan_photos()
+            if not orphans:
+                messagebox.showinfo("清理照片", "没有多余的照片文件。", parent=win)
+                return
+            tot = sum(int(o["n"]) for o in orphans)
+            sz = sum(int(o["size"]) for o in orphans)
+            lines = "\n".join(
+                "· %s %s（%d 张）"
+                % ("商品" if o["kind"] == "item" else "手机", o["code"], o["n"])
+                for o in orphans[:10])
+            if len(orphans) > 10:
+                lines += "\n…共 %d 个编号" % len(orphans)
+            if not messagebox.askyesno(
+                    "清理多余照片",
+                    "下面这些编号在库里已经不存在，照片还占着磁盘：\n\n%s\n\n"
+                    "合计 %d 张，%s。\n\n删除后无法恢复（不影响任何库存记录）。"
+                    "确定删除？" % (lines, tot, fmt_bytes(sz)),
+                    parent=win, icon="warning"):
+                return
+            dirs, freed = self.store.photos_clear_orphans()
+            messagebox.showinfo(
+                "清理完成",
+                "已删除 %d 个编号的照片，释放 %s。" % (dirs, fmt_bytes(freed))
+                if dirs else "没有删除任何文件（可能已被占用）。", parent=win)
+            refresh_store()
+            run_health(silent=True)
+
+        def export_health():
+            rows = health_cache["rows"] or self.store.health_check()
+            if not rows:
+                messagebox.showinfo("导出报告", "先做一次体检。", parent=win)
+                return
+            default = "数据体检_%s_%s.txt" % (self.cur_wh()["name"],
+                                             datetime.now().strftime("%Y%m%d_%H%M"))
+            path = filedialog.asksaveasfilename(
+                title="导出体检报告", parent=win, defaultextension=".txt",
+                initialdir=self._dialog_dir(), initialfile=default,
+                filetypes=[("文本文件", "*.txt")])
+            if not path:
+                return
+            self._note_dir(path)
+            lines = ["%s  数据体检报告" % APP_SHORT,
+                     "时间：%s" % datetime.now().strftime("%Y-%m-%d %H:%M"),
+                     "版本：%s    仓库：%s" % (APP_VERSION, self.cur_wh()["name"]),
+                     "-" * 46]
+            for r in rows:
+                lines.append("%s  %s：%s"
+                             % ("[需处理]" if r["level"] == "warn" and r["count"]
+                                else "[检查]", r["title"],
+                                "正常" if r["count"] == 0 else "%d 条" % r["count"]))
+                if r["count"]:
+                    lines.append("    说明：%s" % r["hint"])
+                    for s_ in r["rows"][:50]:
+                        lines.append("    - %s" % s_)
+                    if r["count"] > 50:
+                        lines.append("    …共 %d 条" % r["count"])
+            try:
+                with open(path, "w", encoding="utf-8-sig") as f:
+                    f.write("\n".join(lines))
+                self._status("体检报告已导出：%s" % os.path.basename(path))
+                if messagebox.askyesno("导出完成", "报告已保存到：\n%s\n\n现在打开吗？"
+                                       % path, parent=win):
+                    self._open_file(path)
+            except Exception as e:
+                messagebox.showerror("导出失败", str(e), parent=win)
+
+        rowh = tk.Frame(inner, bg=CLR_CARD)
+        rowh.pack(anchor="w", pady=(8, 0))
+        ttk.Button(rowh, text="开始体检", style="Accent.TButton", width=8,
+                   command=run_health).pack(side="left")
+        ttk.Button(rowh, text="导出报告", width=8,
+                   command=export_health).pack(side="left", padx=(8, 0))
+        ttk.Button(rowh, text="清理多余照片", style="Ghost.TButton", width=12,
+                   command=clean_orphans).pack(side="left", padx=(8, 0))
+
+        # ---- 数据库维护 ----
+        inner = card(pf, "数据库维护", "偶尔做一次即可，压缩期间请勿关闭程序")
+        rowm = tk.Frame(inner, bg=CLR_CARD)
+        rowm.pack(fill="x")
+        lbl_maint = tk.Label(inner, text="压缩只能回收「删除记录」留下的空洞，"
+                                         "不会动任何现有数据。",
+                             bg=CLR_CARD, fg=CLR_MUTED, font=(fam, 8),
+                             anchor="w")
+
+        def do_vacuum():
+            if not messagebox.askyesno(
+                    "压缩数据库",
+                    "将整理数据库文件并回收已删除记录占用的空间。\n"
+                    "几千条记录通常一两秒完成，期间不要关闭程序。\n\n现在压缩吗？",
+                    parent=win):
+                return
+
+            def done(res, err):
+                try:
+                    if err or not res:
+                        messagebox.showerror("压缩失败", "数据库正忙或不支持：%s\n\n"
+                                             "如果是局域网主机模式，可先断开所有客户端再试。"
+                                             % err, parent=win)
+                        return
+                    before, after = res
+                    freed = max(0, before - after)
+                    lbl_maint.configure(
+                        text="上次压缩：%s → %s，释放 %s"
+                        % (fmt_bytes(before), fmt_bytes(after), fmt_bytes(freed)))
+                    messagebox.showinfo("压缩完成",
+                                        "数据库从 %s 压缩到 %s，释放 %s。"
+                                        % (fmt_bytes(before), fmt_bytes(after),
+                                           fmt_bytes(freed)), parent=win)
+                finally:
+                    self._end_busy()
+                    refresh_store()      # 占用数字跟着变（此时 busy 已释放）
+
+            self._run_bg(self.store.vacuum, done, "正在压缩数据库…")
+
+        def do_check():
+            ok, msgs = self.store.integrity_check()
+            if ok:
+                messagebox.showinfo("完整性检查", "数据库结构完好，没有发现问题。",
+                                    parent=win)
+            else:
+                messagebox.showwarning(
+                    "完整性检查",
+                    "发现异常：\n\n%s\n\n建议先用「数据安全」里的备份复制一份，"
+                    "再联系维护人员。" % "\n".join(msgs), parent=win)
+
+        ttk.Button(rowm, text="压缩数据库", width=11,
+                   command=do_vacuum).pack(side="left")
+        ttk.Button(rowm, text="检查数据库完整性", style="Ghost.TButton",
+                   width=15, command=do_check).pack(side="left", padx=(8, 0))
+        lbl_maint.pack(fill="x", pady=(6, 0))
+        hint(inner, "数据库使用 SQLite 单文件存储；照片与备份不进数据库，单独占用磁盘。")
+
+        # 打开页面时自动统计一次占用（体检等用户主动点，避免每次开设置都扫库）
+        try:
+            win.after(120, refresh_store)
+        except Exception:
+            pass
+
         # ---- 左侧导航装配 ----
         _side_item("\u25d0", "外观", "look")
         _side_item("\u2328", "快捷键", "keys")
@@ -4265,9 +5022,11 @@ class App(object):
         _side_header("通用")
         _side_item("\u2302", "启动行为", "start")
         _side_item("\u2699", "默认路径", "paths")
+        _side_item("#", "编号规则", "code")
         _side_item("\u2726", "数据安全", "backup")
         _side_item("\u29c9", "文件格式与兼容性", "format")
         _side_item("\u26a1", "系统与后台", "system")
+        _side_item("\u24d8", "关于与维护", "about")
         tk.Frame(side, bg=CLR_CARD).pack(expand=True)   # 底部占位
         tk.Label(side, text="v%s" % APP_VERSION, bg=CLR_CARD, fg=CLR_MUTED,
                  font=(fam, 8)).pack(pady=(0, 10))
@@ -4275,6 +5034,30 @@ class App(object):
         # 滚轮覆盖：页面内容此刻已全部创建，递归绑到每个子控件
         for _body, _bindfn in scroll_bodies:
             _bindfn(_body)
+
+        # ---- 搜索设置项：索引所有页面的文字，指向所属卡片 ----
+        for _key, _pf in pages.items():
+            _body = bodies.get(_key, _pf)
+            _stack = list(_pf.winfo_children())
+            while _stack:
+                _w = _stack.pop()
+                _stack.extend(_w.winfo_children())
+                try:
+                    _txt = str(_w.cget("text")).strip()
+                except Exception:
+                    continue
+                if not _txt or "\n" in _txt or _txt.startswith("PY_VAR"):
+                    continue
+                _card = _w
+                while _card.master is not None and _card.master not in \
+                        (_body, _pf):
+                    _card = _card.master
+                if _card.master not in (_body, _pf):
+                    continue
+                search_index.append((_key, _txt, _card))
+        win._search_index = search_index      # 探针/测试钩子
+        win._search_pick = _pick
+        win._search_do = _do_search
 
         def _close():
             try:
@@ -4335,20 +5118,24 @@ class App(object):
 
         lbl("来源").pack(side="left")
         self.var_log_src = tk.StringVar(value="全部")
-        self.cb_log_src = ttk.Combobox(bar, textvariable=self.var_log_src,
-                                       state="readonly", width=16, font=(self.fam, 9))
+        self.cb_log_src = guard_combobox(ttk.Combobox(
+            bar, textvariable=self.var_log_src,
+            state="readonly", width=16, font=(self.fam, 9)))
         self.cb_log_src.pack(side="left", padx=(4, 10))
         lbl("操作").pack(side="left")
         self.var_log_act = tk.StringVar(value="全部")
-        ttk.Combobox(bar, textvariable=self.var_log_act, state="readonly",
-                     width=12, font=(self.fam, 9),
-                     values=["全部"] + self.LOG_ACTS).pack(side="left", padx=(4, 10))
+        guard_combobox(ttk.Combobox(bar, textvariable=self.var_log_act,
+                                    state="readonly",
+                                    width=12, font=(self.fam, 9),
+                                    values=["全部"] + self.LOG_ACTS)
+                       ).pack(side="left", padx=(4, 10))
         lbl("范围").pack(side="left")
         self.var_log_days = tk.StringVar(value="近30天")
-        ttk.Combobox(bar, textvariable=self.var_log_days, state="readonly",
-                     width=8, font=(self.fam, 9),
-                     values=["今天", "近7天", "近30天", "全部"]).pack(side="left",
-                                                                    padx=(4, 10))
+        guard_combobox(ttk.Combobox(bar, textvariable=self.var_log_days,
+                                    state="readonly",
+                                    width=8, font=(self.fam, 9),
+                                    values=["今天", "近7天", "近30天", "全部"])
+                       ).pack(side="left", padx=(4, 10))
         lbl("关键字").pack(side="left")
         self.var_log_kw = tk.StringVar()
         ttk.Entry(bar, textvariable=self.var_log_kw, width=18,
@@ -4587,6 +5374,7 @@ class App(object):
         srv.default_allow = bool(self.lan_cfg.get("default_allow"))
         srv.phone_access = bool(self.lan_cfg.get("phone_access", True))
         srv.set_blocked(self.lan_cfg.get("blocked") or [])
+        srv.name_overrides = dict(self.lan_cfg.get("name_overrides") or {})
         self.lan_server = srv
         self.lan_mode = "host"
         self.lan_cfg.update({"mode": "host", "port": port, "code": code})
@@ -4613,6 +5401,13 @@ class App(object):
         if self.lan_server:
             self.lan_server.allow(ip, flag)
         self._refresh_lan_dialog()
+
+    def _wf_my_stage(self):
+        """本机在制作流程里选的工位（-1 = 不限）；客户端模式下随请求上报。"""
+        try:
+            return int(self.settings.get("wf_my_stage", -1))
+        except (TypeError, ValueError):
+            return -1
 
     def set_lan_default_allow(self, flag):
         self.lan_cfg["default_allow"] = bool(flag)
@@ -4650,6 +5445,22 @@ class App(object):
         self._save_lan_cfg()
         return True, "已加入黑名单"
 
+    def lan_rename_client(self, ip, name):
+        """主机给某台客户端改显示名（覆盖客户端上报的名字，重启后仍生效）。"""
+        if not self.lan_server:
+            return False, "当前不是主机模式"
+        ok = self.lan_server.rename_client(ip, name)
+        if not ok:
+            return False, "该电脑已断开，请刷新后再试"
+        self.lan_cfg["name_overrides"] = dict(self.lan_server.name_overrides)
+        self._save_lan_cfg()
+        self._refresh_lan_dialog()
+        return True, "已改名"
+
+    def lan_sales_stats(self, days=0):
+        """按来源汇总各台设备（主机/电脑/手机）的销售数据。"""
+        return self.store.sales_stats_by_src(days)
+
     def lan_unblock(self, ip):
         """移出黑名单。"""
         if self.lan_server:
@@ -4665,6 +5476,73 @@ class App(object):
         return srv.blocked_snapshot() if srv else list(self.lan_cfg.get("blocked") or [])
 
     # ------------------------------------------------------------ 客户端
+    def _start_auto_reconnect(self):
+        """开机自动连回上次主机（v1.42.7）。
+
+        客户端电脑第二天开机后不用再填地址和连接码：后台线程每 20 秒探测
+        最近连过的主机，主机一上线就自动连上。手动「断开 / 回到本机」
+        或手动连了别的目标后，本会话不再自动连。
+        """
+        self._auto_stop = False
+        threading.Thread(target=self._auto_reconnect_work, daemon=True,
+                         name="lan-auto").start()
+
+    def _auto_reconnect_work(self):
+        time.sleep(5.0)                # 先给界面一点启动时间再第一次探测
+        while not self._stopped and not getattr(self, "_auto_stop", True):
+            try:
+                hist = [h for h in (self.lan_cfg.get("history") or [])
+                        if isinstance(h, dict) and str(h.get("host") or "")
+                        and str(h.get("code") or "")]
+                if (self.lan_mode == "off"
+                        and bool(self.lan_cfg.get("auto_reconnect", True))
+                        and hist):
+                    tgt = hist[0]
+                    host = str(tgt.get("host"))
+                    port = int(tgt.get("port") or DEFAULT_PORT)
+                    code = str(tgt.get("code") or "")
+                    rs = RemoteStore(host, port, code,
+                                     self.lan_cfg.get("client_id") or "",
+                                     self.lan_cfg.get("client_name") or "",
+                                     timeout=5)
+                    try:
+                        rs.ping()
+                    except Exception:
+                        rs = None
+                    # ping 成功后再核对一次（期间用户可能已手动连上/断开）
+                    if rs is not None and self.lan_mode == "off" \
+                            and not self._auto_stop:
+                        box, evt = {}, threading.Event()
+                        self._ui(self._auto_connect_done,
+                                 host, port, code, rs, box, evt)
+                        evt.wait(20)   # 连接（含读全量数据）最多等 20 秒
+                        if box.get("ok"):
+                            return     # 连上了，线程收工
+            except Exception as e:
+                # 自动重连线程不允许无声失效：出错打印到 stderr 便于排查
+                try:
+                    sys.stderr.write("[lan-auto] %s: %s\n"
+                                     % (type(e).__name__, e))
+                except Exception:
+                    pass
+            time.sleep(20.0)
+
+    def _auto_connect_done(self, host, port, code, rs, box, evt):
+        """后台线程 ping 通主机后，回到界面线程执行真正的热切换。"""
+        try:
+            if self.lan_mode == "off" and not self._auto_stop:
+                ok, _msg = self.connect_lan(host, port, code, probe=rs)
+                box["ok"] = bool(ok)
+                if ok:
+                    self._status("已自动连回主机 %s:%d（上次连接的主机，"
+                                 "无需重新填写）" % (host, port))
+            else:
+                box["ok"] = False
+        except Exception:
+            box["ok"] = False
+        finally:
+            evt.set()
+
     def connect_lan(self, host, port=None, code="", probe=None):
         """连接到主机（热切换，不用重启程序）。
 
@@ -4690,6 +5568,7 @@ class App(object):
                 rs = RemoteStore(host, port, code,
                                  self.lan_cfg.get("client_id") or "",
                                  self.lan_cfg.get("client_name") or "")
+                rs.wf_stage = self._wf_my_stage()
                 info = rs.ping()
         except Exception as e:
             return False, str(e)
@@ -4710,6 +5589,7 @@ class App(object):
         self.lan_cfg.update({"mode": "client", "host": host,
                              "port": port, "code": code})
         self._add_lan_history(host, port, code)
+        self._auto_stop = True         # 手动连接成功后，自动重连线程收工
         self._save_lan_cfg()
         self._reload_all()
         self._update_lan_ui()
@@ -4731,6 +5611,7 @@ class App(object):
             pass
         self.lan_mode = "off"
         self.can_write = True
+        self._auto_stop = True         # 用户手动断开：本会话不再自动连回
         self._remote_wh = ""
         self._lan_rev = 0
         self.lan_cfg["mode"] = "off"
@@ -4752,6 +5633,16 @@ class App(object):
             try:
                 if self.lan_dlg.winfo_viewable():
                     self._refresh_lan_dialog()   # 主机模式弹窗也轮询（在线列表/最近活动保鲜）
+            except Exception:
+                pass
+        # 主机端：别的工位推进了制作单，本机停留在制作流程页时自动刷新
+        if self.lan_mode == "host" and self.lan_server is not None:
+            try:
+                if self.nb.index(self.nb.select()) == 10:
+                    st = self.store.wf_stamp()
+                    if st != getattr(self, "_wf_stamp", None):
+                        self._wf_stamp = st
+                        self.tab_workflow.refresh_rows()
             except Exception:
                 pass
         if self.lan_mode == "client" and not self._lan_busy:
@@ -4834,6 +5725,10 @@ class App(object):
             self.tab_sales.refresh_rows()
             self.tab_out.refresh_rows()
             self.tab_phone.refresh_rows()
+            try:
+                self.tab_workflow.refresh_rows()
+            except Exception:
+                pass
             self._status("已同步主机最新数据")
         except Exception as e:
             self._status("同步失败：%s" % e)
@@ -4874,8 +5769,30 @@ class App(object):
         """由主机服务线程调用：转到 UI 线程处理。"""
         if kind == "request" and payload:
             self._ui(self._on_lan_write_request, payload)
+        elif kind == "stage_req" and payload:
+            self._ui(self._on_lan_stage_request, payload)
         else:
             self._ui(self._refresh_lan_dialog)
+
+    def _on_lan_stage_request(self, payload):
+        """某台电脑申请改制作工位：主机点头才生效。"""
+        srv = self.lan_server
+        if srv is None:
+            return
+        ip = payload.get("ip") or ""
+        name = payload.get("name") or "未知电脑"
+        try:
+            stages = self.store.wf_stages()
+        except Exception:
+            stages = []
+        to = int(payload.get("stage", -1))
+        new = stages[to] if 0 <= to < len(stages) else "不限"
+        ans = messagebox.askyesno(
+            "工位变更申请",
+            "%s 想把它的制作工位改成「%s」。\n\n"
+            "同意后这台电脑只能推进停在该工位的制作单。\n"
+            "要同意吗？" % (name, new), parent=self.root)
+        srv.answer_stage(ip, bool(ans))
 
     def _on_lan_write_request(self, payload):
         name = payload.get("name") or "未知电脑"
@@ -4922,8 +5839,28 @@ class App(object):
                 parent=self.root)
             return
         traceback.print_exception(exc, val, tb)
+        # 打包成 exe 后没有控制台，用户只能看到一句 "TypeError: xxx"，
+        # 定位不到哪一行。这里把最内层位置写进对话框，并落盘到 error.log。
+        where, detail = "", ""
         try:
-            messagebox.showerror("操作失败", "%s: %s" % (exc.__name__, val),
+            frames = traceback.extract_tb(tb)
+            if frames:
+                f = frames[-1]
+                where = "\n\n位置：%s 第 %d 行" % (os.path.basename(f.filename),
+                                                 f.lineno)
+                detail = "%s:%d" % (f.filename, f.lineno)
+        except Exception:
+            pass
+        try:
+            with open(os.path.join(self.data_dir, "error.log"), "a",
+                      encoding="utf-8") as fp:
+                fp.write("\n[%s]\n" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                traceback.print_exception(exc, val, tb, file=fp)
+        except Exception:
+            pass
+        try:
+            messagebox.showerror("操作失败", "%s: %s%s"
+                                 % (exc.__name__, val, where),
                                  parent=self.root)
         except Exception:
             pass

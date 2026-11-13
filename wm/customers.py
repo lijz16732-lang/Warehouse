@@ -14,6 +14,7 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
 COLS = [("name", "客户", 130, "w"), ("phone", "电话", 120, "center"),
         ("level", "级别", 66, "center"), ("count", "成交笔数", 78, "center"),
         ("qty", "累计件数", 78, "center"), ("amount", "累计消费(元)", 110, "e"),
+        ("debt", "应收(元)", 92, "e"),
         ("last", "最近成交", 96, "center"), ("address", "地址", 170, "w"),
         ("note", "备注", 150, "w")]
 
@@ -166,6 +167,8 @@ class CustomerTab(ttk.Frame):
         self.lbl_hint.pack(side="left")
         ttk.Button(foot, text="删除选中", style="Danger.TButton",
                    command=self.delete_selected).pack(side="right")
+        ttk.Button(foot, text="结清应收", style="Ghost.TButton", width=9,
+                   command=self.settle_debt).pack(side="right", padx=(0, 8))
         ttk.Button(foot, text="编辑", style="Ghost.TButton", width=6,
                    command=self.edit_selected).pack(side="right", padx=(0, 8))
 
@@ -208,12 +211,15 @@ class CustomerTab(ttk.Frame):
                 tags.append("vip")
             self.tree.insert("", "end", iid=iid, tags=tuple(tags), values=(
                 r["name"], r["phone"], r["level"], str(r["count"]),
-                str(r["qty"]), "%.2f" % r["amount"], r["last"],
+                str(r["qty"]), "%.2f" % r["amount"],
+                ("%.2f" % r["debt"]) if r.get("debt") else "-", r["last"],
                 r["address"], r["note"]))
         total = sum(r["amount"] for r in self.rows)
+        debt = sum(float(r.get("debt") or 0) for r in self.rows)
         self.lbl_hint.configure(
-            text="共 %d 个客户 · 累计消费合计 %.2f 元 · 双击可编辑"
-                 % (len(self.rows), total))
+            text="共 %d 个客户 · 累计消费合计 %.2f 元%s · 双击可编辑"
+                 % (len(self.rows), total,
+                    (" · 应收合计 %.2f 元" % debt) if debt else ""))
 
     # ------------------------------------------------------------ 操作
     def add_customer(self):
@@ -231,6 +237,29 @@ class CustomerTab(ttk.Frame):
         self.app.load_data()          # 顶部统计跟着变
         self.refresh_rows()
         self.app._status(msg)
+
+    def settle_debt(self):
+        """把选中客户的挂账全部标记为已收款（手机端「挂账」出售产生的应收）。"""
+        if self._guard():
+            return
+        sel = self.tree.selection()
+        if len(sel) != 1:
+            self.lbl_hint.configure(text="请先选中一个客户再结清应收")
+            return
+        rec = self._by_id.get(str(sel[0]))
+        if rec is None:
+            return
+        if not rec.get("debt"):
+            self.lbl_hint.configure(text="该客户没有未收的挂账")
+            return
+        if not messagebox.askyesno(
+                "结清应收",
+                "把「%s」的挂账（%.2f 元）全部标记为已收款？"
+                % (rec["name"], rec["debt"]), parent=self.app.root):
+            return
+        n = self.app.store.settle_unpaid(rec["name"])
+        self.refresh_rows()
+        self.app._status("已结清 %d 笔应收" % n)
 
     def edit_selected(self):
         if self._guard():

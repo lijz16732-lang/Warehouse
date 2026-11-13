@@ -36,9 +36,44 @@ class Toggle(tk.Canvas):
         self._tw, self._th = w, h
         self._job = None                          # 动画 after id
         self._pos = 1.0 if self.is_on() else 0.0  # 白钮位置：0=左（关）1=右（开）
-        variable.trace_add("write", lambda *_: self._sync_from_var())
+        self._trace = variable.trace_add("write", self._on_var)
         self.bind("<Button-1>", self._flip)
+        self.bind("<Destroy>", self._on_destroy)
         self._draw()
+
+    # ---- 销毁防护：弹窗保存/关闭时动画可能还在跑，变量也可能再被写，
+    #      回调打到已销毁的控件路径会报「无效命令名称」（v1.39.2） ----
+    def _alive(self):
+        try:
+            return bool(self.winfo_exists())
+        except Exception:
+            return False
+
+    def _cancel_job(self):
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except Exception:
+                pass
+            self._job = None
+
+    def _unbind_var(self):
+        try:
+            self.var.trace_remove("write", self._trace)
+        except Exception:
+            pass
+
+    def _on_var(self, *_a):
+        if not self._alive():
+            self._unbind_var()
+            return
+        self._sync_from_var()
+
+    def _on_destroy(self, _e=None):
+        if _e is not None and str(getattr(_e, "widget", "")) != str(self):
+            return
+        self._unbind_var()
+        self._cancel_job()
 
     def is_on(self):
         try:
@@ -53,30 +88,25 @@ class Toggle(tk.Canvas):
 
     def _sync_from_var(self):
         """变量变化 → 目标位置。能动画就滑过去，关掉动效时瞬间到位。"""
+        if not self._alive():
+            return
         target = 1.0 if self.is_on() else 0.0
         if ANIM["enabled"] and abs(target - self._pos) > 0.001:
             self._animate_to(target)   # 动画中再点会取消旧动画、从当前位置重来
         else:
-            if self._job is not None:
-                try:
-                    self.after_cancel(self._job)
-                except Exception:
-                    pass
-                self._job = None
+            self._cancel_job()
             self._pos = target
             self._draw()
 
     def _animate_to(self, target, steps=8):
-        if self._job is not None:
-            try:
-                self.after_cancel(self._job)
-            except Exception:
-                pass
-            self._job = None
+        self._cancel_job()
         start = self._pos
         delta = target - start
 
         def step(i):
+            if not self._alive():
+                self._job = None
+                return
             self._pos = start + delta * (i / float(steps))
             self._draw()
             if i < steps:

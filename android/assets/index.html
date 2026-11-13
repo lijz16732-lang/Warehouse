@@ -289,6 +289,40 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
 .colgrid .ckrow.on,
 .colgrid .ckrow:has(input:checked) { border-color:var(--accent); background:var(--active); }
 .colgrid .ckrow.dis { opacity:.55; }
+/* ---------- 子页（录入 / 出售）：不再是页签，从库存页进来，返回按钮回去 ---------- */
+.subpage { position:fixed; inset:0; z-index:14; background:var(--bg); overflow:auto;
+           -webkit-overflow-scrolling:touch; }
+.subhead { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:10px;
+           padding:12px 16px; background:var(--accent); color:#fff;
+           box-shadow:0 2px 10px rgba(37,99,235,.22); }
+body.dark .subhead { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,.45); }
+.subhead b { flex:1; font-size:var(--fs-lg); font-weight:700; letter-spacing:.3px; }
+.subhead button { height:30px; padding:0 12px; font-size:var(--fs-sm); font-weight:600;
+                  background:rgba(255,255,255,.18); box-shadow:none; }
+.subbody { padding:14px; }
+/* 出售入口：悬浮在「＋ 录入」上方的小胶囊（手填编号出售的快捷入口） */
+.fab2 { position:fixed; right:14px; bottom:calc(118px + env(safe-area-inset-bottom));
+        height:38px; padding:0 14px 0 12px; border-radius:var(--r-pill);
+        font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px;
+        background:var(--card); color:var(--accent); border:1px solid var(--accent);
+        box-shadow:0 4px 12px rgba(37,99,235,.25); z-index:8; }
+.fab2:active { transform:scale(.96); background:var(--accent-soft); }
+body.dark .fab2 { box-shadow:0 6px 16px rgba(0,0,0,.5); }
+/* 商品行操作面板（点行弹出：出售 / 修改 / 删除） */
+.panel-info { font-size:13.5px; color:var(--soft); line-height:1.9; margin-bottom:8px;
+              white-space:pre-line; }
+/* 统计页：指标瓷砖 + 列表行 */
+.tiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.tile { background:var(--seg); border-radius:var(--r-md); padding:12px 14px; }
+.tile b { display:block; font-size:var(--fs-xl); font-weight:700; letter-spacing:.2px;
+          font-variant-numeric:tabular-nums; }
+.tile span { font-size:var(--fs-xs); color:var(--muted); font-weight:500; }
+.krow { display:flex; align-items:center; gap:10px; padding:10px 2px;
+        border-bottom:1px solid var(--ctline); font-size:var(--fs-md); }
+.krow:last-child { border-bottom:0; }
+.krow .kn { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+            white-space:nowrap; font-weight:500; }
+.krow .ks { font-size:var(--fs-sm); color:var(--muted); white-space:nowrap; }
 /* 无障碍：系统开了「减少动态效果」就关掉过渡 */
 @media (prefers-reduced-motion: reduce) {
   * { transition:none !important; animation:none !important; }
@@ -305,9 +339,12 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
 <main id="main">
   <!-- 库存 -->
   <div id="pInv">
-    <div class="seg">
-      <div id="segLoc" class="on">手机库存</div>
-      <div id="segPc">电脑库存</div>
+    <div class="frow">
+      <div class="seg" style="flex:1;margin:0">
+        <div id="segLoc" class="on">手机库存</div>
+        <div id="segPc">电脑库存</div>
+      </div>
+      <button id="btnStocktake" class="ghost small" type="button">盘点</button>
     </div>
     <div class="searchrow"><input id="inKw" placeholder="搜编号 / 品牌 / 型号 / 货架 / 备注">
       <button id="btnKw">搜索</button></div>
@@ -319,7 +356,9 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
     <div class="tblbox">
       <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
     </div>
-    <!-- 悬浮「＋ 录入」：录入是最高频动作，放拇指可及处；随本页签一起隐藏 -->
+    <!-- 悬浮「＋ 录入」：录入是最高频动作，放拇指可及处；随本页签一起隐藏。
+         出售胶囊悬浮其上：手填编号直接登记出售（点商品行的出售会自动带编号） -->
+    <button id="fabSell" class="fab2" type="button">¥ 出售</button>
     <button id="fabAdd" class="fab" type="button">＋ 录入</button>
     <!-- 长按行进入多选后的操作条 -->
     <div id="selBar" class="selbar hide">
@@ -329,10 +368,11 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
       <button id="btnSelCancel" class="gray small">取消</button>
     </div>
   </div>
-  <!-- 录入 -->
-  <div id="pAdd" class="hide">
+  <!-- 录入（二级页：库存页「＋ 录入」进入，返回按钮回库存） -->
+  <div id="pAdd" class="subpage hide">
+    <div class="subhead"><b>新增入库（编号自动生成）</b><button type="button" id="btnAddBack">返回</button></div>
+    <div class="subbody">
     <div class="card">
-      <h3>新增入库（编号自动生成）</h3>
       <div class="frow">
         <div class="fcol"><label>品牌</label><input id="aBrand"></div>
         <div class="fcol"><label>品类</label><input id="aCate"></div>
@@ -353,11 +393,13 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
       <button id="btnAdd" style="width:100%">保存到手机</button>
       <div class="hint">数据存在手机里，离线可用；开启「数据共享到电脑端」后会自动/手动同步到电脑。</div>
     </div>
+    </div>
   </div>
-  <!-- 出售 -->
-  <div id="pSell" class="hide">
+  <!-- 出售（二级页：库存页「¥ 出售」或点商品行进入，点行会自动带上编号） -->
+  <div id="pSell" class="subpage hide">
+    <div class="subhead"><b>登记出售（手机库存）</b><button type="button" id="btnSellBack">返回</button></div>
+    <div class="subbody">
     <div class="card">
-      <h3>登记出售（手机库存）</h3>
       <div class="fcol"><label>商品编号</label><input id="sCode" autocapitalize="characters" placeholder="手机库存里的编号"></div>
       <div class="frow">
         <div class="fcol"><label>数量</label><input id="sQty" inputmode="numeric" value="1"></div>
@@ -370,17 +412,58 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
       <button id="btnSell" style="width:100%">登记出售</button>
       <div class="hint" id="sellMsg"></div>
     </div>
+    </div>
   </div>
-  <!-- 记录 -->
+  <!-- 记录：手机记录（本地+同步） / 电脑记录（可退货、撤销） -->
   <div id="pRec" class="hide">
-    <div class="stat" id="recStat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
-    <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
-    <!-- 出售记录长按多选操作条（与库存页同款交互） -->
-    <div id="recSelBar" class="selbar hide">
-      <button id="btnRSelAll" class="gray small">全选</button>
-      <button id="btnRSelDel" class="danger small">删除</button>
-      <span id="rSelCnt">已选 0 项</span>
-      <button id="btnRSelCancel" class="gray small">取消</button>
+    <div class="seg">
+      <div id="segRecLoc" class="on">手机记录</div>
+      <div id="segRecPc">电脑记录</div>
+    </div>
+    <div id="recLocBox">
+      <div class="card tight" style="margin-bottom:10px;padding:10px 14px">
+        <div class="frow" style="gap:10px">
+          <span id="recSyncLine" style="flex:1;font-size:var(--fs-sm);color:var(--soft);line-height:1.6"></span>
+          <button id="btnRecSync" class="ghost small" type="button">立即同步</button>
+        </div>
+      </div>
+      <div class="stat" id="recStat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
+      <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
+      <!-- 出售记录长按多选操作条（与库存页同款交互） -->
+      <div id="recSelBar" class="selbar hide">
+        <button id="btnRSelAll" class="gray small">全选</button>
+        <button id="btnRSelDel" class="danger small">删除</button>
+        <span id="rSelCnt">已选 0 项</span>
+        <button id="btnRSelCancel" class="gray small">取消</button>
+      </div>
+    </div>
+    <div id="recPcBox" class="hide">
+      <div class="searchrow"><input id="inRecKw" placeholder="搜编号 / 型号 / 买家">
+        <button id="btnRecKw">搜索</button></div>
+      <div class="stat" id="recPcStat" style="margin:0 2px 8px"></div>
+      <div class="tblbox">
+        <div class="tblwrap"><table id="tRecPc"><thead></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </div>
+  <!-- 统计（电脑端数据：经营指标 / 客户应收 / 低库存） -->
+  <div id="pStat" class="hide">
+    <div class="chips" id="statDays">
+      <span data-d="1">今日</span><span data-d="7">近 7 天</span><span data-d="30">近 30 天</span>
+    </div>
+    <div class="card" id="statMain"><div class="hint" style="margin:0">连接电脑后查看经营统计与利润。</div></div>
+    <div class="card">
+      <div class="row-head">
+        <div><div class="row-t">客户与应收</div>
+          <div class="row-sub">挂账未收的会标出，可一键结清</div></div>
+      </div>
+      <div id="custList"><div class="hint" style="margin:0">连接电脑后查看客户应收。</div></div>
+    </div>
+    <div class="card">
+      <div class="row-head">
+        <div><div class="row-t">低库存提醒</div><div class="row-sub" id="lowSub"></div></div>
+      </div>
+      <div id="lowList"><div class="hint" style="margin:0">连接电脑后查看低库存。</div></div>
     </div>
   </div>
   <!-- 设置 -->
@@ -443,6 +526,14 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
     </div>
 
     <div class="sec">
+      <div class="sec-t">电脑数据工具</div>
+      <div class="card tight">
+        <button id="btnTrash" class="rowbtn" type="button">回收站（电脑端已删商品）</button>
+        <div class="hint">电脑端删除的商品先进回收站，可恢复或彻底删除。</div>
+      </div>
+    </div>
+
+    <div class="sec">
       <div class="sec-t">数据与隐私</div>
       <div class="card tight">
         <div class="row-head">
@@ -482,9 +573,8 @@ body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,
 
 <nav>
   <div data-t="inv" class="on"><i>▦</i><span>库存</span></div>
-  <div data-t="add"><i>✚</i><span>录入</span></div>
-  <div data-t="sell"><i>¥</i><span>出售</span></div>
   <div data-t="rec"><i>☰</i><span>记录</span></div>
+  <div data-t="stat"><i>◔</i><span>统计</span></div>
   <div data-t="set"><i>⚙</i><span>设置</span></div>
 </nav>
 
@@ -949,7 +1039,7 @@ function syncAll(manual, full) {
   var sales = DB.sales.filter(function (s) { return full ? true : s.dirty; });
   var phN = pendingPhotos();
   if (!items.length && !sales.length && !phN) {
-    if (manual) toast('手机里还没有数据，先在「录入」里添加');
+    if (manual) toast('手机里还没有数据，先在库存页点「＋ 录入」添加');
     renderSync(); return Promise.resolve();
   }
   var p = Promise.resolve();
@@ -1158,7 +1248,7 @@ function loadLoc(kw) {
   LOCV_ROWS = rows.map(function (r) { return r.lid; });   // 「全选」用
   $('invStat').textContent = SEL.on
     ? ('已选 ' + SEL.set.length + ' / ' + rows.length + ' 条（点行勾选，长按可退出后修改）')
-    : '手机库存 ' + DB.items.length + ' 条（点行可修改；长按行可多选删除）';
+    : '手机库存 ' + DB.items.length + ' 条（点行出售 / 修改；长按行可多选删除）';
   var colspan = cols.length + (SEL.on ? 1 : 0);
   if (!rows.length) {
     tb.innerHTML = '<tr><td colspan="' + colspan +
@@ -1197,7 +1287,7 @@ function loadLoc(kw) {
     }
     tr.onclick = function () {
       if (lpFired) { lpFired = false; return; }   // 长按结束后的那次 click 吞掉
-      if (SEL.on) selToggle(r.lid); else openEdit(r);
+      if (SEL.on) selToggle(r.lid); else openItemPanel(r);
     };
     tb.appendChild(tr);
   });
@@ -1209,6 +1299,7 @@ function selEnter(lid) {
   $('selCnt').textContent = '已选 1 项';
   $('selBar').classList.remove('hide');
   $('fabAdd').classList.add('hide');
+  $('fabSell').classList.add('hide');
   loadLoc($('inKw').value);
   try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
 }
@@ -1217,6 +1308,7 @@ function selExit() {
   SEL = { on: false, set: [] };
   $('selBar').classList.add('hide');
   $('fabAdd').classList.remove('hide');
+  $('fabSell').classList.remove('hide');
   loadLoc($('inKw').value);
 }
 function selToggle(lid) {
@@ -1297,7 +1389,7 @@ function fitTbl(id) {
   var h = m.clientHeight - top - 14 - (id === 'tInv' ? 50 : 0);
   if (h > 160) w.style.maxHeight = h + 'px';
 }
-function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); updateSwHint(); }
+function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); fitTbl('tRecPc'); updateSwHint(); }
 window.addEventListener('resize', fitTbls);
 function pcLoadMore() {
   if (PC_PAGE.loading || !PC_PAGE.hasMore) return;
@@ -1584,6 +1676,65 @@ function openEdit(r) {
 }
 $('shClose').onclick = function () { $('mask').classList.add('hide'); };
 
+/* ================= 二级页（录入 / 出售）与商品操作面板 =================
+   录入、出售从页签改成了二级页：从库存页进来、返回按钮回库存。
+   功能不变：表单字段、拍照识别、照片、保存逻辑全部原样。 */
+function showSub(id) {
+  ['pAdd', 'pSell'].forEach(function (p) { $(p).classList.add('hide'); });
+  $(id).classList.remove('hide');
+}
+function hideSub() {
+  ['pAdd', 'pSell'].forEach(function (p) { $(p).classList.add('hide'); });
+  if (invView === 'loc') loadLoc($('inKw').value);   // 回库存时刷新（可能刚入库/出售）
+  setTimeout(fitTbls, 0);
+}
+$('btnAddBack').onclick = hideSub;
+$('btnSellBack').onclick = hideSub;
+
+/* 点商品行 → 操作面板：出售（带编号）/ 修改 / 删除 */
+function openItemPanel(r) {
+  curItem = r;
+  ocrTarget = 'edit';
+  $('shTitle').textContent = r.code;
+  var b = $('shBody'); b.innerHTML = '';
+  var info = document.createElement('div');
+  info.className = 'panel-info';
+  var lines = [[r.brand, r.model, r.condition].filter(Boolean).join(' · ') || '（未填品牌 / 型号）',
+               '数量 ' + r.qty + ' · 单价 ¥' + r.price + (r.shelf ? ' · 货架 ' + r.shelf : '')];
+  var phN = getPh(r.lid).length;
+  if (phN) lines.push('📷 ' + phN + ' 张照片');
+  info.textContent = lines.join('\n');
+  b.appendChild(info);
+  var bSell = document.createElement('button');
+  bSell.style.width = '100%';
+  if (r.sold_out || r.qty <= 0) {
+    bSell.className = 'gray'; bSell.disabled = true; bSell.textContent = '已售完，不能出售';
+  } else {
+    bSell.textContent = '登记出售';
+    bSell.onclick = function () {
+      $('mask').classList.add('hide');
+      $('sCode').value = r.code; $('sQty').value = '1'; $('sPrice').value = '';
+      showSub('pSell');
+      setTimeout(function () { try { $('sQty').focus(); } catch (e) {} }, 80);
+    };
+  }
+  b.appendChild(bSell);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bEdit = document.createElement('button'); bEdit.className = 'gray'; bEdit.textContent = '修改';
+  var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除';
+  bEdit.onclick = function () { openEdit(r); };
+  bDel.onclick = function () {
+    askConfirm('删除手机上的 ' + r.code + ' ？\n已同步到电脑的记录不会被删除。', '删除', function () {
+      DB.items = DB.items.filter(function (x) { return x.lid !== r.lid; });
+      delPh(r.lid);
+      saveDB(); loadLoc($('inKw').value); renderSync(); renderData();
+      toast('已删除（本地）');
+    });
+  };
+  row.appendChild(bEdit); row.appendChild(bDel); b.appendChild(row);
+  $('mask').classList.remove('hide');
+}
+
 /* ================= 拍照识别型号 =================
    相机实时取景，本机离线 OCR（模型随 App 打包），识别到的文字点一下就填进型号框。
    完全在手机上跑，不需要电脑、不需要网络。 */
@@ -1670,6 +1821,7 @@ $('btnSell').onclick = function () {
 /* ================= 记录 ================= */
 var REC_COLS = ['sale_date', 'code', 'brand', 'model', 'qty', 'total', 'buyer'];
 function loadRec() {
+  renderSyncLine();
   var tb = $('tRec').tBodies[0]; tb.innerHTML = '';
   mkHead($('tRec'), REC_COLS);
   var rows = DB.sales.slice().reverse();
@@ -1757,6 +1909,463 @@ $('btnRSelDel').onclick = function () {
     saveDB(); recSelExit();
     renderSync(); renderData();
     toast('已删除 ' + n + ' 条（本地）');
+  });
+}
+
+/* ================= 记录页：手机记录 / 电脑记录 ================= */
+var recView = 'loc';
+function renderSyncLine() {
+  var n = pendingCount();
+  $('recSyncLine').textContent = DB.share.token
+    ? ((n ? '待同步 ' + n + ' 条 · ' : '已全部同步 · ')
+       + '手机共 ' + (DB.items.length + DB.sales.length) + ' 条'
+       + (DB.share.last ? ' · 上次同步 ' + DB.share.last : ''))
+    : '未连接电脑（设置 → 连接到电脑），本地数据照常可用';
+}
+$('segRecLoc').onclick = function () {
+  recSelExit();
+  recView = 'loc';
+  $('segRecLoc').className = 'on'; $('segRecPc').className = '';
+  $('recLocBox').classList.remove('hide'); $('recPcBox').classList.add('hide');
+  loadRec();
+  setTimeout(fitTbls, 0);
+};
+$('segRecPc').onclick = function () {
+  recSelExit();
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  recView = 'pc';
+  $('segRecPc').className = 'on'; $('segRecLoc').className = '';
+  $('recPcBox').classList.remove('hide'); $('recLocBox').classList.add('hide');
+  loadRecPc($('inRecKw').value);
+};
+$('btnRecKw').onclick = function () { loadRecPc($('inRecKw').value); };
+$('inRecKw').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') loadRecPc($('inRecKw').value);
+});
+$('btnRecSync').onclick = function () { syncAll(true, true); };
+
+/* ---------- 电脑出售记录（点行：退货 / 撤销） ---------- */
+var PCREC_COLS = ['sale_date', 'code', 'model', 'qty', 'total', 'buyer'];
+function loadRecPc(kw) {
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  mkHead($('tRecPc'), PCREC_COLS);
+  var tb = $('tRecPc').tBodies[0];
+  tb.innerHTML = '<tr><td colspan="' + (PCREC_COLS.length + 1) +
+    '" class="empty">读取电脑出售记录…</td></tr>';
+  $('recPcStat').textContent = '';
+  api('GET', '/m/api/sales?kw=' + encodeURIComponent(kw || '')).then(function (j) {
+    var rows = j.sales || [];
+    $('recPcStat').textContent = '电脑出售记录 ' + rows.length +
+      ' 条（点行可退货 / 撤销）';
+    tb.innerHTML = '';
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="' + (PCREC_COLS.length + 1) +
+        '" class="empty">没有找到记录</td></tr>';
+      return;
+    }
+    rows.forEach(function (s) {
+      var tr = document.createElement('tr');
+      if (!s.left) tr.className = 'sold';
+      PCREC_COLS.forEach(function (f) {
+        var td = document.createElement('td');
+        td.textContent = (s[f] === null || s[f] === undefined) ? '' : s[f];
+        tr.appendChild(td);
+      });
+      var tdS = document.createElement('td');
+      var tag = document.createElement('span');
+      tag.className = 'tag ' + (!s.left ? 'wait' : (s.paid ? 'ok' : 'wait'));
+      tag.textContent = !s.left ? '已退完' : (s.paid ? '已收款' : '挂账');
+      tdS.appendChild(tag);
+      tr.appendChild(tdS);
+      tr.onclick = function () { openSalePanel(s); };
+      tb.appendChild(tr);
+    });
+  }).catch(function (e) {
+    tb.innerHTML = '<tr><td colspan="' + (PCREC_COLS.length + 1) +
+      '" class="empty">' + (e.message || String(e)) + '</td></tr>';
+  });
+}
+function openSalePanel(s) {
+  $('shTitle').textContent = s.code || '出售记录';
+  var b = $('shBody'); b.innerHTML = '';
+  var info = document.createElement('div');
+  info.className = 'panel-info';
+  var lines = [(s.sale_date || '') + ' · ' + (s.out_type || '出售'),
+               [s.brand, s.model].filter(Boolean).join(' · ') || '（未填品牌 / 型号）',
+               '数量 ' + s.qty + ' × ¥' + s.price + ' · 合计 ¥' + s.total +
+               '（可退 ' + s.left + '）'];
+  if (s.buyer) lines.push('买家：' + s.buyer);
+  lines.push(s.paid ? '已收款' : '挂账未收');
+  if (s.returned) lines.push('已退 ' + s.returned + ' 件 · 退款 ¥' + s.refund);
+  if (s.remark) lines.push('备注：' + s.remark);
+  info.textContent = lines.join('\n');
+  b.appendChild(info);
+  var bRet = document.createElement('button');
+  bRet.style.width = '100%';
+  if (!s.left) {
+    bRet.className = 'gray'; bRet.disabled = true;
+    bRet.textContent = '已全部退货';
+  } else {
+    bRet.textContent = '登记退货';
+    bRet.onclick = function () { openReturnForm(s); };
+  }
+  b.appendChild(bRet);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bUndo = document.createElement('button');
+  bUndo.className = 'danger-ghost'; bUndo.textContent = '撤销整笔出售';
+  bUndo.onclick = function () {
+    askConfirm('撤销这笔出售？\n库存会加回，出售记录作废（不可恢复）。', '撤销', function () {
+      api('POST', '/m/api/sale_undo', { sale_id: s.id }).then(function (j) {
+        toast(j.message || '已撤销');
+        loadRecPc($('inRecKw').value);
+      }).catch(function (e) { toast(e.message || String(e)); });
+    });
+  };
+  var bClose = document.createElement('button');
+  bClose.className = 'gray'; bClose.textContent = '关闭';
+  bClose.onclick = function () { $('mask').classList.add('hide'); };
+  row.appendChild(bUndo); row.appendChild(bClose); b.appendChild(row);
+  $('mask').classList.remove('hide');
+}
+function openReturnForm(s) {
+  $('shTitle').textContent = '退货 · ' + s.code;
+  var b = $('shBody'); b.innerHTML = '';
+  var tip = document.createElement('div');
+  tip.className = 'panel-info';
+  tip.textContent = '该笔出售可退 ' + s.left + ' 件 · 合计 ¥' + s.total;
+  b.appendChild(tip);
+  function field(label, id, val, extra) {
+    var w = document.createElement('div'); w.className = 'fcol';
+    var l = document.createElement('label'); l.textContent = label;
+    var inp = document.createElement('input'); inp.id = id; inp.value = val;
+    if (extra) inp.setAttribute('inputmode', extra);
+    w.appendChild(l); w.appendChild(inp); b.appendChild(w);
+    return inp;
+  }
+  var inQty = field('退货数量（最多 ' + s.left + '）', 'rQty', String(s.left), 'numeric');
+  field('退款金额（留空按比例退）', 'rRefund', '', 'decimal');
+  var ckRow = document.createElement('div'); ckRow.className = 'ckrow';
+  var ck = document.createElement('input'); ck.type = 'checkbox'; ck.checked = true;
+  ckRow.appendChild(ck);
+  ckRow.appendChild(document.createTextNode(' 货物退回库存'));
+  b.appendChild(ckRow);
+  var bGo = document.createElement('button');
+  bGo.style.width = '100%'; bGo.style.marginTop = '12px';
+  bGo.textContent = '确认退货';
+  bGo.onclick = function () {
+    var q = parseInt($('rQty').value, 10) || 0;
+    if (q <= 0 || q > s.left) { toast('退货数量需在 1 ~ ' + s.left + ' 之间'); return; }
+    var rv = $('rRefund').value.trim();
+    var body = { sale_id: s.id, qty: q, restock: ck.checked };
+    if (rv !== '') {
+      var rf = parseFloat(rv);
+      if (isNaN(rf)) { toast('退款金额请填数字'); return; }
+      body.refund = rf;
+    }
+    api('POST', '/m/api/return_sale', body).then(function (j) {
+      $('mask').classList.add('hide');
+      toast(j.message || '已退货');
+      loadRecPc($('inRecKw').value);
+    }).catch(function (e) { toast(e.message || String(e)); });
+  };
+  b.appendChild(bGo);
+}
+
+/* ================= 统计页（电脑端：指标 / 客户应收 / 低库存） ================= */
+var curStatDays = 7;
+(function () {
+  var box = $('statDays');
+  var spans = box.getElementsByTagName('span');
+  for (var i = 0; i < spans.length; i += 1) {
+    spans[i].onclick = function () {
+      curStatDays = parseInt(this.getAttribute('data-d'), 10) || 7;
+      loadStats();
+    };
+  }
+})();
+function tile(label, val) {
+  return '<div class="tile"><b>' + val + '</b><span>' + label + '</span></div>';
+}
+function statPlaceholder() {
+  $('statMain').innerHTML = '<div class="hint" style="margin:0">连接电脑后查看经营统计与利润。</div>';
+  $('custList').innerHTML = '<div class="hint" style="margin:0">连接电脑后查看客户应收。</div>';
+  $('lowList').innerHTML = '<div class="hint" style="margin:0">连接电脑后查看低库存。</div>';
+  $('lowSub').textContent = '';
+}
+function loadStats() {
+  var spans = $('statDays').getElementsByTagName('span');
+  for (var i = 0; i < spans.length; i += 1)
+    spans[i].className =
+      (parseInt(spans[i].getAttribute('data-d'), 10) === curStatDays) ? 'on' : '';
+  if (!DB.share.token) { statPlaceholder(); return; }
+  $('statMain').innerHTML = '<div class="hint" style="margin:0">读取统计…</div>';
+  api('GET', '/m/api/stats?days=' + curStatDays).then(function (j) {
+    var t = j.range || {};
+    var st = j.stock || {};
+    $('statMain').innerHTML =
+      '<div class="tiles">'
+      + tile('销售额（毛）', '¥' + t.sales) + tile('实收（已扣退款）', '¥' + t.amount)
+      + tile('利润', '¥' + t.profit) + tile('单数 / 件数', (t.orders || 0) + ' 单 · ' + (t.qty || 0) + ' 件')
+      + '</div>'
+      + '<div class="statline">库存 ' + (st.items || 0) + ' 种 · ' + (st.qty || 0)
+      + ' 件 · 估值 ¥' + (st.value || 0) + '　应收（挂账未收）：¥'
+      + ((j.unpaid && j.unpaid.total) || 0) + '</div>';
+    var low = j.low || [];
+    $('lowSub').textContent = '阈值 ≤ ' + (j.thr || 0) + '，共 ' + (j.low_count || 0) + ' 种';
+    var lb = $('lowList'); lb.innerHTML = '';
+    if (!low.length) {
+      lb.innerHTML = '<div class="hint" style="margin:0">没有低库存商品</div>';
+    } else {
+      low.forEach(function (r) {
+        var row = document.createElement('div'); row.className = 'krow';
+        var kn = document.createElement('div'); kn.className = 'kn';
+        kn.textContent = r.code + '  ' + [r.brand, r.model].filter(Boolean).join(' ');
+        var ks = document.createElement('div'); ks.className = 'ks';
+        ks.textContent = '剩 ' + r.qty + (r.shelf ? ' · ' + r.shelf : '');
+        row.appendChild(kn); row.appendChild(ks); lb.appendChild(row);
+      });
+    }
+    /* ---- 客户与应收 ---- */
+    var cb = $('custList');
+    cb.innerHTML = '<div class="hint" style="margin:0">读取客户…</div>';
+    api('GET', '/m/api/customers').then(function (cj) {
+      var cs = cj.customers || [];
+      cb.innerHTML = '';
+      if (!cs.length) {
+        cb.innerHTML = '<div class="hint" style="margin:0">还没有客户（出售时填买家会自动累计）</div>';
+        return;
+      }
+      cs.forEach(function (c) {
+        var row = document.createElement('div'); row.className = 'krow';
+        var kn = document.createElement('div'); kn.className = 'kn';
+        kn.textContent = c.name + (c.count ? '（' + c.count + ' 单）' : '');
+        var ks = document.createElement('div'); ks.className = 'ks';
+        ks.textContent = '累计 ¥' + (c.amount || 0)
+          + (c.debt > 0 ? ' · 应收 ¥' + c.debt : '');
+        row.appendChild(kn); row.appendChild(ks);
+        if (c.debt > 0) {
+          var bSet = document.createElement('button');
+          bSet.className = 'ghost small'; bSet.textContent = '结清';
+          bSet.onclick = function () {
+            askConfirm('把 ' + c.name + ' 的挂账全部结清？', '结清', function () {
+              api('POST', '/m/api/settle', { buyer: c.name }).then(function (sj) {
+                toast(sj.message || '已结清');
+                loadStats();
+              }).catch(function (e) { toast(e.message || String(e)); });
+            });
+          };
+          row.appendChild(bSet);
+        }
+        cb.appendChild(row);
+      });
+    }).catch(function (e) {
+      cb.innerHTML = '<div class="hint" style="margin:0">' + (e.message || String(e)) + '</div>';
+    });
+  }).catch(function (e) {
+    $('statMain').innerHTML = '<div class="hint" style="margin:0">' +
+      (e.message || String(e)) + '</div>';
+  });
+}
+
+/* ================= 回收站（电脑端已删商品：恢复 / 彻底删除） ================= */
+$('btnTrash').onclick = function () {
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  $('shTitle').textContent = '回收站（电脑端）';
+  var b = $('shBody'); b.innerHTML = '';
+  var list = document.createElement('div');
+  list.innerHTML = '<div class="hint" style="margin:0">读取中…</div>';
+  b.appendChild(list);
+  function load() {
+    api('GET', '/m/api/trash').then(function (j) {
+      var rows = j.items || [];
+      list.innerHTML = '';
+      if (!rows.length) {
+        list.innerHTML = '<div class="hint" style="margin:0">回收站是空的</div>';
+        return;
+      }
+      rows.forEach(function (r) {
+        var row = document.createElement('div'); row.className = 'krow';
+        var kn = document.createElement('div'); kn.className = 'kn';
+        kn.textContent = r.code + '  ' + [r.brand, r.model].filter(Boolean).join(' ')
+          + '（' + (r.deleted_at || '') + '）';
+        row.appendChild(kn);
+        var bRes = document.createElement('button');
+        bRes.className = 'ghost small'; bRes.textContent = '恢复';
+        bRes.onclick = function () {
+          api('POST', '/m/api/restore', { ids: [r.id] }).then(function (x) {
+            toast(x.message || '已恢复');
+            load();
+          }).catch(function (e) { toast(e.message || String(e)); });
+        };
+        var bPurge = document.createElement('button');
+        bPurge.className = 'danger small'; bPurge.textContent = '彻底删';
+        bPurge.onclick = function () {
+          askConfirm('彻底删除 ' + r.code + '？\n彻底删除后无法恢复。', '彻底删除', function () {
+            api('POST', '/m/api/purge', { ids: [r.id] }).then(function (x) {
+              toast(x.message || '已彻底删除');
+              load();
+            }).catch(function (e) { toast(e.message || String(e)); });
+          });
+        };
+        row.appendChild(bRes); row.appendChild(bPurge);
+        list.appendChild(row);
+      });
+    }).catch(function (e) {
+      list.innerHTML = '<div class="hint" style="margin:0">' + (e.message || String(e)) + '</div>';
+    });
+  }
+  load();
+  $('mask').classList.remove('hide');
+};
+
+/* ================= 盘点单（电脑端库存：新建 / 填实盘 / 提交） ================= */
+$('btnStocktake').onclick = openStList;
+function stTags() {
+  return { draft: 'tag wait', done: 'tag ok' };
+}
+function openStList() {
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  $('shTitle').textContent = '盘点单';
+  var b = $('shBody'); b.innerHTML = '';
+  var bNew = document.createElement('button');
+  bNew.style.width = '100%'; bNew.textContent = '＋ 新建盘点单';
+  bNew.onclick = function () { openStNew(); };
+  b.appendChild(bNew);
+  var list = document.createElement('div');
+  list.style.marginTop = '10px';
+  list.innerHTML = '<div class="hint" style="margin:0">读取中…</div>';
+  b.appendChild(list);
+  api('GET', '/m/api/stocktake?op=list').then(function (j) {
+    var rows = j.list || [];
+    list.innerHTML = '';
+    if (!rows.length) {
+      list.innerHTML = '<div class="hint" style="margin:0">还没有盘点单，点上面按钮新建</div>';
+      return;
+    }
+    rows.forEach(function (r) {
+      var row = document.createElement('div'); row.className = 'krow';
+      var kn = document.createElement('div'); kn.className = 'kn';
+      kn.textContent = (r.no || ('#' + r.id)) + '  ' + (r.name || '')
+        + ' · ' + r.count + ' 项' + (r.diff ? ' · 差异 ' + r.diff + ' 项' : '');
+      var tag = document.createElement('span');
+      tag.className = stTags()[r.status] || 'tag';
+      tag.textContent = r.status === 'done' ? '已提交' : '草稿';
+      kn.appendChild(document.createTextNode(' '));
+      kn.appendChild(tag);
+      var ks = document.createElement('div'); ks.className = 'ks';
+      ks.textContent = r.status === 'done' ? (r.done_at || '') : (r.created_at || '');
+      row.appendChild(kn); row.appendChild(ks);
+      row.onclick = function () { openStDetail(r.id); };
+      list.appendChild(row);
+    });
+  }).catch(function (e) {
+    list.innerHTML = '<div class="hint" style="margin:0">' + (e.message || String(e)) + '</div>';
+  });
+  $('mask').classList.remove('hide');
+}
+function openStNew() {
+  $('shTitle').textContent = '新建盘点单';
+  var b = $('shBody'); b.innerHTML = '';
+  var tip = document.createElement('div');
+  tip.className = 'panel-info';
+  tip.textContent = '按下面的条件圈定要盘的商品（都留空 = 全部库存），生成后逐项填实盘数。';
+  b.appendChild(tip);
+  function field(label, id, ph) {
+    var w = document.createElement('div'); w.className = 'fcol';
+    var l = document.createElement('label'); l.textContent = label;
+    var inp = document.createElement('input'); inp.id = id; inp.placeholder = ph || '';
+    w.appendChild(l); w.appendChild(inp); b.appendChild(w);
+  }
+  field('盘点名称', 'stName', '如：月末大盘');
+  field('只盘某品牌（可空）', 'stBrand', '');
+  field('只盘某品类（可空）', 'stCate', '');
+  field('只盘某货架（可空）', 'stShelf', '');
+  field('编号/型号关键词（可空）', 'stKw', '');
+  var ckRow = document.createElement('div'); ckRow.className = 'ckrow';
+  var ck = document.createElement('input'); ck.type = 'checkbox'; ck.checked = true;
+  ckRow.appendChild(ck);
+  ckRow.appendChild(document.createTextNode(' 只盘在库商品（不含已售完）'));
+  b.appendChild(ckRow);
+  var bGo = document.createElement('button');
+  bGo.style.width = '100%'; bGo.style.marginTop = '12px';
+  bGo.textContent = '生成盘点单';
+  bGo.onclick = function () {
+    api('POST', '/m/api/stocktake', {
+      op: 'new', name: $('stName').value, brand: $('stBrand').value,
+      category: $('stCate').value, shelf: $('stShelf').value,
+      kw: $('stKw').value, only_stock: ck.checked
+    }).then(function (j) {
+      if (j.ok && j.id) { toast(j.message || '已生成'); openStDetail(j.id); }
+      else toast(j.error || j.message || '生成失败');
+    }).catch(function (e) { toast(e.message || String(e)); });
+  };
+  b.appendChild(bGo);
+}
+function openStDetail(id) {
+  api('GET', '/m/api/stocktake?op=detail&id=' + id).then(function (j) {
+    var head = j.head || {};
+    var rows = j.rows || [];
+    var draft = head.status !== 'done';
+    $('shTitle').textContent = (head.no || ('盘点 #' + id)) + '（' +
+      (draft ? '草稿' : '已提交') + '）';
+    var b = $('shBody'); b.innerHTML = '';
+    var tip = document.createElement('div');
+    tip.className = 'panel-info';
+    tip.textContent = (head.name || '') + ' · ' + rows.length + ' 项 · 创建于 ' +
+      (head.created_at || '') + (draft ? '；填完实盘数后点「提交盘点」生效' : '；已按实盘数更新库存');
+    b.appendChild(tip);
+    rows.forEach(function (r) {
+      var row = document.createElement('div'); row.className = 'krow';
+      var kn = document.createElement('div'); kn.className = 'kn';
+      kn.textContent = r.code + '  ' + [r.brand, r.model].filter(Boolean).join(' ')
+        + (r.shelf ? ' · ' + r.shelf : '') + '（账面 ' + r.book + '）';
+      row.appendChild(kn);
+      if (draft) {
+        var inp = document.createElement('input');
+        inp.type = 'number'; inp.value = r.real;
+        inp.style.cssText = 'width:84px;flex:none;padding:7px 10px';
+        inp.onchange = function () {
+          api('POST', '/m/api/stocktake', {
+            op: 'set', row_id: r.id, real_qty: inp.value
+          }).then(function (x) { toast(x.message || '已保存'); })
+            .catch(function (e) { toast(e.message || String(e)); });
+        };
+        row.appendChild(inp);
+      } else {
+        var ks = document.createElement('div'); ks.className = 'ks';
+        ks.textContent = '实盘 ' + r.real;
+        row.appendChild(ks);
+      }
+      b.appendChild(row);
+    });
+    if (draft) {
+      var bDel = document.createElement('button');
+      bDel.className = 'danger-ghost'; bDel.textContent = '删除盘点单';
+      bDel.onclick = function () {
+        askConfirm('删除这张草稿盘点单？', '删除', function () {
+          api('POST', '/m/api/stocktake', { op: 'del', id: id }).then(function (x) {
+            toast(x.message || '已删除');
+            openStList();
+          }).catch(function (e) { toast(e.message || String(e)); });
+        });
+      };
+      var bGo = document.createElement('button');
+      bGo.textContent = '提交盘点';
+      bGo.onclick = function () {
+        askConfirm('提交后按实盘数更新电脑库存（差异数会写入库存变动），确定？',
+                   '提交', function () {
+          api('POST', '/m/api/stocktake', { op: 'commit', id: id })
+            .then(function (x) {
+              toast(x.message || '已提交');
+              openStDetail(id);
+            }).catch(function (e) { toast(e.message || String(e)); });
+        });
+      };
+      var row = document.createElement('div'); row.className = 'btnrow';
+      row.appendChild(bDel); row.appendChild(bGo); b.appendChild(row);
+    }
+  }).catch(function (e) {
+    toast(e.message || String(e));
   });
 }
 
@@ -1922,25 +2531,36 @@ var FAB_DRAG = { moved: false };
 })();
 $('fabAdd').onclick = function () {
   if (FAB_DRAG.moved) { FAB_DRAG.moved = false; return; }   // 拖动结束时的那次点击不算点击
-  tab2('add');
+  showSub('pAdd');
+  renderAddPh();                     // 暂存照片照常显示（没保存前不丢）
   setTimeout(function () {
     var el = $('aBrand');
     if (el) el.focus();
   }, 80);
 };
+/* 「¥ 出售」：手填编号登记出售（点商品行进入会自动带编号） */
+$('fabSell').onclick = function () {
+  $('sCode').value = ''; $('sQty').value = '1'; $('sPrice').value = '';
+  $('sellMsg').textContent = '';
+  showSub('pSell');
+  setTimeout(function () { try { $('sCode').focus(); } catch (e) {} }, 80);
+};
 
-/* ================= 页签 ================= */
+/* ================= 页签（库存 / 记录 / 统计 / 设置；录入、出售走二级页） ================= */
 function tab2(name) {
   selExit(); recSelExit();          // 切页签一律退出多选（操作条是 fixed 的，不退会浮在新页面上）
   var tabs = document.querySelectorAll('nav div');
   for (var i = 0; i < tabs.length; i += 1)
     tabs[i].className = (tabs[i].getAttribute('data-t') === name) ? 'on' : '';
-  var map = { inv: 'Inv', add: 'Add', sell: 'Sell', rec: 'Rec', set: 'Set' };
-  ['Inv', 'Add', 'Sell', 'Rec', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
+  var map = { inv: 'Inv', rec: 'Rec', stat: 'Stat', set: 'Set' };
+  ['Inv', 'Rec', 'Stat', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
   $('p' + map[name]).classList.remove('hide');
   if (name === 'inv') (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
-  if (name === 'add') renderAddPh();
-  if (name === 'rec') loadRec();
+  if (name === 'rec') {
+    renderSyncLine();
+    (recView === 'loc' ? loadRec : function () { loadRecPc($('inRecKw').value); })();
+  }
+  if (name === 'stat') loadStats();
   if (name === 'set') { renderShare(); renderSync(); renderData(); renderColList(); }
   if (name === 'inv' || name === 'rec') setTimeout(fitTbls, 0);   // 显示后重算限高
 }

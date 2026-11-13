@@ -722,9 +722,148 @@ check("修改后数量/价格/货架与电脑同库一致",
       dict(qty=_ed["qty"], price=_ed["price"], shelf=_ed["shelf"]))
 _msc, _mb, _ = _mreq("/m/api/update_all", {"id": 99999999, "qty": 1}, opener=_mb_op)
 check("手机端修改不存在的记录被拒（404）", _msc == 404, (_msc, _mb))
+# ---- 手机端 v1.40.0：退货 / 统计 / 客户 / 回收站 / 盘点 ----
+_msc, _mb, _ = _mreq("/m/api/sales?kw=WL-MOB", opener=_mb_op)
+_v140_sale = (_mb.get("sales") or [{}])[0]
+check("出售列表带可退数量与收款状态",
+      _msc == 200 and "left" in _v140_sale and "paid" in _v140_sale,
+      _v140_sale)
+_v140_sid = _v140_sale.get("id")
+_msc, _mb, _ = _mreq("/m/api/return_sale",
+                     {"sale_id": _v140_sid, "qty": 1, "refund": 9.9,
+                      "restock": True}, opener=_mb_op)
+check("手机退货成功", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+check("退货后货回库存（电脑同库）",
+      [r for r in ss.all_records() if r["code"] == "WL-MOB"][0]["qty"] == 3)
+_msc, _mb, _ = _mreq("/m/api/sales?kw=WL-MOB", opener=_mb_op)
+_v140_s2 = (_mb.get("sales") or [{}])[0]
+check("退货后该单可退数量归零", _v140_s2.get("left") == 0 and _v140_s2.get("returned") == 1,
+      _v140_s2)
+_msc, _mb, _ = _mreq("/m/api/returns?kw=WL-MOB", opener=_mb_op)
+check("手机能查退货记录", _msc == 200 and len(_mb.get("returns") or []) == 1, _mb)
+_msc, _mb, _ = _mreq("/m/api/return_sale",
+                     {"sale_id": _v140_sid, "qty": 1}, opener=_mb_op)
+check("超量退货被拒", _msc == 400 and not _mb.get("ok"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/stats?days=30", opener=_mb_op)
+check("手机统计接口：今日/本月/区间/低库存/应收/库存概览",
+      _msc == 200 and all(k in _mb for k in
+                          ("today", "month", "range", "low", "unpaid", "stock")),
+      list(_mb.keys()))
+check("统计里退款已计入", _mb.get("today", {}).get("refund", 0) >= 9.9,
+      _mb.get("today"))
+_msc, _mb, _ = _mreq("/m/api/customers", opener=_mb_op)
+check("手机客户接口可用（含应收字段）",
+      _msc == 200 and "customers" in _mb and "unpaid" in _mb, list(_mb.keys()))
+_msc, _mb, _ = _mreq("/m/api/trash", opener=_mb_op)
+check("手机回收站接口可读", _msc == 200 and "count" in _mb, _mb)
+_msc, _mb, _ = _mreq("/m/api/del", {"id": _mob_id}, opener=_mb_op)
+check("手机删除进回收站", _msc == 200 and _mb.get("deleted") == 1, (_msc, _mb))
+check("删除后库存列表不再包含该记录（软删）",
+      ss.deleted_count() == 1
+      and all(r["id"] != _mob_id for r in ss.all_records()))
+_msc, _mb, _ = _mreq("/m/api/trash", opener=_mb_op)
+check("回收站能看到刚删的记录", _mb.get("count") == 1
+      and (_mb.get("items") or [{}])[0].get("code") == _mob_code, _mb)
+_msc, _mb, _ = _mreq("/m/api/restore", {"ids": [_mob_id]}, opener=_mb_op)
+check("手机恢复回收站记录", _msc == 200 and _mb.get("restored") == 1
+      and ss.deleted_count() == 0, (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/stocktake",
+                     {"op": "new", "name": "手机盘点", "kw": _mob_code},
+                     opener=_mb_op)
+_v140_st = _mb.get("id")
+check("手机新建盘点单", _msc == 200 and _v140_st, (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/stocktake?op=detail&id=%d" % (_v140_st or 0),
+                     opener=_mb_op)
+_v140_row = (_mb.get("rows") or [{}])[0]
+check("盘点明细带账面数", _msc == 200 and _v140_row.get("book") == 9, _mb)
+_msc, _mb, _ = _mreq("/m/api/stocktake",
+                     {"op": "set", "row_id": _v140_row.get("id"), "real_qty": 9},
+                     opener=_mb_op)
+check("手机保存实盘数", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/stocktake", {"op": "commit", "id": _v140_st},
+                     opener=_mb_op)
+check("手机提交盘点", _msc == 200 and _mb.get("ok"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/stocktake?op=list", opener=_mb_op)
+check("盘点单列表显示已完成", _msc == 200
+      and any(x.get("status") == "done" for x in (_mb.get("list") or [])), _mb)
+# ---- 制作流程（v1.42.0）：节点自定义 + 每步必填姓名 + 全程留痕 ----
+check("制作流程默认五节点",
+      ss.wf_stages() == ["发起制作", "制作标签", "贴标签", "质检", "入库"],
+      ss.wf_stages())
+check("发起制作必填姓名（缺省拒绝）", ss.wf_create("x", by="")[0] == 0)
+_wid, _wno = ss.wf_create("修复 WL-TST 外壳", kind="修复", target="WL-TST",
+                          by="张三")
+check("发起成功生成 WO 单号", bool(_wid) and _wno.startswith("WO-"), _wno)
+check("推进必须填名字", ss.wf_advance(_wid, "")[0] is False)
+check("推进到下一节点", ss.wf_advance(_wid, "李四", "标签已印")[0] is True)
+_lg = ss.wf_logs(_wid)
+check("流转留痕带姓名", _lg[-1]["by"] == "李四" and _lg[-1]["action"] == "advance",
+      _lg[-1])
+for _ in range(3):
+    ss.wf_advance(_wid, "王五")
+check("走完全流程状态为已完成",
+      any(r["id"] == _wid for r in ss.wf_list("done")))
+check("经手人取最近一步",
+      [r for r in ss.wf_list("done") if r["id"] == _wid][0]["handler"] == "王五")
+check("已完成单可退回重开", ss.wf_back(_wid, "张三")[0] is True
+      and any(r["id"] == _wid for r in ss.wf_list("active")))
+check("跨站退回：质检直接退到制作标签",
+      ss.wf_back(_wid, "张三", target=1)[0] is True
+      and [r for r in ss.wf_list("active") if r["id"] == _wid][0]["stage_name"]
+      == "制作标签")
+check("跨站退回留痕写明目标站",
+      any(g["action"] == "back" and "制作标签" in (g["note"] or "")
+          for g in ss.wf_logs(_wid)))
+check("退回目标非法（不能往后跳）",
+      ss.wf_back(_wid, "张三", target=99)[0] is False)
+check("节点重命名生效", ss.wf_set_stages(
+    ["接单", "打印", "贴标", "质检", "上架", "发货"])[0]
+    and ss.wf_stages()[0] == "接单")
+check("节点数下限校验", ss.wf_set_stages(["只有一关"])[0] is False)
+ss.wf_set_stages(ss.WF_DEFAULT_STAGES)
+check("取消与恢复", ss.wf_cancel(_wid, "张三")[0] is True
+      and any(r["id"] == _wid for r in ss.wf_list("cancelled"))
+      and ss.wf_resume(_wid, "张三")[0] is True)
+ss.wf_set_target(_wid, "WL-NEW1", by="王五")
+check("入库回写关联编号并留痕",
+      [r for r in ss.wf_list("active") if r["id"] == _wid][0]["target"] == "WL-NEW1"
+      and any(g["action"] == "stock" for g in ss.wf_logs(_wid)))
+check("删除制作单连带日志", ss.wf_delete(_wid) is True and ss.wf_logs(_wid) == [])
+# ---- 制作类型与附加字段（v1.42.4）----
+_kd = {k["name"]: k for k in ss.wf_kinds()}
+check("默认类型含制作标签", "制作标签" in _kd, list(_kd))
+check("制作标签带标签种类下拉",
+      any(f["label"] == "标签种类" and "外箱标" in f["options"]
+          for f in _kd["制作标签"]["fields"]),
+      _kd["制作标签"]["fields"])
+check("更换型号标签带原型号/更换后型号",
+      [f["label"] for f in _kd["更换型号标签"]["fields"]]
+      == ["原型号", "更换后型号"])
+check("类型可自定义", ss.wf_set_kinds(
+    [{"name": "翻新", "fields": [{"label": "成色要求",
+                                 "options": ["九成新", "八成新"]}]}])[0]
+      and [k["name"] for k in ss.wf_kinds()] == ["翻新"])
+_ok2, _ = ss.wf_set_kinds([{"name": "", "fields": []}, {"name": "修复",
+                         "fields": []}])
+check("空类型被清洗后仍保存有效", _ok2 and [k["name"] for k in ss.wf_kinds()] == ["修复"])
+_w2, _n2 = ss.wf_create("更换 X9 型号标签", kind="翻新",
+                        extra={"成色要求": "九成新"}, by="张三")
+check("发起带附加字段", _w2 > 0, _n2)
+_r2 = [r for r in ss.wf_list("active") if r["id"] == _w2][0]
+check("附加字段入库并可读", _r2["extra"] == {"成色要求": "九成新"}, _r2["extra"])
+check("附加字段可被搜索", any(r["id"] == _w2 for r in ss.wf_list("active", "九成新")))
+_w3, _ = ss.wf_create("无附加字段的单", kind="修复", by="李四")
+check("无附加字段单 extra 为空 dict",
+      [r for r in ss.wf_list("active") if r["id"] == _w3][0]["extra"] == {})
+ss.wf_delete(_w2)
+ss.wf_delete(_w3)
+ss.wf_set_kinds(ss.WF_DEFAULT_KINDS)
 _lan_srv.allow("127.0.0.1", False)
 _msc, _mb, _ = _mreq("/m/api/add", {"brand": "x"}, opener=_mb_op)
 check("只读时手机新增被拒（403）", _msc == 403 and _mb.get("readonly"), (_msc, _mb))
+_msc, _mb, _ = _mreq("/m/api/return_sale", {"sale_id": _v140_sid, "qty": 1},
+                     opener=_mb_op)
+check("只读时退货被拒（403）", _msc == 403 and _mb.get("readonly"), (_msc, _mb))
 _lan_srv.allow("127.0.0.1", True)
 # ---- 列题自定义（v1.16.0）：手机改列题，电脑端表头同步 ----
 _msc, _mb, _ = _mreq("/m/api/coltitles", opener=_mb_op)
@@ -1183,8 +1322,9 @@ try:
     _miss2 = [i for i in _set_ids if ('id="%s"' % i) not in _pset]
     check("设置页分组版式保留全部功能控件 id", not _miss2,
           "缺：" + ", ".join(_miss2) if _miss2 else "")
-    check("设置页按「连接 / 显示 / 数据与隐私」分三组",
-          _pset.count('class="sec"') == 3 and _pset.count("sec-t") == 3)
+    check("设置页按「连接 / 工具 / 显示 / 数据与隐私」分组（v1.41 加电脑数据工具）",
+          _pset.count('class="sec"') == 4 and _pset.count("sec-t") == 4
+          and "电脑数据工具" in _pset and "回收站" in _pset)
     check("表格列自定义为两列网格，勾选高亮有 JS 兜底（:has 兼容）",
           'class="colgrid"' in _pset and ".colgrid .ckrow.on" in _app_html
           and "row.className = 'ckrow'" in _app_html)
@@ -1206,8 +1346,9 @@ try:
     check("全页禁文字选中（长按是手势不是选择），输入框除外",
           "user-select:none" in _app_html and "-webkit-touch-callout:none" in _app_html
           and "input, textarea { user-select:text" in _app_html)
-    check("底部导航带图标、加高",
-          "<i>▦</i>" in _app_html and "<i>✚</i>" in _app_html and "<i>⚙</i>" in _app_html
+    check("底部导航带图标、加高（v1.41 四页签：库存/记录/统计/设置，录入/出售走二级页）",
+          all(x in _app_html for x in ("<i>▦</i>", "<i>☰</i>", "<i>◔</i>", "<i>⚙</i>"))
+          and "<i>✚</i>" not in _app_html and "<i>¥</i>" not in _app_html
           and "nav div i { display:block" in _app_html)
     check("录入悬浮按钮可拖动并记住位置，轻点仍进录入页",
           "fabPos" in _app_html and "FAB_DRAG" in _app_html
@@ -3417,7 +3558,8 @@ try:
 
     # ---- v1.32.0 业务四件套：客户 / 退货 / 利润 / 盘点（守卫断言） ----
     st = app.store
-    check("四个新功能页已挂到导航", app.nb.index("end") == 10, app.nb.index("end"))
+    check("五个新功能页已挂到导航（v1.42.0 加制作流程）",
+          app.nb.index("end") == 11, app.nb.index("end"))
     _biz = blank_record() | {"code": "WL-BIZ01", "brand": "测试品牌",
                              "model": "BIZ-M1", "price": 100.0, "qty": 5}
     st.insert_many([_biz])

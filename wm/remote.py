@@ -48,6 +48,7 @@ class RemoteStore(object):
         self.path = "%s:%d（局域网主机）" % (self.host, self.port)
         self.last_ping = {}
         self.can_write = False        # 由 ping() 更新
+        self.wf_stage = -1            # 本机在制作流程页选的工位（-1 = 不限）
         self.warehouse = ""
         self.rev = 0
 
@@ -58,7 +59,8 @@ class RemoteStore(object):
     def __getattr__(self, name):
         if name.startswith("_") or name in ("host", "port", "code", "client_id",
                                             "client_name", "timeout", "base", "path",
-                                            "last_ping", "can_write", "warehouse", "rev"):
+                                            "last_ping", "can_write", "warehouse", "rev",
+                                            "wf_stage"):
             raise AttributeError(name)
         if name not in RPC_METHODS:
             raise AttributeError(name)
@@ -68,12 +70,19 @@ class RemoteStore(object):
         return rpc
 
     # ------------------------------------------------------------ HTTP
-    def _post(self, method, args, kwargs, path="/rpc"):
+    def _post(self, method, args, kwargs, path="/rpc", extra=None):
+        try:
+            stage = int(getattr(self, "wf_stage", -1))
+        except (TypeError, ValueError):
+            stage = -1
         payload = {"code": self.code, "id": self.client_id,
                    "name": self.client_name, "method": method,
+                   "wf_stage": stage,
                    "args": list(args),
                    "kwargs": {k: v for k, v in (kwargs or {}).items()
                               if not callable(v)}}
+        if extra:
+            payload.update(extra)
         req = urllib.request.Request(
             self.base + path,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -128,3 +137,27 @@ class RemoteStore(object):
     def request_write(self):
         """请主机授权录入（主机上会弹窗询问）。"""
         return self._post("", (), {}, path="/request_write")
+
+    def request_stage(self, stage):
+        """申请把本机工位改成 stage（主机弹窗同意后才生效）。"""
+        return self._post("", (), {}, path="/request_stage",
+                          extra={"stage": int(stage)})
+
+    def stage_result(self):
+        """工位申请的进展：status = pending / ok / no / ""（没申请过）。"""
+        q = urlencode({"code": self.code})
+        req = urllib.request.Request(self.base + "/stage_result?" + q)
+        try:
+            with urllib.request.urlopen(req, timeout=min(self.timeout, 6)) as resp:
+                body = json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            try:
+                body = json.loads(e.read().decode("utf-8") or "{}")
+            except Exception:
+                body = {}
+            raise RemoteError(body.get("error") or ("主机返回错误 %d" % e.code))
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            raise HostUnreachable("连不上主机 %s：%s" % (self.base, e))
+        if not body.get("ok"):
+            raise RemoteError(body.get("error") or "主机返回未知错误")
+        return body

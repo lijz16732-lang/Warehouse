@@ -6,14 +6,14 @@ import tempfile
 import threading
 import tkinter as tk
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 try:
     import segno
 except ImportError:          # 二维码库缺失时只显示文字地址，不影响其他功能
     segno = None
 
-from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
+from .constants import (CLR_ACCENT, guard_combobox, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN,
                         apply_window_icon, center_window)
 from .lan import DEFAULT_PORT, local_ips
@@ -139,9 +139,10 @@ class LanPanel(tk.Frame):
         tk.Label(row_rot, text="自动更换连接码", bg=CLR_CARD, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
         self.var_rotate = tk.StringVar(value="不自动更换")
-        self.cb_rotate = ttk.Combobox(row_rot, textvariable=self.var_rotate,
-                                      state="readonly", width=10,
-                                      values=("不自动更换", "每天换一次", "每周换一次"))
+        self.cb_rotate = guard_combobox(ttk.Combobox(
+            row_rot, textvariable=self.var_rotate,
+            state="readonly", width=10,
+            values=("不自动更换", "每天换一次", "每周换一次")))
         self.cb_rotate.pack(side="left", padx=(4, 8))
         self.cb_rotate.bind("<<ComboboxSelected>>", self.on_rotate_change)
         self.lbl_rotate = tk.Label(row_rot, text="", bg=CLR_CARD, fg=CLR_MUTED,
@@ -169,10 +170,11 @@ class LanPanel(tk.Frame):
         wrap = tk.Frame(host, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)
         wrap.pack(fill="x", padx=14, pady=(2, 4))
-        cols = ("name", "ip", "last", "perm")
+        cols = ("name", "ip", "last", "perm", "stage")
         self.tree = ttk.Treeview(wrap, columns=cols, show="headings", height=3)
-        for key, title, w in (("name", "电脑", 140), ("ip", "地址", 120),
-                              ("last", "最近活动", 110), ("perm", "录入权限", 90)):
+        for key, title, w in (("name", "电脑", 130), ("ip", "地址", 108),
+                              ("last", "最近活动", 92), ("perm", "录入权限", 78),
+                              ("stage", "制作工位", 118)):
             self.tree.heading(key, text=title)
             self.tree.column(key, width=w, anchor="center")
         self.tree.pack(fill="x")
@@ -187,6 +189,10 @@ class LanPanel(tk.Frame):
                                    width=9, state="disabled",
                                    command=self.kick_client)
         self.btn_kick.pack(side="right")
+        self.btn_rename = ttk.Button(rowt, text="改名", style="Ghost.TButton",
+                                     width=6, state="disabled",
+                                     command=self.rename_client)
+        self.btn_rename.pack(side="right", padx=(0, 6))
         self.btn_blk = ttk.Button(rowt, text="加入黑名单", style="Ghost.TButton",
                                   width=11, state="disabled",
                                   command=self.block_client)
@@ -195,6 +201,10 @@ class LanPanel(tk.Frame):
                                     width=11, state="disabled",
                                     command=self.manage_blocked)
         self.btn_blist.pack(side="left")
+        self.btn_sales = ttk.Button(rowt, text="销售统计", style="Ghost.TButton",
+                                    width=11, state="disabled",
+                                    command=self.show_sales_stats)
+        self.btn_sales.pack(side="left", padx=(6, 0))
 
         # ---- ② 客户端 ----
         cli = self._card(
@@ -232,8 +242,9 @@ class LanPanel(tk.Frame):
         rowch.pack(fill="x", padx=14, pady=(0, 6))
         tk.Label(rowch, text="历史连接", bg=CLR_CARD, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
-        self.cb_hist = ttk.Combobox(rowch, state="readonly", width=30,
-                                    font=(self.fam, 9))
+        self.cb_hist = guard_combobox(ttk.Combobox(rowch, state="readonly",
+                                                   width=30,
+                                                   font=(self.fam, 9)))
         self.cb_hist.pack(side="left", padx=(6, 6))
         self.cb_hist.bind("<<ComboboxSelected>>", self._pick_history)
         ttk.Button(rowch, text="清空", style="Ghost.TButton", width=6,
@@ -253,6 +264,14 @@ class LanPanel(tk.Frame):
         self.btn_ask = ttk.Button(rowc2, text="请求录入", style="Ghost.TButton",
                                   width=9, command=self.ask_write)
         self.btn_ask.pack(side="left", padx=(6, 0))
+        # 开机自动连回上次主机：客户端电脑第二天开机不用再填地址和连接码
+        self.var_auto = tk.BooleanVar(
+            value=bool(self.app.lan_cfg.get("auto_reconnect", True)))
+        self.cb_auto = ttk.Checkbutton(rowc2, text="开机自动连回上次主机",
+                                       variable=self.var_auto,
+                                       style="TCheckbutton",
+                                       command=self.toggle_auto_reconnect)
+        self.cb_auto.pack(side="left", padx=(10, 0))
         self.lbl_cli_msg = tk.Label(cli, text="", bg=CLR_CARD, fg=CLR_MUTED,
                                     font=(self.fam, 8), anchor="w", justify="left",
                                     wraplength=600)
@@ -477,6 +496,7 @@ class LanPanel(tk.Frame):
                 self.var_cport.set(str(st["port"]))
             if not self.var_ccode.get().strip():
                 self.var_ccode.set(st["code"])
+        self.var_auto.set(bool(self.app.lan_cfg.get("auto_reconnect", True)))
         self.btn_ask.configure(state="normal" if (mode == "client" and not st["can_write"])
                                else "disabled")
         self.btn_disconn.configure(state="normal" if mode != "off" else "disabled")
@@ -502,12 +522,18 @@ class LanPanel(tk.Frame):
         clients = st["clients"]
         import time
         now = time.time()
+        try:
+            stages = self.app.store.wf_stages()
+        except Exception:
+            stages = []
         for c in clients:
             ago = int(max(0, now - (c.get("last_seen") or 0)))
             when = "%d 秒前" % ago if ago < 60 else "%d 分钟前" % (ago // 60)
+            si = int(c.get("stage", -1) or -1)
+            sname = stages[si] if 0 <= si < len(stages) else "不限"
             self.tree.insert("", "end", iid=c["ip"],
                              values=(c.get("name") or "未知电脑", c["ip"], when,
-                                     "允许" if c.get("allowed") else "只读"))
+                                     "允许" if c.get("allowed") else "只读", sname))
         if sel_keep:
             self._in_refresh = True
             try:
@@ -518,7 +544,8 @@ class LanPanel(tk.Frame):
                 self._in_refresh = False
         self.lbl_clients.configure(
             text="暂无电脑连接" if not clients else
-            "共 %d 台；双击可切换录入权限" % len(clients))
+            "共 %d 台；双击切换录入权限；「制作工位」是各电脑自己在制作流程页选的"
+            % len(clients))
         hosting = mode == "host" and st["running"]
         sel = self.tree.selection()
         self.btn_kick.configure(
@@ -526,6 +553,7 @@ class LanPanel(tk.Frame):
         self.btn_blk.configure(
             state="normal" if (hosting and sel) else "disabled")
         self.btn_blist.configure(state="normal" if hosting else "disabled")
+        self.btn_sales.configure(state="normal" if hosting else "disabled")
         self._refresh_phone(st)
         self.refresh_hist()
 
@@ -759,6 +787,17 @@ class LanPanel(tk.Frame):
         self.app.set_phone_access(bool(self.var_phone_access.get()))
         self.refresh()
 
+    def toggle_auto_reconnect(self):
+        """开关「开机自动连回上次主机」。"""
+        self.app.lan_cfg["auto_reconnect"] = bool(self.var_auto.get())
+        self.app._save_lan_cfg()
+        on = bool(self.var_auto.get())
+        self.lbl_cli_msg.configure(
+            text=("已开启：以后开机只要主机在线就会自动连上，不用再填地址和连接码。"
+                  if on else
+                  "已关闭：开机后不再自动连接主机，需要时在这里手动连。"),
+            fg=CLR_MUTED)
+
     def toggle_client(self):
         sel = self.tree.selection()
         if not sel:
@@ -776,7 +815,7 @@ class LanPanel(tk.Frame):
             return
         sel = bool(self.tree.selection())
         state = "normal" if sel else "disabled"
-        for b in (self.btn_kick, self.btn_blk):
+        for b in (self.btn_kick, self.btn_blk, self.btn_rename):
             if str(b.cget("state")) != state:
                 b.configure(state=state)
 
@@ -817,6 +856,104 @@ class LanPanel(tk.Frame):
             return
         self.app.lan_block_client(ip, name)
         self.refresh()
+
+    def rename_client(self):
+        """主机改选中客户端的显示名（覆盖客户端上报的名字，重启后仍生效）。"""
+        c = self._sel_client()
+        if not c:
+            return
+        ip, name = c
+        new = simpledialog.askstring(
+            "改名", "给 %s（%s）换个显示名：\n\n改名后对方自己上报的电脑名将不再使用。"
+            % (name or "未知电脑", ip), initialvalue=name or "", parent=self)
+        if new is None:
+            return
+        new = (new or "").strip()
+        if not new:
+            messagebox.showwarning("改名", "名字不能为空。", parent=self)
+            return
+        ok, msg = self.app.lan_rename_client(ip, new)
+        if not ok:
+            messagebox.showerror("改名", msg, parent=self)
+        self.refresh()
+
+    def show_sales_stats(self):
+        """按来源（主机 / 各台电脑 / 手机）汇总销售数据。"""
+        srv = getattr(self.app, "lan_server", None)
+        if srv is None or not srv.running:
+            return
+        win = tk.Toplevel(self)
+        win.title("销售统计（按设备）")
+        win.configure(bg=CLR_BG)
+        center_window(win, 560, 380)
+        win.transient(self.winfo_toplevel())
+        win.grab_set()
+        apply_window_icon(win)
+
+        top = tk.Frame(win, bg=CLR_BG)
+        top.pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(top, text="统计范围", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        var_days = tk.StringVar(value="全部")
+        box = ttk.Combobox(top, textvariable=var_days, state="readonly",
+                           width=10, values=("今天", "近7天", "近30天", "全部"))
+        box.pack(side="left", padx=(6, 0))
+        lbl_total = tk.Label(win, text="", bg=CLR_BG, fg=CLR_TEXT,
+                             font=(self.fam, 10, "bold"), anchor="w",
+                             justify="left")
+        lbl_total.pack(fill="x", padx=14, pady=(2, 4))
+
+        wrap = tk.Frame(win, bg=CLR_BG, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        wrap.pack(fill="both", expand=True, padx=14, pady=(0, 12))
+        cols = ("src", "count", "qty", "amount", "cost", "profit")
+        tv = ttk.Treeview(wrap, columns=cols, show="headings")
+        for key, title, w in (("src", "来源设备", 170), ("count", "笔数", 60),
+                              ("qty", "件数", 60), ("amount", "销售额", 90),
+                              ("cost", "成本", 80), ("profit", "毛利", 80)):
+            tv.heading(key, text=title)
+            tv.column(key, width=w, anchor="center")
+        tv.pack(fill="both", expand=True)
+
+        DAYS = {"今天": 1, "近7天": 7, "近30天": 30, "全部": 0}
+
+        def fill():
+            d = DAYS.get(var_days.get(), 0)
+            data = self.app.lan_sales_stats(d)
+            tv.delete(*tv.get_children())
+            t = data.get("total") or {}
+            lbl_total.configure(
+                text="合计：销售 %d 笔 / %d 件 · 销售额 ¥%.2f · 毛利 ¥%.2f"
+                     % (t.get("count") or 0, t.get("qty") or 0,
+                        t.get("amount") or 0.0, t.get("profit") or 0.0))
+            rows = data.get("rows") or []
+            if not rows:
+                tv.insert("", "end", values=("暂无销售记录", "", "", "", "", ""))
+                return
+            for r in rows:
+                tv.insert("", "end", values=(
+                    r.get("src") or "未知来源", r.get("count") or 0,
+                    r.get("qty") or 0,
+                    "%.2f" % (r.get("amount") or 0.0),
+                    "%.2f" % (r.get("cost") or 0.0),
+                    "%.2f" % (r.get("profit") or 0.0)))
+
+        box.bind("<<ComboboxSelected>>", lambda _e: fill())
+        fill()
+        # 弹窗打开期间主机端继续卖出 → 3 秒自动刷新
+        aid = [None]
+
+        def tick():
+            if not win.winfo_exists():
+                return
+            try:
+                fill()
+            except Exception:
+                pass
+            aid[0] = win.after(3000, tick)
+
+        tick()
+        win.bind("<Escape>", lambda _e: win.destroy())
 
     def show_access_log(self):
         """查看局域网访问日志（只读，保留 180 天）。

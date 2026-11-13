@@ -24,7 +24,7 @@ MODE_TEXT = {
 
 MODE_HINT = {
     MODE_APPEND: "全部作为新记录加入，不做重复判断、不去重。",
-    MODE_REPLACE: "先清空现有全部数据再导入（编号从 WL-00001 重新开始）；文件内自动去重。",
+    MODE_REPLACE: "先清空现有全部数据再导入（编号从 1 号重新开始）；文件内自动去重。",
     MODE_MERGE: "与库中数据对比：型号已存在、或无型号但内容与库中完全相同 → 跳过不导入；其余才新增。",
 }
 
@@ -59,7 +59,7 @@ class ImportDialog(tk.Toplevel):
         self._load_sheets()
         self._center(master)
         self.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.bind("<Escape>", lambda e: self._cancel())
+        self.bind("<Escape>", lambda e=None: self._cancel())
         self.grab_set()
 
     # ------------------------------------------------------------ UI
@@ -82,7 +82,7 @@ class ImportDialog(tk.Toplevel):
         self.cb_sheet = ttk.Combobox(inner, textvariable=self.var_sheet, width=18,
                                      state="readonly", font=(self.fam, 10))
         self.cb_sheet.pack(side="left", padx=(8, 20))
-        self.cb_sheet.bind("<<ComboboxSelected>>", lambda e: self._reload())
+        self.cb_sheet.bind("<<ComboboxSelected>>", lambda e=None: self._reload())
 
         tk.Label(inner, text="表头行", bg=CLR_CARD, fg="#41506B",
                  font=(self.fam, 10)).pack(side="left")
@@ -90,8 +90,8 @@ class ImportDialog(tk.Toplevel):
                                    textvariable=self.var_hrow, font=(self.fam, 10),
                                    command=self._on_spin)
         self.sp_hrow.pack(side="left", padx=(8, 20))
-        self.sp_hrow.bind("<Return>", lambda e: self._on_spin())
-        self.sp_hrow.bind("<FocusOut>", lambda e: self._on_spin())
+        self.sp_hrow.bind("<Return>", lambda e=None: self._on_spin())
+        self.sp_hrow.bind("<FocusOut>", lambda e=None: self._on_spin())
 
         ttk.Button(inner, text="自动识别表头", style="Ghost.TButton",
                    command=lambda: self._reload(auto=True)).pack(side="left")
@@ -173,7 +173,7 @@ class ImportDialog(tk.Toplevel):
         self.btn_ok.pack(side="right", padx=(8, 0))
         ttk.Button(f2, text="取消", width=10, command=self._cancel).pack(side="right")
 
-    def _on_mode_change(self):
+    def _on_mode_change(self, *_a):
         self._mode_touched = True
         self._render_preview()
         self._refresh_hint()
@@ -201,11 +201,13 @@ class ImportDialog(tk.Toplevel):
         self._spin_touched = False
         self._reload(auto=True)
 
-    def _on_spin(self):
+    def _on_spin(self, *_a):
         self._spin_touched = True
         self._reload(auto=False)
 
-    def _reload(self, auto=False):
+    def _reload(self, auto=False, *_a):
+        if not isinstance(auto, bool):
+            auto = False        # 被当成事件回调调用时，第一个参数是 event 对象
         sheet = self.var_sheet.get() or None
         if auto or sheet != getattr(self, "_cur_sheet", None):
             self._spin_touched = False
@@ -324,11 +326,11 @@ class ImportDialog(tk.Toplevel):
             cb = ttk.Combobox(row, textvariable=var, values=choices, state="readonly",
                               width=18, font=(self.fam, 9))
             cb.pack(side="left", fill="x", expand=True)
-            cb.bind("<<ComboboxSelected>>", lambda e: self._on_map_change())
+            cb.bind("<<ComboboxSelected>>", lambda e=None: self._on_map_change())
             self.field_vars[k] = var
         self._last_pick = {k: var.get() for k, var in self.field_vars.items()}
 
-    def _on_map_change(self):
+    def _on_map_change(self, *_a):
         if self._map_lock:
             return
         self._map_lock = True
@@ -440,7 +442,7 @@ class ImportDialog(tk.Toplevel):
             if not messagebox.askyesno(
                     "确认覆盖",
                     "覆盖导入会先清空现有全部数据。\n"
-                    "编号计数器同时归零，重新从 WL-00001 开始编号。\n"
+                    "编号计数器同时归零，重新从 1 号开始编号。\n"
                     "清空前会自动备份一份到 data\\backups（可随时找回）。\n\n确定继续吗？",
                     parent=self):
                 return

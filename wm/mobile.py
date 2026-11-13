@@ -30,7 +30,7 @@ COOKIE_NAME = "cgm_session"
 ITEM_FIELDS = ("id", "code", "brand", "category", "model", "condition",
                "price", "qty", "shelf", "listed", "sold_out", "remark")
 SALE_FIELDS = ("id", "code", "brand", "model", "category", "qty", "price",
-               "total", "buyer", "sale_date", "out_type", "remark")
+               "total", "buyer", "sale_date", "out_type", "remark", "paid")
 # 手机端「新增 / 修改」允许写的字段（编号自动生成，不允许改 deleted_at 等）
 EDIT_FIELDS = ("brand", "category", "model", "condition",
                "price", "qty", "shelf", "listed", "remark")
@@ -249,10 +249,15 @@ def handle_items(srv, ip, token, query):
     if not srv.mobile.check(token, ip):
         return 401, {"ok": False, "need_login": True, "error": "请先登录"}, NO_STORE
     kw = (query.get("kw") or "").strip().lower()
+    store = srv.get_store()
     try:
-        rows = srv.get_store().all_records()
+        rows = store.all_records()
     except Exception as e:
         return 500, {"ok": False, "error": "读取库存失败：%s" % e}, NO_STORE
+    try:
+        thr = int(store.get_num("low_stock_threshold", 3) or 3)
+    except Exception:
+        thr = 3
     if kw:
         def hit(r):
             return any(kw in str(r.get(f) or "").lower()
@@ -270,7 +275,7 @@ def handle_items(srv, ip, token, query):
     limit = max(1, min(limit, PAGE_LIMIT))
     page = rows[offset:offset + limit]
     try:
-        has_ph = srv.get_store().photo_codes("item")   # 📷 指示列数据源
+        has_ph = store.photo_codes("item")   # 📷 指示列数据源
     except Exception:
         has_ph = set()
     out = []
@@ -279,6 +284,9 @@ def handle_items(srv, ip, token, query):
         d["remark"] = _trim(d["remark"], 60)
         d["price"] = _fmt_price(d["price"])
         d["ph"] = 1 if (r.get("code") or "") in has_ph else 0
+        q = int(r.get("qty") or 0)
+        d["low"] = 1 if (not int(r.get("sold_out") or 0) and thr > 0
+                         and q <= thr) else 0
         out.append(d)
     return 200, {"ok": True, "total": len(rows), "offset": offset,
                  "has_more": offset + limit < len(rows), "items": out}, NO_STORE
@@ -288,16 +296,26 @@ def handle_sales(srv, ip, token, query):
     if not srv.mobile.check(token, ip):
         return 401, {"ok": False, "need_login": True, "error": "请先登录"}, NO_STORE
     kw = (query.get("kw") or "").strip()
+    store = srv.get_store()
     try:
-        rows = srv.get_store().list_sales(kw=kw)[:PAGE_LIMIT]
+        rows = store.list_sales(kw=kw)[:PAGE_LIMIT]
     except Exception as e:
         return 500, {"ok": False, "error": "读取出售记录失败：%s" % e}, NO_STORE
+    try:
+        rmap = store.returns_by_sale([r.get("id") for r in rows])
+    except Exception:
+        rmap = {}
     out = []
     for r in rows:
         d = {k: r.get(k) for k in SALE_FIELDS}
         d["price"] = _fmt_price(d["price"])
         d["total"] = _fmt_price(d["total"])
         d["remark"] = _trim(d["remark"], 60)
+        rr = rmap.get(int(r.get("id") or 0)) or {}
+        d["returned"] = int(rr.get("qty") or 0)
+        d["refund"] = _fmt_price(rr.get("refund") or 0)
+        d["left"] = max(0, int(r.get("qty") or 0) - d["returned"])
+        d["paid"] = 1 if (r.get("paid") is None or int(r.get("paid") or 0)) else 0
         out.append(d)
     return 200, {"ok": True, "sales": out}, NO_STORE
 
@@ -482,15 +500,376 @@ def handle_sell(srv, ip, token, payload):
     if not item_id:
         return 404, {"ok": False, "error": "没有找到编号 %s 的商品" % code}, NO_STORE
     p = payload or {}
+    paid = p.get("paid") not in (0, False, "0", "否", "false")
     try:
         ok, msg = store.add_sale(item_id, p.get("qty"), p.get("price"),
                                  buyer=str(p.get("buyer") or "")[:40],
                                  remark=str(p.get("remark") or "")[:120],
-                                 address=str(p.get("address") or "")[:120])
+                                 address=str(p.get("address") or "")[:120],
+                                 paid=paid)
     except Exception as e:
         return 500, {"ok": False, "error": "登记失败：%s" % e}, NO_STORE
     return (200 if ok else 400), {"ok": ok, "error": None if ok else msg,
                                   "message": msg}, NO_STORE
+
+
+# ---------------------------------------------------------------- 退货 / 撤销
+def handle_return_sale(srv, ip, token, payload):
+    """销售退货：可部分退，可选是否把货退回库存（默认退）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    try:
+        sale_id = int(p.get("sale_id") or 0)
+    except (TypeError, ValueError):
+        sale_id = 0
+    if sale_id <= 0:
+        return 400, {"ok": False, "error": "请指定要退货的出售记录"}, NO_STORE
+    refund = p.get("refund")
+    if refund in (None, ""):
+        refund = None
+    else:
+        try:
+            refund = float(refund)
+        except (TypeError, ValueError):
+            return 400, {"ok": False, "error": "退款金额请填数字"}, NO_STORE
+    restock = p.get("restock") not in (0, False, "0", "否", "false")
+    store = srv.get_store()
+    try:
+        ok, msg = store.add_return(sale_id, p.get("qty"), refund=refund,
+                                   restock=restock,
+                                   remark=str(p.get("remark") or "")[:120])
+    except Exception as e:
+        return 500, {"ok": False, "error": "退货失败：%s" % e}, NO_STORE
+    return (200 if ok else 400), {
+        "ok": ok, "message": msg,
+        "error": None if ok else msg}, NO_STORE
+
+
+def handle_sale_undo(srv, ip, token, payload):
+    """撤销一整笔出售（库存加回，记录作废）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    try:
+        sale_id = int((payload or {}).get("sale_id") or 0)
+    except (TypeError, ValueError):
+        sale_id = 0
+    if sale_id <= 0:
+        return 400, {"ok": False, "error": "请指定要撤销的出售记录"}, NO_STORE
+    try:
+        ok, msg = srv.get_store().delete_sale(sale_id, restore=True)
+    except Exception as e:
+        return 500, {"ok": False, "error": "撤销失败：%s" % e}, NO_STORE
+    return (200 if ok else 400), {
+        "ok": ok, "message": msg,
+        "error": None if ok else msg}, NO_STORE
+
+
+# ---------------------------------------------------------------- 统计 / 客户
+def _profit_sum(rows):
+    """一组 profit_rows 的汇总。amount 是实收（已扣退款）。"""
+    amount = sum(float(r.get("amount") or 0) for r in rows)
+    refund = sum(float(r.get("refund") or 0) for r in rows)
+    profit = sum(float(r.get("profit") or 0) for r in rows)
+    qty = sum(int(r.get("qty") or 0) - int(r.get("rq") or 0) for r in rows)
+    return {"amount": round(amount, 2), "refund": round(refund, 2),
+            "sales": round(amount + refund, 2), "profit": round(profit, 2),
+            "qty": qty, "orders": len(rows)}
+
+
+def handle_stats(srv, ip, token, query):
+    """手机统计页：今日 / 本月 / 近 N 天 + 低库存 + 应收 + 本月利润榜。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    try:
+        days = int((query or {}).get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(days, 365))
+    today = time.strftime("%Y-%m-%d")
+    month_start = today[:8] + "01"
+    range_start = time.strftime(
+        "%Y-%m-%d", time.localtime(time.time() - (days - 1) * 86400))
+    start = min(month_start, range_start)
+    store = srv.get_store()
+    try:
+        rows = store.profit_rows(start=start)
+        recs = store.all_records()
+        unpaid = store.sales_unpaid()
+        thr = int(store.get_num("low_stock_threshold", 3) or 3)
+    except Exception as e:
+        return 500, {"ok": False, "error": "统计失败：%s" % e}, NO_STORE
+
+    def pick(lo):
+        return [r for r in rows if (r.get("date") or "") >= lo]
+
+    today_rows = [r for r in rows if (r.get("date") or "") == today]
+    month_rows = pick(month_start)
+    range_rows = pick(range_start)
+
+    low = []
+    for r in recs:
+        if int(r.get("sold_out") or 0):
+            continue
+        q = int(r.get("qty") or 0)
+        if thr > 0 and q <= thr:
+            low.append({"id": r.get("id"), "code": r.get("code") or "",
+                        "brand": r.get("brand") or "", "model": r.get("model") or "",
+                        "qty": q, "shelf": r.get("shelf") or ""})
+    low.sort(key=lambda d: (d["qty"], d["code"]))
+
+    by_model = {}
+    for r in month_rows:
+        key = (r.get("model") or r.get("brand") or "未填型号").strip()
+        cur = by_model.setdefault(key, {"model": key, "profit": 0.0, "qty": 0})
+        cur["profit"] = round(cur["profit"] + float(r.get("profit") or 0), 2)
+        cur["qty"] += int(r.get("qty") or 0) - int(r.get("rq") or 0)
+    top = sorted(by_model.values(), key=lambda d: -d["profit"])[:5]
+
+    stock = {"items": len(recs), "qty": sum(int(r.get("qty") or 0) for r in recs),
+             "value": round(sum(int(r.get("qty") or 0)
+                                * float(r.get("price") or 0) for r in recs), 2)}
+    return 200, {"ok": True, "today": _profit_sum(today_rows),
+                 "month": _profit_sum(month_rows),
+                 "range": dict(_profit_sum(range_rows), days=days),
+                 "days": days, "thr": thr,
+                 "low": low[:30], "low_count": len(low),
+                 "unpaid": unpaid, "top": top, "stock": stock}, NO_STORE
+
+
+def handle_customers(srv, ip, token, query):
+    """客户列表（含累计消费与应收），按姓名与出售记录对应。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    kw = str((query or {}).get("kw") or "").strip()
+    store = srv.get_store()
+    try:
+        cs = store.list_customers(kw, include_buyers=True)
+        unpaid = store.sales_unpaid()
+    except Exception as e:
+        return 500, {"ok": False, "error": "读取客户失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "customers": cs, "unpaid": unpaid}, NO_STORE
+
+
+def handle_settle(srv, ip, token, payload):
+    """结清应收：把某个买家（不传 buyer 则全部）的挂账标记为已收款。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    buyer = str((payload or {}).get("buyer") or "").strip()[:40]
+    try:
+        n = srv.get_store().settle_unpaid(buyer)
+    except Exception as e:
+        return 500, {"ok": False, "error": "结清失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "settled": n,
+                 "message": ("已结清 %d 笔应收" % n) if n else "没有待收的挂账单"}, NO_STORE
+
+
+def handle_returns(srv, ip, token, query):
+    """退货记录列表（手机「记录 · 退货」页）。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    kw = str((query or {}).get("kw") or "").strip()
+    try:
+        rows = srv.get_store().list_returns(kw=kw)[:PAGE_LIMIT]
+    except Exception as e:
+        return 500, {"ok": False, "error": "读取退货记录失败：%s" % e}, NO_STORE
+    out = []
+    for r in rows:
+        out.append({"id": r.get("id"), "sale_id": r.get("sale_id"),
+                    "code": r.get("code") or "", "brand": r.get("brand") or "",
+                    "model": r.get("model") or "", "qty": int(r.get("qty") or 0),
+                    "refund": _fmt_price(r.get("refund")),
+                    "buyer": r.get("buyer") or "",
+                    "restock": int(r.get("restock") or 0),
+                    "return_date": r.get("return_date") or ""})
+    return 200, {"ok": True, "returns": out}, NO_STORE
+
+
+# ---------------------------------------------------------------- 回收站
+def _deleted_view(r):
+    return {"id": r.get("id"), "code": r.get("code") or "",
+            "brand": r.get("brand") or "", "model": r.get("model") or "",
+            "qty": int(r.get("qty") or 0),
+            "price": _fmt_price(r.get("price")),
+            "deleted_at": r.get("deleted_at") or ""}
+
+
+def handle_trash(srv, ip, token, query):
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    kw = str((query or {}).get("kw") or "").strip().lower()
+    store = srv.get_store()
+    try:
+        rows = store.list_deleted()
+    except Exception as e:
+        return 500, {"ok": False, "error": "读取回收站失败：%s" % e}, NO_STORE
+    if kw:
+        rows = [r for r in rows
+                if any(kw in str(r.get(f) or "").lower()
+                       for f in ("code", "brand", "model", "category"))]
+    return 200, {"ok": True, "count": len(rows),
+                 "items": [_deleted_view(r) for r in rows[:PAGE_LIMIT]]}, NO_STORE
+
+
+def _ids_of(payload):
+    raw = (payload or {}).get("ids")
+    if raw is None:
+        raw = [(payload or {}).get("id")]
+    out = []
+    for v in (raw if isinstance(raw, list) else [raw]):
+        try:
+            i = int(v or 0)
+        except (TypeError, ValueError):
+            continue
+        if i > 0:
+            out.append(i)
+    return out
+
+
+def handle_del_item(srv, ip, token, payload):
+    """删除商品（软删除 → 回收站，可恢复）。"""
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    ids = _ids_of(payload)
+    if not ids:
+        return 400, {"ok": False, "error": "请指定要删除的记录"}, NO_STORE
+    try:
+        n = srv.get_store().delete_ids(ids, soft=True)
+    except Exception as e:
+        return 500, {"ok": False, "error": "删除失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "deleted": n,
+                 "message": "已移入回收站 %d 条，可恢复" % n}, NO_STORE
+
+
+def handle_restore(srv, ip, token, payload):
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    ids = _ids_of(payload)
+    if not ids:
+        return 400, {"ok": False, "error": "请指定要恢复的记录"}, NO_STORE
+    try:
+        n = srv.get_store().restore_ids(ids)
+    except Exception as e:
+        return 500, {"ok": False, "error": "恢复失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "restored": n,
+                 "message": "已恢复 %d 条" % n}, NO_STORE
+
+
+def handle_purge(srv, ip, token, payload):
+    gate = _need_write(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    ids = _ids_of(payload)
+    if not ids:
+        return 400, {"ok": False, "error": "请指定要彻底删除的记录"}, NO_STORE
+    try:
+        n = srv.get_store().purge_ids(ids)
+    except Exception as e:
+        return 500, {"ok": False, "error": "彻底删除失败：%s" % e}, NO_STORE
+    return 200, {"ok": True, "purged": n,
+                 "message": "已彻底删除 %d 条（含照片）" % n}, NO_STORE
+
+
+# ---------------------------------------------------------------- 盘点
+def handle_stocktake(srv, ip, token, query, payload=None):
+    """盘点单：list / detail 只读；new / set / commit / del 需录入授权。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    p = payload or {}
+    op = str(p.get("op") or (query or {}).get("op") or "list")
+    store = srv.get_store()
+    if op == "list":
+        try:
+            return 200, {"ok": True, "list": store.list_stocktakes()}, NO_STORE
+        except Exception as e:
+            return 500, {"ok": False, "error": "读取盘点单失败：%s" % e}, NO_STORE
+    if op == "detail":
+        try:
+            st_id = int(p.get("id") or (query or {}).get("id") or 0)
+        except (TypeError, ValueError):
+            st_id = 0
+        try:
+            d = store.stocktake_detail(st_id)
+        except Exception as e:
+            return 500, {"ok": False, "error": "读取盘点单失败：%s" % e}, NO_STORE
+        if not d:
+            return 404, {"ok": False, "error": "盘点单不存在"}, NO_STORE
+        head = d.get("head") or {}
+        rows = [{"id": r.get("id"), "code": r.get("code") or "",
+                 "brand": r.get("brand") or "", "model": r.get("model") or "",
+                 "shelf": r.get("shelf") or "",
+                 "book": int(r.get("book_qty") or 0),
+                 "real": int(r.get("real_qty") or 0),
+                 "note": r.get("note") or ""} for r in (d.get("rows") or [])]
+        return 200, {"ok": True, "head": {
+            "id": head.get("id"), "no": head.get("no") or "",
+            "name": head.get("name") or "", "status": head.get("status") or "draft",
+            "created_at": head.get("created_at") or "",
+            "done_at": head.get("done_at") or ""}, "rows": rows}, NO_STORE
+
+    wgate = _need_write(srv, ip, token)
+    if wgate:
+        return wgate[0], dict(wgate[1], readonly=True), NO_STORE
+    if op == "new":
+        try:
+            st_id, msg = store.create_stocktake(
+                name=str(p.get("name") or "")[:40],
+                brand=str(p.get("brand") or "")[:40],
+                category=str(p.get("category") or "")[:40],
+                shelf=str(p.get("shelf") or "")[:60],
+                kw=str(p.get("kw") or "")[:60],
+                only_stock=bool(p.get("only_stock", True)))
+        except Exception as e:
+            return 500, {"ok": False, "error": "新建盘点失败：%s" % e}, NO_STORE
+        return (200 if st_id else 400), {
+            "ok": bool(st_id), "id": st_id, "message": msg,
+            "error": None if st_id else msg}, NO_STORE
+    if op == "set":
+        try:
+            row_id = int(p.get("row_id") or 0)
+        except (TypeError, ValueError):
+            row_id = 0
+        if row_id <= 0:
+            return 400, {"ok": False, "error": "缺少明细编号"}, NO_STORE
+        try:
+            ok, msg = store.set_stocktake_qty(row_id, p.get("real_qty"))
+        except Exception as e:
+            return 500, {"ok": False, "error": "保存实盘数失败：%s" % e}, NO_STORE
+        return (200 if ok else 400), {"ok": ok, "message": msg or "已保存",
+                                      "error": None if ok else msg}, NO_STORE
+    if op == "commit":
+        try:
+            st_id = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            st_id = 0
+        try:
+            ok, msg = store.commit_stocktake(st_id)
+        except Exception as e:
+            return 500, {"ok": False, "error": "提交盘点失败：%s" % e}, NO_STORE
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": None if ok else msg}, NO_STORE
+    if op == "del":
+        try:
+            st_id = int(p.get("id") or 0)
+        except (TypeError, ValueError):
+            st_id = 0
+        n = store.delete_stocktake(st_id)
+        if n == -1:
+            return 400, {"ok": False, "error": "已提交的盘点单不能删除"}, NO_STORE
+        if n == 0:
+            return 404, {"ok": False, "error": "盘点单不存在"}, NO_STORE
+        return 200, {"ok": True, "message": "盘点单已删除"}, NO_STORE
+    return 400, {"ok": False, "error": "不支持的操作"}, NO_STORE
 
 
 def handle_request_write(srv, ip, token):
@@ -697,35 +1076,110 @@ header { background:var(--acc); color:#fff; padding:14px 16px 12px;
 header h1 { font-size:18px; display:inline; }
 header .wh { font-size:12px; opacity:.85; margin-left:8px; }
 #badge { float:right; font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(255,255,255,.25); }
-nav { display:flex; background:var(--card); border-bottom:1px solid var(--line);
-      position:sticky; top:0; z-index:5; }
-nav button { flex:1; border:0; background:none; padding:11px 0; font-size:14px; color:var(--mut); }
-nav button.on { color:var(--acc); font-weight:600; box-shadow:inset 0 -2px 0 var(--acc); }
-main { padding:12px 12px 40px; }
+nav { display:flex; background:var(--card); border-top:1px solid var(--line);
+      position:fixed; left:0; right:0; bottom:0; z-index:30;
+      padding-bottom:env(safe-area-inset-bottom); }
+nav button { flex:1; border:0; background:none; padding:7px 0 6px; font-size:11px;
+             color:var(--mut); display:flex; flex-direction:column;
+             align-items:center; gap:2px; }
+nav button i { font-style:normal; font-size:17px; line-height:1; }
+nav button.on { color:var(--acc); font-weight:600; }
+main { padding:12px 12px 104px; }
 .srch { display:flex; gap:8px; margin-bottom:10px; }
-.srch input { flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 12px; font-size:15px; background:var(--card); }
+.srch input { flex:1; border:1px solid var(--line); border-radius:10px; padding:9px 12px;
+              font-size:15px; background:var(--card); }
 .srch button { border:0; border-radius:10px; background:var(--acc); color:#fff; padding:0 18px; font-size:15px; }
-.tblwrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:12px; }
-table { border-collapse:collapse; min-width:720px; width:100%; font-size:13px; }
-th, td { border-bottom:1px solid var(--line); padding:9px 10px; text-align:left; white-space:nowrap; }
-th { background:#eef2f8; color:#5a6478; font-weight:600; position:sticky; top:0; }
-tr:last-child td { border-bottom:0; }
-tbody tr:active { background:#eef4ff; }
-td .sold { color:#fff; background:var(--warn); font-size:10px; border-radius:8px; padding:1px 6px; }
-td.num { text-align:right; }
-td.price { color:var(--bad); font-weight:600; }
-.tblhint { color:var(--mut); font-size:12px; margin:6px 2px 0; }
-.empty { text-align:center; color:var(--mut); padding:40px 0; }
-.notice { background:#fff7e6; border:1px solid #ffe0a3; color:#8a5a00; font-size:13px;
-          border-radius:10px; padding:10px 12px; margin-bottom:10px; }
-form.mform label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
-form.mform input { width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:15px; background:var(--card); }
-form.mform .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
-form.mform .go { width:100%; border:0; border-radius:12px; background:var(--acc); color:#fff; padding:12px; font-size:16px; margin-top:16px; }
-form.mform .go:disabled { background:#a9c4f2; }
-.card-title { font-weight:600; font-size:15px; margin:4px 2px 10px; }
-.link { color:var(--acc); background:none; border:0; font-size:13px; padding:6px 0; text-decoration:underline; }
-#toast { position:fixed; left:50%; bottom:60px; transform:translateX(-50%); background:rgba(28,35,51,.92);
+.chips { display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; margin-bottom:10px; }
+.chip { flex:0 0 auto; border:1px solid var(--line); background:var(--card); color:#5a6478;
+        border-radius:16px; padding:6px 14px; font-size:13px; }
+.chip.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+.hintline { color:var(--mut); font-size:12px; margin:2px 2px 8px; }
+.row { display:flex; align-items:center; gap:10px; background:var(--card);
+       border:1px solid var(--line); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
+.row:active { background:#eef4ff; }
+.rowmain { flex:1; min-width:0; }
+.rowt { font-size:14px; font-weight:600; }
+.rows { font-size:12px; color:var(--mut); margin-top:2px; overflow:hidden;
+        text-overflow:ellipsis; white-space:nowrap; }
+.rowright { text-align:right; }
+.qty { font-size:15px; font-weight:600; }
+.money { font-size:12px; color:var(--bad); }
+.tag { display:inline-block; font-size:10px; border-radius:8px; padding:1px 6px; margin-left:5px;
+       background:#eef2f8; color:#5a6478; vertical-align:middle; }
+.tag.warn { background:#fff3dc; color:var(--warn); }
+.tag.bad { background:#ffeceb; color:var(--bad); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+        padding:14px; margin-bottom:12px; }
+.cardh { font-size:14px; font-weight:600; margin-bottom:8px; }
+.cardh b { float:right; }
+.mut { color:var(--mut); font-weight:400; font-size:12px; }
+.line { display:flex; align-items:center; justify-content:space-between; gap:10px;
+        padding:9px 0; border-bottom:1px solid #f0f3f8; font-size:14px; }
+.line:last-child { border-bottom:0; }
+.line.tap:active { background:#f6f9ff; }
+.line .acts { display:flex; gap:8px; }
+.mini { border:1px solid var(--line); background:var(--card); border-radius:9px;
+        padding:6px 10px; font-size:12px; color:var(--acc); }
+.mini.danger { color:var(--bad); border-color:#ffd9d6; }
+.kpi { background:var(--card); border:1px solid var(--line); border-radius:14px;
+       padding:16px 14px; margin-bottom:12px; }
+.kpil { font-size:12px; color:var(--mut); }
+.kpiv { font-size:28px; font-weight:700; letter-spacing:.5px; }
+.kpis { font-size:12px; color:var(--mut); margin-top:2px; }
+.kpi2 { display:flex; gap:10px; margin-top:14px; border-top:1px dashed var(--line); padding-top:12px; }
+.kpi2 > div { flex:1; }
+.kpi2 b { display:block; font-size:17px; margin-top:2px; }
+.ok { color:var(--ok); }
+.bad { color:var(--bad); }
+.warn { color:var(--warn); }
+.seg { display:flex; background:#e9eef7; border-radius:10px; padding:3px; margin-bottom:12px; }
+.seg button { flex:1; border:0; background:none; border-radius:8px; padding:8px 0;
+              font-size:13px; color:#5a6478; }
+.seg button.on { background:var(--card); color:var(--acc); font-weight:600; }
+.rowlink { display:flex; align-items:center; justify-content:space-between;
+           padding:12px 0; border-bottom:1px solid #f0f3f8; font-size:15px; }
+.rowlink:last-child { border-bottom:0; }
+.rowlink:active { background:#f6f9ff; }
+.foot { text-align:center; color:var(--mut); font-size:11px; padding:10px 0 0; }
+.empty { text-align:center; color:var(--mut); padding:36px 0; font-size:13px; }
+.empty.small { padding:20px 0; }
+.hide { display:none !important; }
+#mask { position:fixed; inset:0; background:rgba(18,24,38,.42); z-index:60;
+        display:flex; align-items:flex-end; }
+#sheet { width:100%; max-height:88vh; overflow-y:auto; background:var(--card);
+         border-radius:18px 18px 0 0; padding:14px 16px calc(20px + env(safe-area-inset-bottom)); }
+#sheet h3 { font-size:15px; margin-bottom:8px; }
+#shBack, #shClose { border:0; background:#eef2f8; color:#5a6478; border-radius:10px;
+                    padding:5px 11px; font-size:13px; }
+#shClose { float:right; }
+.sum { background:#f7f9fd; border-radius:10px; padding:10px 12px; margin-bottom:12px; }
+.sumt { font-size:15px; font-weight:600; }
+.lbl { display:block; font-size:12px; color:var(--mut); margin:12px 0 5px; }
+.inp { width:100%; border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+       font-size:15px; background:var(--card); }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
+.go { width:100%; border:0; border-radius:12px; background:var(--acc); color:#fff;
+      padding:13px; font-size:16px; margin-top:16px; }
+.go:disabled { background:#a9c4f2; }
+.go.small { padding:10px; font-size:14px; margin-top:12px; }
+.btns { display:flex; gap:10px; margin-top:4px; }
+.btns .btn { flex:1; border:1px solid var(--line); background:var(--card); color:var(--txt);
+             border-radius:12px; padding:12px 0; font-size:15px; }
+.btns .btn.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+.btns .btn.danger { color:var(--bad); border-color:#ffd9d6; }
+.chk { display:flex; align-items:center; gap:8px; font-size:14px; margin-top:14px; }
+.chk input { width:18px; height:18px; }
+.stlist { max-height:52vh; overflow-y:auto; border:1px solid var(--line); border-radius:10px; }
+.strow { display:flex; align-items:center; gap:10px; padding:9px 11px; border-bottom:1px solid #f0f3f8; }
+.strow:last-child { border-bottom:0; }
+.stmain { flex:1; min-width:0; }
+.stinp { width:82px; border:1px solid var(--line); border-radius:9px; padding:7px 9px;
+         font-size:15px; text-align:center; }
+.stinp.diff { border-color:var(--warn); background:#fff8ec; }
+#fab { position:fixed; right:18px; bottom:calc(86px + env(safe-area-inset-bottom));
+       width:54px; height:54px; border-radius:27px; border:0; background:var(--acc);
+       color:#fff; font-size:26px; line-height:1; box-shadow:0 6px 16px rgba(31,111,235,.35); z-index:20; }
+#toast { position:fixed; left:50%; bottom:100px; transform:translateX(-50%); background:rgba(28,35,51,.92);
          color:#fff; padding:10px 18px; border-radius:20px; font-size:14px; max-width:86%; display:none; z-index:99; }
 #login { max-width:420px; margin:16vh auto 0; padding:0 24px; text-align:center; }
 #login .logo { font-size:44px; }
@@ -736,8 +1190,6 @@ form.mform .go:disabled { background:#a9c4f2; }
 #login button { width:100%; border:0; border-radius:12px; background:var(--acc); color:#fff;
                 padding:13px; font-size:16px; margin-top:14px; }
 #login .err { color:var(--bad); font-size:13px; min-height:20px; margin-top:10px; }
-footer { text-align:center; color:var(--mut); font-size:11px; padding:20px 0 max(20px, env(safe-area-inset-bottom)); }
-footer a { color:var(--mut); }
 </style>
 </head>
 <body>
@@ -754,78 +1206,82 @@ footer a { color:var(--mut); }
 <div id="app" style="display:none">
 <header><h1>📦 仓管家</h1><span class="wh" id="wh"></span><span id="badge"></span></header>
 <nav>
-  <button data-p="items" class="on">库存</button>
-  <button data-p="entry">录入</button>
-  <button data-p="sell">出售</button>
-  <button data-p="sales">记录</button>
+  <button data-p="items" class="on"><i>▦</i><span>库存</span></button>
+  <button data-p="rec"><i>☰</i><span>记录</span></button>
+  <button data-p="stat"><i>◔</i><span>统计</span></button>
+  <button data-p="me"><i>⚙</i><span>我的</span></button>
 </nav>
 <main>
   <div id="p_items">
     <div class="srch"><input id="kwItems" placeholder="搜编号 / 品牌 / 型号 / 货架"><button id="goItems">搜索</button></div>
-    <div class="tblwrap"><table>
-      <thead><tr><th>编号</th><th>品牌</th><th>型号</th><th>数量</th><th>价格</th><th>货架</th></tr></thead>
-      <tbody id="listItems"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
-    </table></div>
-    <div class="tblhint">点一行可修改该商品的数量 / 价格 / 货架等；只读模式只能看。</div>
+    <div class="chips" id="chips">
+      <button class="chip on" data-f="all">全部</button>
+      <button class="chip" data-f="on">在售</button>
+      <button class="chip" data-f="low">低库存</button>
+      <button class="chip" data-f="sold">售完</button>
+    </div>
+    <div class="hintline" id="itemsHint"></div>
+    <div id="listItems"><div class="empty">加载中…</div></div>
   </div>
-  <div id="p_entry" style="display:none">
-    <div class="notice" id="entryNotice" style="display:none"></div>
-    <div class="card-title" id="entryTitle">＋ 新增入库</div>
-    <form class="mform" id="entryForm" onsubmit="return false">
-      <input type="hidden" id="eId" value="">
-      <div class="grid2">
-        <div><label>品牌</label><input id="eBrand" placeholder="如 ABB"></div>
-        <div><label>品类</label><input id="eCategory" placeholder="如 断路器"></div>
-        <div><label>型号</label><input id="eModel" placeholder=""></div>
-        <div><label>成色</label><input id="eCondition" placeholder="如 全新 / 99新"></div>
-        <div><label>单价（元）</label><input id="ePrice" type="number" inputmode="decimal" placeholder="0.00"></div>
-        <div><label>数量</label><input id="eQty" type="number" inputmode="numeric" value="1" min="0"></div>
-      </div>
-      <label>货架</label><input id="eShelf" placeholder="如 6排A-3">
-      <label>备注</label><input id="eRemark" placeholder="">
-      <button class="go" id="btnSaveEntry">保存入库</button>
-      <button class="link" id="btnResetEntry" type="button">清空，重新新增</button>
-      <button class="link" id="btnAskEntry" type="button" style="display:none">主机未授权录入？点此申请权限</button>
-    </form>
-  </div>
-  <div id="p_sell" style="display:none">
-    <div class="notice" id="sellNotice" style="display:none"></div>
-    <form class="mform" id="sellForm" onsubmit="return false">
-      <label>商品编号（如 WL-00001）</label>
-      <input id="sCode" placeholder="WL-00001">
-      <label>数量</label>
-      <input id="sQty" type="number" inputmode="numeric" value="1" min="1">
-      <label>单价（元）</label>
-      <input id="sPrice" type="number" inputmode="decimal" placeholder="0.00">
-      <label>买家（可选）</label>
-      <input id="sBuyer" placeholder="">
-      <label>收货地址（可选）</label>
-      <input id="sAddr" placeholder="">
-      <label>备注（可选）</label>
-      <input id="sRemark" placeholder="">
-      <button class="go" id="btnSell">登记出售</button>
-      <button class="link" id="btnAsk" type="button" style="display:none">主机未授权录入？点此申请权限</button>
-    </form>
-  </div>
-  <div id="p_sales" style="display:none">
+
+  <div id="p_rec" style="display:none">
+    <div class="seg" id="recSeg">
+      <button class="on" data-r="sales">出售记录</button>
+      <button data-r="returns">退货记录</button>
+    </div>
     <div class="srch"><input id="kwSales" placeholder="搜编号 / 买家 / 备注"><button id="goSales">搜索</button></div>
-    <div class="tblwrap"><table>
-      <thead><tr><th>日期</th><th>编号</th><th>品牌</th><th>型号</th><th>数量</th><th>合计</th><th>买家</th><th>类型</th></tr></thead>
-      <tbody id="listSales"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
-    </table></div>
+    <div id="listSales"></div>
+  </div>
+
+  <div id="p_stat" style="display:none">
+    <div id="statWrap"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div id="p_me" style="display:none">
+    <div class="card" id="permCard"></div>
+    <div class="card">
+      <div class="rowlink" id="btnStocktake"><div>盘点</div><div class="mut">盘点单 / 新建盘点 ›</div></div>
+      <div class="rowlink" id="btnTrash"><div>回收站</div><div class="mut" id="trashCount">›</div></div>
+    </div>
+    <div class="card">
+      <div class="rowlink" id="btnLogout"><div>退出登录</div><div class="mut">›</div></div>
+    </div>
+    <div class="foot">仓管家手机端 · 数据实时保存在电脑</div>
   </div>
 </main>
-<footer><a href="javascript:logout()">退出登录</a> · 仓管家手机端</footer>
+<button id="fab">＋</button>
+</div>
+
+<div id="mask" class="hide">
+  <div id="sheet">
+    <button id="shClose">关闭</button>
+    <button id="shBack">返回</button>
+    <h3 id="shTitle"></h3>
+    <div id="shBody"></div>
+  </div>
 </div>
 <div id="toast"></div>
 
 <script>
 var $ = function(id){ return document.getElementById(id); };
 var CAN_WRITE = false;
+var ITEMS = [], FILTER = "all";
+var SALES = [], RETURNS = [], STAT = null, CUST = [], STAT_RANGE = "today";
+var REC_TAB = "sales";
+var shStack = [];
 
 function toast(msg, ms){
   var t = $("toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(t._h); t._h = setTimeout(function(){ t.style.display = "none"; }, ms || 2200);
+}
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; });
+}
+function fmt(v){
+  var n = Number(v || 0);
+  if (isNaN(n)) n = 0;
+  return n.toFixed(2);
 }
 function api(path, opts, cb){
   opts = opts || {}; opts.credentials = "same-origin";
@@ -836,10 +1292,28 @@ function api(path, opts, cb){
   }).then(function(b){ cb(b); })
     .catch(function(e){ if (e.message !== "need_login") toast("网络错误，请确认与电脑连着同一 WiFi"); });
 }
-function esc(s){
-  return String(s == null ? "" : s).replace(/[&<>]/g, function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; });
+function post(path, body, cb){
+  api(path, {method:"POST", body: JSON.stringify(body)}, cb);
 }
+/* ---- 弹层 ---- */
+function sheet(title, render){
+  shStack.push({t:title, r:render});
+  paintSheet();
+}
+function paintSheet(){
+  var s = shStack[shStack.length - 1];
+  if (!s) { $("mask").className = "hide"; $("shBody").innerHTML = ""; return; }
+  $("shTitle").textContent = s.t;
+  $("shBack").style.display = shStack.length > 1 ? "inline-block" : "none";
+  $("mask").className = "";
+  $("shBody").innerHTML = "";
+  s.r($("shBody"));
+}
+function sheetBack(){ shStack.pop(); paintSheet(); }
+function sheetClose(){ shStack = []; paintSheet(); }
+$("shClose").onclick = sheetClose;
+$("shBack").onclick = sheetBack;
+/* ---- 登录 ---- */
 function showLogin(){
   $("app").style.display = "none"; $("login").style.display = "block";
   $("code").value = ""; $("loginErr").textContent = "";
@@ -855,17 +1329,9 @@ function refreshWho(){
     CAN_WRITE = !!b.can_write;
     $("badge").textContent = CAN_WRITE ? "可录入" : "只读";
     $("badge").style.background = CAN_WRITE ? "rgba(24,160,88,.85)" : "rgba(255,255,255,.25)";
-    $("sellNotice").style.display = CAN_WRITE ? "none" : "block";
-    $("sellNotice").textContent = "当前为只读：可查看库存和记录；登记出售需要主机在「局域网共享」里允许录入。";
-    $("entryNotice").style.display = CAN_WRITE ? "none" : "block";
-    $("entryNotice").textContent = "当前为只读：不能新增或修改数据；点下面「申请权限」由主机确认。";
-    $("btnAsk").style.display = CAN_WRITE ? "none" : "inline";
-    $("btnAskEntry").style.display = CAN_WRITE ? "none" : "inline";
-    $("btnSell").disabled = !CAN_WRITE;
-    $("btnSaveEntry").disabled = !CAN_WRITE;
+    renderPerm();
   });
 }
-/* ---- 登录 ---- */
 $("btnLogin").onclick = function(){
   var code = $("code").value.trim();
   if (!code) { $("loginErr").textContent = "请输入连接码"; return; }
@@ -876,8 +1342,7 @@ $("btnLogin").onclick = function(){
   .then(function(r){ return r.json(); })
   .then(function(b){
     $("btnLogin").disabled = false;
-    if (b.ok) { showApp(); }
-    else { $("loginErr").textContent = b.error || "登录失败"; }
+    if (b.ok) { showApp(); } else { $("loginErr").textContent = b.error || "登录失败"; }
   })
   .catch(function(){ $("btnLogin").disabled = false; $("loginErr").textContent = "网络错误，请确认与电脑连着同一 WiFi"; });
 };
@@ -886,150 +1351,530 @@ function logout(){
   api("/m/logout", {method:"POST"}, function(){ showLogin(); });
 }
 /* ---- 页签 ---- */
-var pages = ["items", "entry", "sell", "sales"];
+var pages = ["items", "rec", "stat", "me"];
 function goPage(p){
-  pages.forEach(function(x){
-    $("p_" + x).style.display = (x === p) ? "" : "none";
-  });
+  pages.forEach(function(x){ $("p_" + x).style.display = (x === p) ? "" : "none"; });
   var bs = document.querySelectorAll("nav button");
-  for (var i = 0; i < bs.length; i++) bs[i].className = (bs[i].getAttribute("data-p") === p) ? "on" : "";
+  for (var i = 0; i < bs.length; i++) {
+    bs[i].className = (bs[i].getAttribute("data-p") === p) ? "on" : "";
+  }
+  $("fab").style.display = (p === "items") ? "" : "none";
   if (p === "items") loadItems();
-  if (p === "sales") loadSales();
-  if (p === "sell" || p === "entry") refreshWho();
+  if (p === "rec") { loadRec(); }
+  if (p === "stat") loadStats();
+  if (p === "me") { renderPerm(); refreshTrashCount(); }
 }
 (function(){
   var bs = document.querySelectorAll("nav button");
   for (var i = 0; i < bs.length; i++) bs[i].onclick = function(){ goPage(this.getAttribute("data-p")); };
 })();
-/* ---- 库存表格 ---- */
+/* ---- 库存 ---- */
 function loadItems(){
-  $("listItems").innerHTML = '<tr><td colspan="6" class="empty">加载中…</td></tr>';
+  $("listItems").innerHTML = '<div class="empty">加载中…</div>';
   api("/m/api/items?kw=" + encodeURIComponent($("kwItems").value.trim()), {}, function(b){
-    if (!b.ok) { $("listItems").innerHTML = '<tr><td colspan="6" class="empty">' + esc(b.error) + "</td></tr>"; return; }
-    if (!b.items.length) { $("listItems").innerHTML = '<tr><td colspan="6" class="empty">没有找到匹配的商品</td></tr>'; return; }
-    var h = "";
-    b.items.forEach(function(r){
-      h += '<tr data-id="' + esc(r.id) + '" data-code="' + esc(r.code) + '">'
-         + "<td>" + esc(r.code) + (r.sold_out ? ' <span class="sold">售完</span>' : "") + "</td>"
-         + "<td>" + esc(r.brand || "-") + "</td>"
-         + "<td>" + esc(r.model || "-") + "</td>"
-         + '<td class="num">' + esc(r.qty) + "</td>"
-         + '<td class="num price">' + esc(r.price || "0") + "</td>"
-         + "<td>" + esc(r.shelf || "-") + "</td></tr>";
-    });
-    $("listItems").innerHTML = h;
-    var rows = document.querySelectorAll("#listItems tr");
-    for (var i = 0; i < rows.length; i++) {
-      rows[i].onclick = function(){ openEdit(this.getAttribute("data-id")); };
-    }
+    if (!b.ok) { $("listItems").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
+    ITEMS = b.items || [];
+    paintItems();
   });
+}
+function itemRow(r, i){
+  var tags = "";
+  if (r.sold_out) tags += '<span class="tag warn">售完</span>';
+  if (r.low) tags += '<span class="tag bad">低库存</span>';
+  if (r.ph) tags += '<span class="tag">📷</span>';
+  return '<div class="row" data-i="' + i + '">'
+    + '<div class="rowmain"><div class="rowt">' + esc(r.code) + tags + "</div>"
+    + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</div>"
+    + '<div class="rows">' + esc(r.shelf || "未填货架") + "</div></div>"
+    + '<div class="rowright"><div class="qty">×' + esc(r.qty) + "</div>"
+    + '<div class="money">¥' + esc(r.price || "0") + "</div></div></div>";
+}
+function paintItems(){
+  var arr = [], i;
+  for (i = 0; i < ITEMS.length; i++) {
+    var r = ITEMS[i];
+    if (FILTER === "on" && r.sold_out) continue;
+    if (FILTER === "low" && !r.low) continue;
+    if (FILTER === "sold" && !r.sold_out) continue;
+    arr.push(r);
+  }
+  var lowN = 0, onN = 0;
+  for (i = 0; i < ITEMS.length; i++) { if (ITEMS[i].low) lowN++; if (!ITEMS[i].sold_out) onN++; }
+  $("itemsHint").textContent = "共 " + ITEMS.length + " 条 · 在售 " + onN + " · 低库存 " + lowN;
+  if (!arr.length) { $("listItems").innerHTML = '<div class="empty">没有符合条件的商品</div>'; return; }
+  var h = "";
+  for (i = 0; i < arr.length; i++) h += itemRow(arr[i], i);
+  $("listItems").innerHTML = h;
+  var rows = document.querySelectorAll("#listItems .row");
+  for (i = 0; i < rows.length; i++) {
+    rows[i].onclick = function(){
+      itemActions(arr[Number(this.getAttribute("data-i"))]);
+    };
+  }
 }
 $("goItems").onclick = loadItems;
 $("kwItems").addEventListener("keydown", function(e){ if (e.key === "Enter") loadItems(); });
-/* ---- 编辑 / 新增 ---- */
-function openEdit(id){
-  api("/m/api/items?kw=", {}, function(b){
-    if (!b.ok) { toast(b.error || "读取失败"); return; }
-    var rec = null;
-    for (var i = 0; i < b.items.length; i++) { if (String(b.items[i].id) === String(id)) { rec = b.items[i]; break; } }
-    if (!rec) { toast("记录不存在"); return; }
-    $("eId").value = rec.id;
-    $("entryTitle").textContent = "修改 " + rec.code + "（编号不可改）";
-    $("eBrand").value = rec.brand || "";
-    $("eCategory").value = rec.category || "";
-    $("eModel").value = rec.model || "";
-    $("eCondition").value = rec.condition || "";
-    $("ePrice").value = rec.price || "";
-    $("eQty").value = rec.qty;
-    $("eShelf").value = rec.shelf || "";
-    $("eRemark").value = rec.remark || "";
-    $("btnSaveEntry").textContent = "保存修改";
-    goPage("entry");
+(function(){
+  var cs = document.querySelectorAll("#chips .chip");
+  for (var i = 0; i < cs.length; i++) cs[i].onclick = function(){
+    FILTER = this.getAttribute("data-f");
+    for (var j = 0; j < cs.length; j++) cs[j].className = "chip" + (cs[j] === this ? " on" : "");
+    paintItems();
+  };
+})();
+function itemActions(r){
+  var h = '<div class="sum"><div class="sumt">' + esc(r.code) + "</div>"
+    + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</div>"
+    + '<div class="rows">库存 ' + esc(r.qty) + " 件 · 单价 ¥" + esc(r.price)
+    + (r.shelf ? " · " + esc(r.shelf) : "") + "</div></div>"
+    + '<div class="btns"><button class="btn primary" id="actSell">出售</button>'
+    + '<button class="btn" id="actEdit">修改</button>'
+    + '<button class="btn danger" id="actDel">删除</button></div>';
+  sheet("商品 " + r.code, function(box){
+    box.innerHTML = h;
+    $("actSell").onclick = function(){
+      if (!CAN_WRITE) { toast("只读模式：请先到「我的」申请录入权限"); return; }
+      sellSheet(r);
+    };
+    $("actEdit").onclick = function(){ entrySheet(r); };
+    $("actDel").onclick = function(){ delItem(r); };
   });
 }
-function resetEntry(){
-  $("eId").value = "";
-  $("entryTitle").textContent = "＋ 新增入库";
-  $("eBrand").value = ""; $("eCategory").value = ""; $("eModel").value = "";
-  $("eCondition").value = ""; $("ePrice").value = ""; $("eQty").value = "1";
-  $("eShelf").value = ""; $("eRemark").value = "";
-  $("btnSaveEntry").textContent = "保存入库";
+function sellSheet(r){
+  var h = '<div class="sum"><div class="sumt">' + esc(r.code) + "</div>"
+    + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" "))
+    + " · 库存 " + esc(r.qty) + "</div></div>"
+    + '<label class="lbl">数量</label><input class="inp" id="slQty" type="number" inputmode="numeric" min="1" max="'
+    + esc(r.qty) + '" value="1">'
+    + '<label class="lbl">单价（元）</label><input class="inp" id="slPrice" type="number" inputmode="decimal" value="'
+    + esc(r.price) + '">'
+    + '<label class="lbl">买家（可选）</label><input class="inp" id="slBuyer" placeholder="客户名">'
+    + '<label class="lbl">收款</label><div class="chips" id="slPaid">'
+    + '<button class="chip on" data-v="1">已收款</button>'
+    + '<button class="chip" data-v="0">挂账（计入应收）</button></div>'
+    + '<label class="lbl">备注（可选）</label><input class="inp" id="slRemark">'
+    + '<button class="go" id="slGo">确认出售</button>';
+  sheet("出售", function(box){
+    box.innerHTML = h;
+    var paid = "1";
+    var bs = document.querySelectorAll("#slPaid .chip");
+    for (var i = 0; i < bs.length; i++) bs[i].onclick = function(){
+      paid = this.getAttribute("data-v");
+      for (var j = 0; j < bs.length; j++) bs[j].className = "chip" + (bs[j] === this ? " on" : "");
+    };
+    $("slGo").onclick = function(){
+      $("slGo").disabled = true;
+      post("/m/api/sell", {code: r.code, qty: $("slQty").value, price: $("slPrice").value,
+        buyer: $("slBuyer").value.trim(), remark: $("slRemark").value.trim(), paid: paid},
+        function(b){
+          $("slGo").disabled = false;
+          if (!b.ok) { toast(b.error || "登记失败", 3000); return; }
+          toast(b.message || "已登记", 2800);
+          sheetClose(); loadItems();
+        });
+    };
+  });
 }
-$("btnResetEntry").onclick = resetEntry;
-$("btnSaveEntry").onclick = function(){
-  if (!CAN_WRITE) { toast("只读模式：请先向主机申请录入权限"); return; }
-  var editing = $("eId").value !== "";
-  var body = {brand: $("eBrand").value.trim(), category: $("eCategory").value.trim(),
-              model: $("eModel").value.trim(), condition: $("eCondition").value.trim(),
-              price: $("ePrice").value, qty: $("eQty").value,
-              shelf: $("eShelf").value.trim(), remark: $("eRemark").value.trim()};
-  $("btnSaveEntry").disabled = true;
-  if (editing) {
-    body.id = $("eId").value;
-    api("/m/api/update_all", {method:"POST", body: JSON.stringify(body)}, function(b){
-      $("btnSaveEntry").disabled = false;
-      if (b.ok) { toast(b.message || "已保存", 2600); resetEntry(); loadItems(); goPage("items"); }
-      else toast(b.error || "保存失败", 3000);
-    });
-  } else {
-    api("/m/api/add", {method:"POST", body: JSON.stringify(body)}, function(b){
-      $("btnSaveEntry").disabled = false;
-      if (b.ok) { toast(b.message || "已入库", 2600); resetEntry(); }
-      else toast(b.error || "保存失败", 3000);
-    });
+function entrySheet(r){
+  var editing = !!r, v = r || {};
+  var h = '<label class="lbl">品牌</label><input class="inp" id="edBrand" value="' + esc(v.brand || "") + '">'
+    + '<label class="lbl">品类</label><input class="inp" id="edCategory" value="' + esc(v.category || "") + '">'
+    + '<label class="lbl">型号</label><input class="inp" id="edModel" value="' + esc(v.model || "") + '">'
+    + '<label class="lbl">成色</label><input class="inp" id="edCondition" value="' + esc(v.condition || "") + '">'
+    + '<div class="grid2"><div><label class="lbl">单价（元）</label><input class="inp" id="edPrice" type="number" inputmode="decimal" value="'
+    + esc(v.price || "") + '"></div><div><label class="lbl">数量</label><input class="inp" id="edQty" type="number" inputmode="numeric" min="0" value="'
+    + esc(v.qty == null ? 1 : v.qty) + '"></div></div>'
+    + '<label class="lbl">货架</label><input class="inp" id="edShelf" value="' + esc(v.shelf || "") + '">'
+    + '<label class="lbl">备注</label><input class="inp" id="edRemark" value="' + esc(v.remark || "") + '">'
+    + '<button class="go" id="edGo">' + (editing ? "保存修改" : "保存入库") + "</button>";
+  sheet(editing ? "修改 " + r.code : "新增入库", function(box){
+    box.innerHTML = h;
+    $("edGo").onclick = function(){
+      var body = {brand: $("edBrand").value.trim(), category: $("edCategory").value.trim(),
+                  model: $("edModel").value.trim(), condition: $("edCondition").value.trim(),
+                  price: $("edPrice").value, qty: $("edQty").value,
+                  shelf: $("edShelf").value.trim(), remark: $("edRemark").value.trim()};
+      if (!CAN_WRITE) { toast("只读模式：请先向电脑申请录入权限"); return; }
+      $("edGo").disabled = true;
+      if (editing) {
+        body.id = r.id;
+        post("/m/api/update_all", body, function(b){
+          $("edGo").disabled = false;
+          if (!b.ok) { toast(b.error || "保存失败", 3000); return; }
+          toast(b.message || "已保存", 2400); sheetClose(); loadItems();
+        });
+      } else {
+        post("/m/api/add", body, function(b){
+          $("edGo").disabled = false;
+          if (!b.ok) { toast(b.error || "保存失败", 3000); return; }
+          toast(b.message || "已入库", 2600); sheetClose(); loadItems();
+        });
+      }
+    };
+  });
+}
+$("fab").onclick = function(){
+  if (!CAN_WRITE) { toast("只读模式：请先到「我的」申请录入权限"); return; }
+  entrySheet(null);
+};
+function delItem(r){
+  if (!CAN_WRITE) { toast("只读模式，不能删除"); return; }
+  if (!confirm("把 " + r.code + " 移入回收站？之后可以恢复。")) return;
+  post("/m/api/del", {id: r.id}, function(b){
+    if (!b.ok) { toast(b.error || "删除失败", 3000); return; }
+    toast(b.message || "已移入回收站"); sheetClose(); loadItems();
+  });
+}
+/* ---- 记录 ---- */
+function loadRec(){
+  if (REC_TAB === "sales") loadSales(); else loadReturns();
+}
+function paintSales(){
+  if (!SALES.length) { $("listSales").innerHTML = '<div class="empty">暂无出售记录</div>'; return; }
+  var h = "";
+  for (var i = 0; i < SALES.length; i++) {
+    var r = SALES[i], tags = "";
+    if (!r.paid) tags += '<span class="tag bad">挂账</span>';
+    if (r.returned) tags += '<span class="tag warn">已退' + r.returned + "</span>";
+    h += '<div class="row" data-i="' + i + '"><div class="rowmain">'
+      + '<div class="rowt">' + esc(r.code) + tags + "</div>"
+      + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</div>"
+      + '<div class="rows">' + esc(r.sale_date || "-") + " · " + esc(r.buyer || "未填买家")
+      + " · " + esc(r.out_type || "销售") + "</div></div>"
+      + '<div class="rowright"><div class="qty">×' + esc(r.qty) + "</div>"
+      + '<div class="money">¥' + esc(r.total) + "</div></div></div>";
   }
-};
-$("btnAskEntry").onclick = function(){
-  api("/m/api/request_write", {method:"POST"}, function(b){
-    if (b.ok) { toast(b.already ? "已有录入权限" : "已向主机发送申请，请主机在电脑上确认", 3000); refreshWho(); }
-    else toast(b.error || "申请失败", 3000);
-  });
-};
-/* ---- 出售记录表格 ---- */
+  $("listSales").innerHTML = h;
+  var rows = document.querySelectorAll("#listSales .row");
+  for (var j = 0; j < rows.length; j++) rows[j].onclick = function(){
+    saleActions(SALES[Number(this.getAttribute("data-i"))]);
+  };
+}
 function loadSales(){
-  $("listSales").innerHTML = '<tr><td colspan="8" class="empty">加载中…</td></tr>';
+  $("listSales").innerHTML = '<div class="empty">加载中…</div>';
   api("/m/api/sales?kw=" + encodeURIComponent($("kwSales").value.trim()), {}, function(b){
-    if (!b.ok) { $("listSales").innerHTML = '<tr><td colspan="8" class="empty">' + esc(b.error) + "</td></tr>"; return; }
-    if (!b.sales.length) { $("listSales").innerHTML = '<tr><td colspan="8" class="empty">暂无出售记录</td></tr>'; return; }
-    var h = "";
-    b.sales.forEach(function(r){
-      h += "<tr><td>" + esc(r.sale_date || "-") + "</td>"
-         + "<td>" + esc(r.code) + "</td>"
-         + "<td>" + esc(r.brand || "-") + "</td>"
-         + "<td>" + esc(r.model || "-") + "</td>"
-         + '<td class="num">' + esc(r.qty) + "</td>"
-         + '<td class="num price">' + esc(r.total || "0") + "</td>"
-         + "<td>" + esc(r.buyer || "-") + "</td>"
-         + "<td>" + esc(r.out_type || "销售") + "</td></tr>";
-    });
-    $("listSales").innerHTML = h;
+    if (!b.ok) { $("listSales").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
+    SALES = b.sales || [];
+    paintSales();
   });
 }
-$("goSales").onclick = loadSales;
-$("kwSales").addEventListener("keydown", function(e){ if (e.key === "Enter") loadSales(); });
-/* ---- 登记出售 ---- */
-$("btnSell").onclick = function(){
-  if (!CAN_WRITE) { toast("只读模式：请先向主机申请录入权限"); return; }
-  var code = $("sCode").value.trim();
-  if (!code) { toast("请填写商品编号"); return; }
-  $("btnSell").disabled = true;
-  api("/m/api/sell", {method:"POST", body: JSON.stringify({
-      code: code, qty: $("sQty").value, price: $("sPrice").value,
-      buyer: $("sBuyer").value.trim(), address: $("sAddr").value.trim(),
-      remark: $("sRemark").value.trim()})}, function(b){
-    $("btnSell").disabled = false;
-    if (b.ok) { toast(b.message || "已登记", 3000);
-      $("sCode").value = ""; $("sQty").value = "1"; $("sPrice").value = "";
-      $("sBuyer").value = ""; $("sAddr").value = ""; $("sRemark").value = "";
-    } else { toast(b.error || "登记失败", 3000); }
+function paintReturns(){
+  if (!RETURNS.length) { $("listSales").innerHTML = '<div class="empty">暂无退货记录</div>'; return; }
+  var h = "";
+  for (var i = 0; i < RETURNS.length; i++) {
+    var r = RETURNS[i];
+    h += '<div class="row"><div class="rowmain">'
+      + '<div class="rowt">' + esc(r.code) + '<span class="tag warn">退货</span>' + "</div>"
+      + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</div>"
+      + '<div class="rows">' + esc(r.return_date || "-") + " · " + esc(r.buyer || "未填买家")
+      + (r.restock ? " · 已回库" : " · 未回库") + "</div></div>"
+      + '<div class="rowright"><div class="qty">×' + esc(r.qty) + "</div>"
+      + '<div class="money">退 ¥' + esc(r.refund) + "</div></div></div>";
+  }
+  $("listSales").innerHTML = h;
+}
+function loadReturns(){
+  $("listSales").innerHTML = '<div class="empty">加载中…</div>';
+  api("/m/api/returns?kw=" + encodeURIComponent($("kwSales").value.trim()), {}, function(b){
+    if (!b.ok) { $("listSales").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
+    RETURNS = b.returns || [];
+    paintReturns();
   });
-};
-$("btnAsk").onclick = function(){
-  api("/m/api/request_write", {method:"POST"}, function(b){
-    if (b.ok) { toast(b.already ? "已有录入权限" : "已向主机发送申请，请主机在电脑上确认", 3000); refreshWho(); }
-    else toast(b.error || "申请失败", 3000);
+}
+(function(){
+  var bs = document.querySelectorAll("#recSeg button");
+  for (var i = 0; i < bs.length; i++) bs[i].onclick = function(){
+    REC_TAB = this.getAttribute("data-r");
+    for (var j = 0; j < bs.length; j++) bs[j].className = (bs[j] === this) ? "on" : "";
+    loadRec();
+  };
+})();
+$("goSales").onclick = loadRec;
+$("kwSales").addEventListener("keydown", function(e){ if (e.key === "Enter") loadRec(); });
+function saleActions(r){
+  var canRet = (String(r.out_type || "销售") === "销售") && Number(r.left || 0) > 0;
+  var h = '<div class="sum"><div class="sumt">' + esc(r.code) + "</div>"
+    + '<div class="rows">' + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</div>"
+    + '<div class="rows">' + esc(r.sale_date || "-") + " · 卖出 " + esc(r.qty) + " 件 × ¥"
+    + esc(r.price) + " = ¥" + esc(r.total) + "</div>"
+    + '<div class="rows">买家 ' + esc(r.buyer || "未填") + " · "
+    + (r.paid ? "已收款" : "挂账未收") + (r.returned ? " · 已退 " + r.returned + " 件" : "") + "</div></div>"
+    + '<div class="btns">'
+    + (canRet ? '<button class="btn primary" id="actRet">退货</button>' : "")
+    + '<button class="btn danger" id="actUndo">撤销整笔</button></div>';
+  sheet("出售记录", function(box){
+    box.innerHTML = h;
+    if (canRet) $("actRet").onclick = function(){
+      if (!CAN_WRITE) { toast("只读模式：请先申请录入权限"); return; }
+      returnSheet(r);
+    };
+    $("actUndo").onclick = function(){
+      if (!CAN_WRITE) { toast("只读模式：请先申请录入权限"); return; }
+      if (!confirm("撤销这笔出售？" + (r.out_type === "销售" ? "数量会加回库存。" : ""))) return;
+      post("/m/api/sale_undo", {sale_id: r.id}, function(b){
+        if (!b.ok) { toast(b.error || "撤销失败", 3000); return; }
+        toast(b.message || "已撤销"); sheetClose(); loadRec(); loadItems();
+      });
+    };
   });
-};
+}
+function returnSheet(r){
+  var left = Number(r.left || 0);
+  var h = '<div class="sum"><div class="sumt">' + esc(r.code) + "</div>"
+    + '<div class="rows">卖出 ' + esc(r.qty) + " 件，可退 " + left + " 件</div></div>"
+    + '<label class="lbl">退货数量</label><input class="inp" id="rtQty" type="number" inputmode="numeric" min="1" max="'
+    + left + '" value="' + left + '">'
+    + '<label class="lbl">退款金额（元）</label><input class="inp" id="rtRefund" type="number" inputmode="decimal" value="'
+    + fmt(Number(r.price || 0) * left) + '">'
+    + '<label class="chk"><input type="checkbox" id="rtRestock" checked> 货退回库存</label>'
+    + '<button class="go" id="rtGo">确认退货</button>';
+  sheet("退货", function(box){
+    box.innerHTML = h;
+    $("rtQty").oninput = function(){
+      var q = Number($("rtQty").value || 0);
+      $("rtRefund").value = fmt(Number(r.price || 0) * q);
+    };
+    $("rtGo").onclick = function(){
+      $("rtGo").disabled = true;
+      post("/m/api/return_sale", {sale_id: r.id, qty: $("rtQty").value,
+        refund: $("rtRefund").value, restock: $("rtRestock").checked}, function(b){
+          $("rtGo").disabled = false;
+          if (!b.ok) { toast(b.error || "退货失败", 3000); return; }
+          toast(b.message || "已退货", 3000); sheetClose(); loadRec(); loadItems();
+        });
+    };
+  });
+}
+/* ---- 统计 ---- */
+function loadStats(){
+  $("statWrap").innerHTML = '<div class="empty">加载中…</div>';
+  api("/m/api/stats?days=30", {}, function(b){
+    if (!b.ok) { $("statWrap").innerHTML = '<div class="empty">' + esc(b.error) + "</div>"; return; }
+    STAT = b; paintStats();
+  });
+  api("/m/api/customers", {}, function(b){
+    if (b.ok) { CUST = b.customers || []; paintStats(); }
+  });
+}
+function paintStats(){
+  if (!STAT) return;
+  var s = STAT[STAT_RANGE] || STAT.today;
+  var label = STAT_RANGE === "today" ? "今日" : (STAT_RANGE === "month" ? "本月" : "近" + STAT.days + "天");
+  var h = '<div class="seg" id="statSeg">'
+    + '<button class="' + (STAT_RANGE === "today" ? "on" : "") + '" data-v="today">今日</button>'
+    + '<button class="' + (STAT_RANGE === "month" ? "on" : "") + '" data-v="month">本月</button>'
+    + '<button class="' + (STAT_RANGE === "range" ? "on" : "") + '" data-v="range">近30天</button></div>'
+    + '<div class="kpi"><div class="kpil">' + label + '销售额</div>'
+    + '<div class="kpiv">¥' + fmt(s.sales) + "</div>"
+    + '<div class="kpis">实收 ¥' + fmt(s.amount)
+    + (Number(s.refund) ? " · 退款 ¥" + fmt(s.refund) : "") + "</div>"
+    + '<div class="kpi2"><div><span class="kpil">毛利</span><b class="'
+    + (Number(s.profit) >= 0 ? "ok" : "bad") + '">¥' + fmt(s.profit) + "</b></div>"
+    + '<div><span class="kpil">单数</span><b>' + s.orders + "</b></div>"
+    + '<div><span class="kpil">件数</span><b>' + s.qty + "</b></div></div></div>";
+
+  h += '<div class="card"><div class="cardh">库存概览</div><div class="line">'
+    + "<span>品种 / 件数</span><b>" + STAT.stock.items + " 种 · " + STAT.stock.qty + " 件</b></div>"
+    + '<div class="line"><span>按售价估算货值</span><b>¥' + fmt(STAT.stock.value) + "</b></div></div>";
+
+  h += '<div class="card"><div class="cardh">低库存 <span class="mut">阈值 ≤' + STAT.thr + ' 件</span>'
+    + "<b>" + STAT.low_count + " 项</b></div>";
+  if (!STAT.low.length) h += '<div class="empty small">没有低库存商品</div>';
+  else STAT.low.forEach(function(r){
+    h += '<div class="line"><span>' + esc(r.code) + '<br><span class="mut">'
+      + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + "</span></span>"
+      + '<b class="bad">' + r.qty + " 件</b></div>";
+  });
+  h += "</div>";
+
+  h += '<div class="card"><div class="cardh">应收（挂账）<b class="bad">¥' + fmt(STAT.unpaid.total) + "</b></div>";
+  if (!STAT.unpaid.buyers.length) h += '<div class="empty small">没有未收款</div>';
+  else STAT.unpaid.buyers.forEach(function(r){
+    h += '<div class="line"><span>' + esc(r.name) + '<br><span class="mut">' + r.count
+      + ' 笔未收</span></span><span class="acts"><b>¥' + fmt(r.amount) + "</b>"
+      + '<button class="mini" data-b="' + esc(r.name) + '">结清</button></span></div>';
+  });
+  h += "</div>";
+
+  if (STAT.top.length) {
+    h += '<div class="card"><div class="cardh">本月利润榜 <span class="mut">按型号</span></div>';
+    STAT.top.forEach(function(r){
+      h += '<div class="line"><span>' + esc(r.model) + "</span><b class='"
+        + (Number(r.profit) >= 0 ? "ok" : "bad") + "'>¥" + fmt(r.profit) + "</b></div>";
+    });
+    h += "</div>";
+  }
+
+  h += '<div class="card"><div class="cardh">客户 <span class="mut">累计消费</span></div>';
+  if (!CUST.length) h += '<div class="empty small">还没有客户档案（电脑端可添加）</div>';
+  else CUST.slice(0, 10).forEach(function(c){
+    h += '<div class="line"><span>' + esc(c.name) + '<br><span class="mut">'
+      + esc(c.phone || "未填电话") + " · " + c.count + " 笔</span></span>"
+      + '<b>' + (Number(c.debt) ? '<span class="bad">欠 ¥' + fmt(c.debt) + "</span><br>" : "")
+      + '<span class="mut">累计 ¥' + fmt(c.amount) + "</span></b></div>";
+  });
+  h += "</div>";
+
+  $("statWrap").innerHTML = h;
+  var segs = document.querySelectorAll("#statSeg button");
+  for (var i = 0; i < segs.length; i++) segs[i].onclick = function(){
+    STAT_RANGE = this.getAttribute("data-v");
+    paintStats();
+  };
+  var settles = document.querySelectorAll("#statWrap button[data-b]");
+  for (var k = 0; k < settles.length; k++) settles[k].onclick = function(){
+    if (!CAN_WRITE) { toast("只读模式：请先申请录入权限"); return; }
+    var who = this.getAttribute("data-b");
+    if (!confirm("把「" + who + "」的挂账全部标记为已收款？")) return;
+    post("/m/api/settle", {buyer: who}, function(b){
+      if (!b.ok) { toast(b.error || "结清失败", 3000); return; }
+      toast(b.message || "已结清", 2600); loadStats();
+    });
+  };
+}
+/* ---- 我的 ---- */
+function renderPerm(){
+  if (!$("permCard")) return;
+  if (CAN_WRITE) {
+    $("permCard").innerHTML = '<div class="cardh">录入权限</div>'
+      + '<div class="rows">已授权：可新增、修改、出售、退货、盘点、删改回收站</div>';
+    return;
+  }
+  $("permCard").innerHTML = '<div class="cardh">录入权限</div>'
+    + '<div class="rows">当前只读：只能查看，不能改数据</div>'
+    + '<button class="go small" id="btnAskMe">向电脑申请权限</button>';
+  $("btnAskMe").onclick = function(){
+    post("/m/api/request_write", {}, function(b){
+      if (b.ok) { toast(b.already ? "已有录入权限" : "已向电脑发送申请，请主人在电脑上确认", 3200); refreshWho(); }
+      else toast(b.error || "申请失败", 3000);
+    });
+  };
+}
+function refreshTrashCount(){
+  api("/m/api/trash", {}, function(b){
+    if (!b.ok) return;
+    $("trashCount").textContent = (b.count ? b.count + " 条待处理 ›" : "空 ›");
+  });
+}
+function trashSheet(){
+  sheet("回收站", function(box){
+    box.innerHTML = '<div class="empty small">加载中…</div>';
+    api("/m/api/trash", {}, function(b){
+      if (!b.ok) { box.innerHTML = '<div class="empty small">' + esc(b.error) + "</div>"; return; }
+      if (!b.items.length) { box.innerHTML = '<div class="empty small">回收站是空的</div>'; return; }
+      var h = '<div class="hintline">共 ' + b.count + " 条 · 恢复后回到库存</div>";
+      b.items.forEach(function(r){
+        h += '<div class="line"><span>' + esc(r.code) + '<br><span class="mut">'
+          + esc([r.brand, r.model].filter(Boolean).join(" ") || "-") + " · "
+          + esc(r.deleted_at || "") + "</span></span>"
+          + '<span class="acts"><button class="mini" data-r="' + r.id + '">恢复</button>'
+          + '<button class="mini danger" data-p="' + r.id + '">删除</button></span></div>';
+      });
+      box.innerHTML = h;
+      var rs = box.querySelectorAll("button[data-r]");
+      for (var i = 0; i < rs.length; i++) rs[i].onclick = function(){
+        if (!CAN_WRITE) { toast("只读模式：请先申请录入权限"); return; }
+        post("/m/api/restore", {ids: [Number(this.getAttribute("data-r"))]}, function(res){
+          if (!res.ok) { toast(res.error || "恢复失败", 3000); return; }
+          toast(res.message || "已恢复"); sheetClose(); trashSheet(); loadItems();
+        });
+      };
+      var ps = box.querySelectorAll("button[data-p]");
+      for (var k = 0; k < ps.length; k++) ps[k].onclick = function(){
+        if (!CAN_WRITE) { toast("只读模式：请先申请录入权限"); return; }
+        if (!confirm("彻底删除后无法恢复（照片也会删除），确定？")) return;
+        post("/m/api/purge", {ids: [Number(this.getAttribute("data-p"))]}, function(res){
+          if (!res.ok) { toast(res.error || "删除失败", 3000); return; }
+          toast(res.message || "已彻底删除"); sheetClose(); trashSheet(); refreshTrashCount();
+        });
+      };
+    });
+  });
+}
+function stocktakeSheet(){
+  sheet("盘点", function(box){
+    box.innerHTML = '<div class="empty small">加载中…</div>';
+    api("/m/api/stocktake?op=list", {}, function(b){
+      if (!b.ok) { box.innerHTML = '<div class="empty small">' + esc(b.error) + "</div>"; return; }
+      var h = '<button class="go" id="stNew">＋ 新建盘点</button>';
+      if (!b.list.length) h += '<div class="empty small">还没有盘点单</div>';
+      else b.list.forEach(function(s){
+        h += '<div class="line tap" data-id="' + s.id + '"><span>' + esc(s.name)
+          + '<br><span class="mut">' + esc(s.no) + " · "
+          + (s.status === "done" ? "已完成" : "进行中") + " · " + s.count + " 条</span></span>"
+          + "<b>" + (s.diff ? s.diff + ' <span class="warn">条差异</span>'
+            : '<span class="mut">无差异</span>') + "</b></div>";
+      });
+      box.innerHTML = h;
+      $("stNew").onclick = stocktakeNew;
+      var ls = box.querySelectorAll(".line[data-id]");
+      for (var i = 0; i < ls.length; i++) ls[i].onclick = function(){
+        stocktakeDetail(this.getAttribute("data-id"));
+      };
+    });
+  });
+}
+function stocktakeNew(){
+  sheet("新建盘点", function(box){
+    box.innerHTML = '<label class="lbl">名称（可选）</label><input class="inp" id="stName" placeholder="如 11月全盘">'
+      + '<label class="lbl">品牌筛选（可选）</label><input class="inp" id="stBrand">'
+      + '<label class="lbl">关键词（可选）</label><input class="inp" id="stKw" placeholder="编号 / 型号 / 品牌">'
+      + '<label class="chk"><input type="checkbox" id="stOnly" checked> 只盘有货的</label>'
+      + '<button class="go" id="stGo">生成盘点单</button>';
+    $("stGo").onclick = function(){
+      this.disabled = true;
+      post("/m/api/stocktake", {op: "new", name: $("stName").value.trim(),
+        brand: $("stBrand").value.trim(), kw: $("stKw").value.trim(),
+        only_stock: $("stOnly").checked}, function(b){
+          if (!b.ok) { toast(b.error || "生成失败", 3200); $("stGo").disabled = false; return; }
+          toast(b.message || "已生成", 3000);
+          sheetClose(); stocktakeSheet();
+        });
+    };
+  });
+}
+function stocktakeDetail(id){
+  sheet("盘点单", function(box){
+    box.innerHTML = '<div class="empty small">加载中…</div>';
+    api("/m/api/stocktake?op=detail&id=" + id, {}, function(b){
+      if (!b.ok) { box.innerHTML = '<div class="empty small">' + esc(b.error) + "</div>"; return; }
+      var draft = (b.head.status === "draft");
+      var h = '<div class="sum"><div class="sumt">' + esc(b.head.name) + "</div>"
+        + '<div class="rows">' + esc(b.head.no) + " · " + b.rows.length + " 条 · "
+        + (draft ? "进行中，可改实盘数" : "已完成") + "</div></div>"
+        + '<div class="stlist">';
+      b.rows.forEach(function(r){
+        h += '<div class="strow"><div class="stmain"><div class="rowt">' + esc(r.code) + "</div>"
+          + '<div class="rows">' + esc(r.model || "-") + " · 账面 " + r.book + "</div></div>"
+          + '<input class="stinp" type="number" inputmode="numeric" min="0" data-id="' + r.id
+          + '" value="' + r.real + '"' + (draft ? "" : " disabled") + "></div>";
+      });
+      h += "</div>";
+      if (draft) h += '<button class="go" id="stCommit">提交盘点（按实盘数改库存）</button>';
+      box.innerHTML = h;
+      var ins = box.querySelectorAll(".stinp");
+      for (var i = 0; i < ins.length; i++) ins[i].onchange = function(){
+        var el = this;
+        post("/m/api/stocktake", {op: "set", row_id: el.getAttribute("data-id"),
+          real_qty: el.value}, function(r){
+            if (!r.ok) { toast(r.error || "保存失败", 3000); return; }
+            el.style.borderColor = "#18a058";
+            setTimeout(function(){ el.style.borderColor = ""; }, 800);
+          });
+      };
+      if (draft) $("stCommit").onclick = function(){
+        if (!confirm("提交后按实盘数改写库存，确定？")) return;
+        post("/m/api/stocktake", {op: "commit", id: Number(b.head.id)}, function(r){
+          if (!r.ok) { toast(r.error || "提交失败", 3200); return; }
+          toast(r.message || "已提交", 3200); sheetClose(); loadItems();
+        });
+      };
+    });
+  });
+}
+$("btnStocktake").onclick = function(){ stocktakeSheet(); };
+$("btnTrash").onclick = function(){ trashSheet(); };
+$("btnLogout").onclick = function(){ if (confirm("退出登录？")) logout(); };
 /* ---- 启动：有会话直接进应用 ---- */
 api("/m/api/whoami", {}, function(b){ if (b.ok) showApp(); else showLogin(); });
 </script>

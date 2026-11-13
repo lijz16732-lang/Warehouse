@@ -3,6 +3,7 @@
 
 import base64
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from .constants import (FIELD_KEYS, FIELD_TYPE, LISTED_TEXT, MODEL_BLANK,
                         MULTI_SEP, OUT_TYPE_SALE, is_blank_model, norm_model)
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sales (
     sale_date  TEXT,
     remark     TEXT,
     out_type   TEXT DEFAULT '销售',
+    paid       INTEGER DEFAULT 1,
     created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS meta (
@@ -170,6 +172,33 @@ CREATE TABLE IF NOT EXISTS stocktake_items (
     note     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_st_items ON stocktake_items("st_id");
+-- 制作流程（v1.42.0）：A发起制作 → B制作标签 → C贴标签 → D质检 → E入库，
+-- 节点名称可自定义（meta["workflow_stages"]），流转全程留痕 workflow_logs
+CREATE TABLE IF NOT EXISTS workflows (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    no         TEXT DEFAULT '',
+    title      TEXT DEFAULT '',
+    kind       TEXT DEFAULT '',
+    target     TEXT DEFAULT '',
+    stage      INTEGER DEFAULT 0,
+    status     TEXT DEFAULT 'active',
+    created_at TEXT,
+    updated_at TEXT,
+    done_at    TEXT,
+    note       TEXT,
+    extra      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows("status");
+CREATE TABLE IF NOT EXISTS workflow_logs (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    wf_id  INTEGER,
+    stage  INTEGER DEFAULT 0,
+    action TEXT DEFAULT '',
+    by     TEXT DEFAULT '',
+    at     TEXT,
+    note   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wf_logs ON workflow_logs("wf_id");
 """.format(cols=",\n    ".join(
     '"%s" %s DEFAULT %s' % (
         k,
@@ -214,6 +243,18 @@ CREATE TRIGGER IF NOT EXISTS trg_sync_phsale_u AFTER UPDATE ON phone_sales
 BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 CREATE TRIGGER IF NOT EXISTS trg_sync_phsale_d AFTER DELETE ON phone_sales
 BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wf_i AFTER INSERT ON workflows
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wf_u AFTER UPDATE ON workflows
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wf_d AFTER DELETE ON workflows
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wflog_i AFTER INSERT ON workflow_logs
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wflog_u AFTER UPDATE ON workflow_logs
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
+CREATE TRIGGER IF NOT EXISTS trg_sync_wflog_d AFTER DELETE ON workflow_logs
+BEGIN UPDATE sync_state SET v = v + 1 WHERE k = 'rev'; END;
 """
 
 CODE_SEQ_KEY = "code_seq"
@@ -224,7 +265,7 @@ CODE_SEQ_KEY = "code_seq"
 # 列表即目录内容；照片增删后写 meta 触发 rev 自增，客户端轮询即感知刷新。
 # --------------------------------------------------------------------------
 PHOTO_MAX = 10                     # 每条记录最多张数
-PHOTO_KINDS = ("item", "phone")
+PHOTO_KINDS = ("item", "phone", "wf")   # wf = 制作单（入库拍照留证）
 PHOTO_EXTS = (".jpg", ".jpeg", ".png")
 
 
@@ -370,6 +411,23 @@ class Store(object):
                 if "address" not in scols:
                     self.conn.execute(
                         "ALTER TABLE sales ADD COLUMN \"address\" TEXT")
+                    changed = True
+                # v1.39.0 来源列：这笔出库是谁操作的（主机/电脑·名/手机(ip)）
+                if "src" not in scols:
+                    self.conn.execute(
+                        "ALTER TABLE sales ADD COLUMN \"src\" TEXT DEFAULT ''")
+                    changed = True
+                # v1.40.0 收款状态：1=已收款（默认，老数据视为已收），0=挂账
+                if "paid" not in scols:
+                    self.conn.execute(
+                        "ALTER TABLE sales ADD COLUMN \"paid\" INTEGER DEFAULT 1")
+                    changed = True
+                # v1.42.4 制作单附加字段（类型专属，如原型号/标签种类），JSON
+                wcols = {r["name"] for r in
+                         self.conn.execute("PRAGMA table_info(workflows)").fetchall()}
+                if "extra" not in wcols:
+                    self.conn.execute(
+                        "ALTER TABLE workflows ADD COLUMN \"extra\" TEXT")
                     changed = True
                 # v1.24.0 操作日志（独立表，不参与同步触发器）
                 self.conn.execute(
@@ -800,13 +858,40 @@ class Store(object):
             row = cur.fetchone()
             return row["id"] if row else None
 
+    # 编号规则（App 启动时按 settings 注入，默认 WL-00001）
+    code_prefix = "WL"
+    code_digits = 5
+
+    def set_code_rule(self, prefix=None, digits=None):
+        """设置自动编号的前缀与位数（只影响之后新生成的编号）。"""
+        p = str(prefix if prefix is not None else self.code_prefix or "WL")
+        p = re.sub(r"[^0-9A-Za-z_-]", "", p.strip())[:8] or "WL"
+        try:
+            d = int(digits)
+        except (TypeError, ValueError):
+            d = int(self.code_digits or 5)
+        self.code_prefix = p.upper()
+        self.code_digits = max(3, min(8, d))
+        return self.code_prefix, self.code_digits
+
+    def code_sample(self):
+        """示例编号（给提示文案用，如 WL-00001 / SP-0001）。"""
+        try:
+            return "%s-%s" % (self.code_prefix, "0" * (self.code_digits - 1) + "1")
+        except Exception:
+            return "WL-00001"
+
     def generate_codes(self, n):
-        """生成 n 个不与现有数据冲突的编号（WL-00001 起顺序递增）。
+        """生成 n 个不与现有数据冲突的编号（默认 WL-00001 起顺序递增）。
 
         规则（编号跟着数据走）：
           · 库中还有数据  → 接着已有编号的最大尾号往下排（追加/合并导入不会重号）
-          · 库已被清空    → 计数器归零，从 WL-00001 重新开始
+          · 库已被清空    → 计数器归零，从 1 号重新开始
+          · 前缀/位数可在设置里改（如 SP-0001），改后只影响新编号，旧编号原样保留
         """
+        prefix = str(self.code_prefix or "WL")
+        digits = int(self.code_digits or 5)
+        pat = re.compile(r"^%s-(\d+)$" % re.escape(prefix), re.IGNORECASE)
         with self._lock:
             cur = self.conn.execute('SELECT "code" FROM items')
             existing = {str(r["code"]).strip() for r in cur.fetchall() if r["code"] is not None}
@@ -819,7 +904,7 @@ class Store(object):
             except (TypeError, ValueError):
                 mx = 0
         for c in existing:
-            m = re.match(r"^WL-(\d+)$", c, re.IGNORECASE)
+            m = pat.match(c)
             if m:
                 mx = max(mx, int(m.group(1)))
                 continue
@@ -829,13 +914,14 @@ class Store(object):
                 mx = max(mx, int(tail.group(1)))
         out = []
         i = mx + 1
+        last = mx
         while len(out) < n:
-            code = "WL-%05d" % i
+            code = "%s-%0*d" % (prefix, digits, i)
             if code not in existing:
                 out.append(code)
                 existing.add(code)
+                last = i
             i += 1
-        last = mx + len(out)
         with self._lock:
             self.conn.execute("INSERT INTO meta (k, v) VALUES (?, ?) "
                               "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
@@ -1257,7 +1343,7 @@ class Store(object):
 
     # ---------------------------------------------------------------- 出售
     def add_sale(self, item_id, qty, price, buyer="", sale_date="", remark="",
-                 out_type=OUT_TYPE_SALE, address=""):
+                 out_type=OUT_TYPE_SALE, address="", paid=True):
         """登记一笔出库：扣减库存数量，扣到 0 时标记「已售完」（记录保留）。
 
         out_type 为「销售」时按卖出处理（计销售额/成本/利润/买家）；
@@ -1298,14 +1384,16 @@ class Store(object):
                 unit_cost = float(rec.get("price") or 0)
             self.conn.execute(
                 "INSERT INTO sales (item_id, code, brand, category, model, shelf, qty,"
-                " price, total, cost, buyer, address, sale_date, remark, out_type, created_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " price, total, cost, buyer, address, sale_date, remark, out_type,"
+                " src, paid, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (item_id, rec.get("code") or "", rec.get("brand") or "",
                  rec.get("category") or "", rec.get("model") or "", rec.get("shelf") or "",
                  qty, price, round(price * qty, 2), round(unit_cost, 4),
                  buyer or "" if is_sale else "",
                  (address or "").strip() if is_sale else "",
-                 date, remark or "", out_type, now))
+                 date, remark or "", out_type, self.log_src,
+                 1 if (is_sale and paid) else (0 if is_sale else 1), now))
             self.conn.execute(
                 'UPDATE items SET "qty" = ?, "sold_out" = ?, "updated_at" = ? WHERE id = ?',
                 (left, 1 if left <= 0 else 0, now, item_id))
@@ -1315,7 +1403,9 @@ class Store(object):
                     "%d 件 × %.2f 元%s" % (qty, price,
                                            ("，买家 " + buyer) if buyer else ""))
         if is_sale:
-            return True, "已登记出售 %s：%d 件，合计 %.2f 元" % (code, qty, price * qty)
+            return True, ("已登记出售 %s：%d 件，合计 %.2f 元%s"
+                          % (code, qty, price * qty,
+                             "" if paid else "（挂账，未收款）"))
         return True, "已登记%s出库 %s：%d 件（不计销售额）" % (out_type, code, qty)
 
     def add_manual_sale(self, code="", brand="", category="", model="", shelf="",
@@ -1354,11 +1444,11 @@ class Store(object):
             self.conn.execute(
                 "INSERT INTO sales (item_id, code, brand, category, model, shelf, qty,"
                 " price, total, cost, buyer, address, sale_date, remark, out_type,"
-                " created_at) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " src, created_at) VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (code, brand, (category or "").strip(), model, (shelf or "").strip(),
                  qty, price, total, round(cost, 4), (buyer or "").strip(),
                  (address or "").strip(), date, (remark or "").strip(),
-                 OUT_TYPE_SALE, now_str()))
+                 OUT_TYPE_SALE, self.log_src, now_str()))
             self.conn.commit()
         name = code or model or brand
         self.log_op("手动补录出售", code or model or brand,
@@ -1554,11 +1644,47 @@ class Store(object):
                 "out_qty": sum(int(r.get("qty") or 0) for r in other_rows),
                 "all_count": len(rows)}
 
+    def sales_stats_by_src(self, days=0):
+        """按操作来源汇总销售数据（主机/局域网电脑/手机分开算）。
+
+        days>0 只统计最近 N 天（按 sale_date）。只统计「销售」类型出库。
+        返回 {"rows": [{src, count, qty, amount, cost, profit}...],
+              "total": {count, qty, amount, cost, profit}}，rows 按销售额降序。
+        """
+        try:
+            days = int(days or 0)
+        except (TypeError, ValueError):
+            days = 0
+        sql = ("SELECT COALESCE(NULLIF(src, ''), '未知来源') AS src,"
+               " COUNT(*) AS count, SUM(qty) AS qty,"
+               " SUM(total) AS amount,"
+               " SUM(COALESCE(cost, 0) * qty) AS cost"
+               " FROM sales WHERE COALESCE(out_type, '%s') = '%s'"
+               % (OUT_TYPE_SALE, OUT_TYPE_SALE))
+        args = []
+        if days > 0:
+            sql += " AND COALESCE(sale_date, '') >= ?"
+            args.append((date.today() - timedelta(days=days - 1)).isoformat())
+        sql += " GROUP BY src ORDER BY amount DESC"
+        try:
+            with self._lock:
+                rows = [dict(r) for r in
+                        self.conn.execute(sql, args).fetchall()]
+        except Exception:
+            rows = []
+        for r in rows:
+            r["cost"] = round(float(r.get("cost") or 0), 2)
+            r["profit"] = round(float(r.get("amount") or 0) - r["cost"], 2)
+        total = {"count": sum(r["count"] for r in rows),
+                 "qty": sum(r["qty"] or 0 for r in rows),
+                 "amount": round(sum(r["amount"] or 0 for r in rows), 2),
+                 "cost": round(sum(r["cost"] for r in rows), 2)}
+        total["profit"] = round(total["amount"] - total["cost"], 2)
+        return {"rows": rows, "total": total}
+
     @staticmethod
     def out_totals(rows):
-        """非销售出库合计：笔数 / 件数 / 成本价值（按成本估算的库存减少）。
-
-        by_type 为 {类型: 件数}，用于页面上的类型分布。
+        """非销售出库合计：笔数 / 件数 / 成本价值（按成本估算的库存减少）。        by_type 为 {类型: 件数}，用于页面上的类型分布。
         """
         qty = sum(int(r.get("qty") or 0) for r in rows)
         cost = sum(float(r.get("cost") or 0) * int(r.get("qty") or 0) for r in rows)
@@ -1698,7 +1824,7 @@ class Store(object):
         return cur.rowcount
 
     # ------------------------------------------------------------ 客户档案（v1.32.0）
-    def list_customers(self, kw=""):
+    def list_customers(self, kw="", include_buyers=False):
         """客户列表 + 出售汇总。
 
         客户与出售记录按「姓名」对应（历史数据里 buyer 就是名字），
@@ -1718,6 +1844,7 @@ class Store(object):
                     % (OUT_TYPE_SALE, OUT_TYPE_SALE)).fetchall():
                 stat[str(r["b"] or "").strip().lower()] = dict(r)
         out = []
+        debt = {d["name"]: d["amount"] for d in self.sales_unpaid()["buyers"]}
         for r in rows:
             s = stat.get((r.get("name") or "").strip().lower()) or {}
             rec = {"id": int(r["id"]), "name": r.get("name") or "",
@@ -1725,11 +1852,30 @@ class Store(object):
                    "level": r.get("level") or "", "note": r.get("note") or "",
                    "count": int(s.get("c") or 0), "qty": int(s.get("q") or 0),
                    "amount": round(float(s.get("amt") or 0), 2),
+                   "debt": round(float(debt.get((r.get("name") or "").strip()) or 0), 2),
                    "last": s.get("last") or ""}
             if kw and kw not in " ".join([rec["name"], rec["phone"], rec["address"],
                                           rec["note"]]).lower():
                 continue
             out.append(rec)
+        if include_buyers:
+            # 手机端用：只买过东西、还没建档案的买家也列出来（电脑端不显示，
+            # 避免把临时买家混进正式客户列表）
+            have = {(r.get("name") or "").strip().lower() for r in out}
+            for row in self.buyer_stats():
+                name = (row.get("buyer") or "").strip()
+                if not name or name.lower() in have:
+                    continue
+                if kw and kw not in name.lower():
+                    continue
+                out.append({"id": 0, "name": name, "phone": "", "address": "",
+                            "level": "", "note": "（未建档案的买家）",
+                            "count": int(row.get("count") or 0),
+                            "qty": int(row.get("qty") or 0),
+                            "amount": round(float(row.get("amount") or 0), 2),
+                            "debt": round(float(debt.get(name) or 0), 2),
+                            "last": row.get("last") or ""})
+            out.sort(key=lambda d: -d["amount"])
         return out
 
     def add_customer(self, name, phone="", address="", level="", note=""):
@@ -1817,6 +1963,65 @@ class Store(object):
         return n
 
     # ------------------------------------------------------------ 销售退货（v1.32.0）
+    def returns_by_sale(self, sale_ids=None):
+        """一批出售记录的已退情况：{sale_id: {"qty": 已退件数, "refund": 退款额}}。"""
+        sql = ("SELECT sale_id, COALESCE(SUM(qty), 0), COALESCE(SUM(refund), 0)"
+               " FROM returns")
+        args = []
+        if sale_ids is not None:
+            ids = [int(x) for x in sale_ids if x]
+            if not ids:
+                return {}
+            sql += " WHERE sale_id IN (%s)" % ", ".join(["?"] * len(ids))
+            args = ids
+        sql += " GROUP BY sale_id"
+        with self._lock:
+            rows = self.conn.execute(sql, args).fetchall()
+        return {int(r[0] or 0): {"qty": int(r[1] or 0),
+                                 "refund": round(float(r[2] or 0), 2)}
+                for r in rows}
+
+    def sales_unpaid(self):
+        """应收（挂账）汇总：只统计 paid=0 的销售单，退款按单冲减，按买家合并。"""
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT TRIM(COALESCE(s.buyer, '')) b,"
+                " COALESCE(s.total, 0) - COALESCE((SELECT SUM(r.refund)"
+                "   FROM returns r WHERE r.sale_id = s.id), 0) amt"
+                " FROM sales s WHERE COALESCE(s.paid, 1) = 0"
+                " AND COALESCE(s.out_type, '%s') = '%s'"
+                % (OUT_TYPE_SALE, OUT_TYPE_SALE)).fetchall()]
+        total = 0.0
+        by = {}
+        for r in rows:
+            amt = round(float(r.get("amt") or 0), 2)
+            if amt <= 0:
+                continue
+            total += amt
+            name = str(r.get("b") or "").strip() or "（未填买家）"
+            cur = by.setdefault(name, {"name": name, "amount": 0.0, "count": 0})
+            cur["amount"] = round(cur["amount"] + amt, 2)
+            cur["count"] += 1
+        return {"total": round(total, 2), "count": len(rows),
+                "buyers": sorted(by.values(), key=lambda d: -d["amount"])}
+
+    def settle_unpaid(self, buyer=""):
+        """结清应收：把某客户（buyer 为空则全部）的挂账出售标记为已收款。
+
+        返回结清的笔数。
+        """
+        sql = "UPDATE sales SET paid = 1 WHERE COALESCE(paid, 1) = 0"
+        args = []
+        buyer = (buyer or "").strip()
+        if buyer:
+            sql += " AND TRIM(COALESCE(buyer, '')) = ?"
+            args.append(buyer)
+        cur = self._execute(sql, tuple(args))
+        if cur.rowcount:
+            self.log_op("结清应收", buyer or "全部挂账",
+                        "%d 笔" % cur.rowcount)
+        return cur.rowcount
+
     def returnable_qty(self, sale_id):
         """某笔出售还能退多少件（已退的扣掉）。"""
         with self._lock:
@@ -1829,8 +2034,7 @@ class Store(object):
                 (int(sale_id),)).fetchone()[0]
         return max(0, int(row[0] or 0) - int(back or 0))
 
-    def add_return(self, sale_id, qty=0, refund=None, restock=True,
-                   return_date="", remark=""):
+    def add_return(self, sale_id, qty=0, refund=None, restock=True,                   return_date="", remark=""):
         """登记一笔销售退货：可选把货退回库存，退款默认按原单价 × 数量。
 
         返回 (ok, msg)。
@@ -2165,6 +2369,448 @@ class Store(object):
             self.conn.commit()
         return 1
 
+    # -------------------------------------------------- 制作流程（v1.42.0）
+    # A发起制作 → B制作标签 → C贴标签 → D质检 → E入库；节点名可自定义，
+    # 每一步（发起/推进/退回/取消）都要求填写操作人姓名，全程留痕。
+    WF_STAGES_KEY = "workflow_stages"
+    WF_DEFAULT_STAGES = ["发起制作", "制作标签", "贴标签", "质检", "入库"]
+    WF_KINDS_KEY = "workflow_kinds"
+    # 类型可自定义；每个类型可带若干「附加字段」，
+    # field = {"label": 名称, "options": [选项,...], "multi": 是否多选}
+    # （有 options 渲染成下拉/勾选，multi=True 是勾选框可同时选多项；
+    #   无 options 就是普通输入框）
+    WF_DEFAULT_KINDS = [
+        {"name": "修复", "fields": []},
+        {"name": "更换型号标签",
+         "fields": [{"label": "原型号"}, {"label": "更换后型号"}]},
+        {"name": "制作标签",
+         "fields": [{"label": "标签种类", "multi": True,
+                     "options": ["外箱标", "机身标", "配件标"]}]},
+        {"name": "返工", "fields": []},
+        {"name": "其他", "fields": []},
+    ]
+    WF_ACTIONS = {"create": "发起", "advance": "推进", "back": "退回",
+                  "cancel": "取消", "resume": "恢复", "stock": "入库"}
+
+    def wf_stages(self):
+        """流程节点名称列表（meta 可自定义；无自定义用默认五节点）。"""
+        raw = self.get_meta(self.WF_STAGES_KEY, "")
+        if raw:
+            try:
+                names = json.loads(raw)
+                if isinstance(names, list):
+                    names = [str(x).strip() for x in names if str(x).strip()]
+                    if len(names) >= 2:
+                        return names[:12]
+            except Exception:
+                pass
+        return list(self.WF_DEFAULT_STAGES)
+
+    def wf_set_stages(self, names):
+        """保存自定义节点名（去重去空；已有单据超界时钳到最后一节点）。"""
+        clean = []
+        for n in names or []:
+            n = str(n).strip()[:20]
+            if n and n not in clean:
+                clean.append(n)
+        if len(clean) < 2:
+            return False, "流程至少要 2 个节点"
+        if len(clean) > 12:
+            return False, "节点最多 12 个"
+        self.set_meta(self.WF_STAGES_KEY, json.dumps(clean, ensure_ascii=False))
+        with self._lock:
+            self.conn.execute("UPDATE workflows SET stage = ? WHERE stage >= ?",
+                              (len(clean) - 1, len(clean)))
+            self.conn.commit()
+        self.log_op("修改", "制作流程", "节点：%s" % " → ".join(clean))
+        return True, "节点已保存：%s" % " → ".join(clean)
+
+    def wf_kinds(self):
+        """制作类型列表（含各自的附加字段定义；meta 可自定义）。"""
+        raw = self.get_meta(self.WF_KINDS_KEY, "")
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list) and data:
+                    kinds = self._clean_kinds(data)
+                    if kinds:
+                        return kinds
+            except Exception:
+                pass
+        return [dict(k) for k in self.WF_DEFAULT_KINDS]
+
+    @staticmethod
+    def _clean_kinds(data):
+        """清洗类型定义：去空名/去重/字段去空，最多 20 类 × 每类 8 字段。"""
+        kinds = []
+        for k in data[:20]:
+            if not isinstance(k, dict):
+                continue
+            name = str(k.get("name") or "").strip()[:20]
+            if not name or any(x["name"] == name for x in kinds):
+                continue
+            fields = []
+            for f in (k.get("fields") or [])[:8]:
+                if not isinstance(f, dict):
+                    continue
+                label = str(f.get("label") or "").strip()[:20]
+                if not label:
+                    continue
+                opts = [str(o).strip()[:30] for o in (f.get("options") or [])
+                        if str(o).strip()]
+                fd = {"label": label, "options": opts[:12]}
+                if opts and f.get("multi"):
+                    fd["multi"] = True      # 勾选框，可同时选多项
+                fields.append(fd)
+            kinds.append({"name": name, "fields": fields})
+        return kinds
+
+    def wf_set_kinds(self, kinds):
+        """保存自定义类型（含附加字段定义）。"""
+        clean = self._clean_kinds(kinds)
+        if not clean:
+            return False, "至少要保留 1 个类型"
+        self.set_meta(self.WF_KINDS_KEY,
+                      json.dumps(clean, ensure_ascii=False))
+        names = "、".join(k["name"] for k in clean)
+        self.log_op("修改", "制作流程", "类型：%s" % names)
+        return True, "类型已保存：%s" % names
+
+    def wf_create(self, title, kind="", target="", note="", by="", extra=None):
+        """发起一张制作单。返回 (wf_id, no 或错误提示)。"""
+        title = (title or "").strip()
+        by = (by or "").strip()
+        if not title:
+            return 0, "事项内容不能为空"
+        if not by:
+            return 0, "请填写你的名字（发起人）"
+        ts = now_str()
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT v FROM meta WHERE k = 'wf_seq'").fetchone()
+            seq = int(row["v"]) if row and str(row["v"]).isdigit() else 0
+            seq += 1
+            no = "WO-%05d" % seq
+            self.conn.execute(
+                "INSERT INTO meta (k, v) VALUES ('wf_seq', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v", (str(seq),))
+            cur = self.conn.execute(
+                "INSERT INTO workflows (no, title, kind, target, stage, status,"
+                " created_at, updated_at, note, extra) VALUES (?,?,?,?,0,'active',?,?,?,?)",
+                (no, title, (kind or "").strip(), (target or "").strip(),
+                 ts, ts, (note or "").strip(),
+                 json.dumps(extra or {}, ensure_ascii=False)
+                 if isinstance(extra, dict) and extra else None))
+            wf_id = int(cur.lastrowid)
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (wf_id, 0, "create", by, ts, "发起制作：%s" % title))
+            self.conn.commit()
+        self.log_op("制作流程", no, "%s（发起人：%s）" % (title, by))
+        return wf_id, no
+
+    def wf_list(self, status="active", kw=""):
+        """按状态列出制作单（附节点名、经手人、停留天数）。"""
+        stages = self.wf_stages()
+        where, args = [], []
+        if status in ("active", "done", "cancelled"):
+            where.append("status = ?")
+            args.append(status)
+        kw = (kw or "").strip()
+        if kw:
+            like = "%" + kw + "%"
+            where.append("(title LIKE ? OR target LIKE ? OR no LIKE ? OR note LIKE ?"
+                         " OR extra LIKE ?)")
+            args += [like] * 5
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM workflows"
+                + (" WHERE " + " AND ".join(where) if where else "")
+                + " ORDER BY id DESC", args).fetchall()]
+            # 经手人 = 最近一条流转记录的 by
+            bys = {}
+            if rows:
+                ids = [int(r["id"]) for r in rows]
+                ph = ",".join("?" * len(ids))
+                for r in self.conn.execute(
+                        "SELECT wf_id, by FROM workflow_logs WHERE wf_id IN (%s)"
+                        " ORDER BY id DESC" % ph, ids).fetchall():
+                    k = int(r["wf_id"])
+                    if k not in bys:
+                        bys[k] = str(r["by"] or "")
+        out = []
+        for r in rows:
+            st = int(r.get("stage") or 0)
+            r["stage_name"] = stages[st] if 0 <= st < len(stages) else ("节点%d" % st)
+            r["extra"] = self._parse_extra(r.get("extra"))
+            r["last_name"] = stages[-1] if stages else ""
+            r["at_last"] = (st == len(stages) - 1) and r.get("status") == "active"
+            r["handler"] = bys.get(int(r["id"]), "")
+            try:
+                d0 = datetime.strptime((r.get("updated_at") or "")[:10], "%Y-%m-%d")
+                r["days"] = max(0, (datetime.now() - d0).days)
+            except Exception:
+                r["days"] = 0
+            out.append(r)
+        return out
+
+    @staticmethod
+    def _parse_extra(raw):
+        """workflows.extra 的 JSON → dict（坏数据退回空 dict）。"""
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def wf_one(self, wf_id):
+        """取一张制作单的原始行（工位权限校验用）。"""
+        with self._lock:
+            r = self.conn.execute("SELECT * FROM workflows WHERE id = ?",
+                                  (int(wf_id),)).fetchone()
+        return dict(r) if r else None
+
+    def wf_counts(self):
+        """各节点在办数量 + 已完成 / 已取消数量（画流程条用）。"""
+        stages = self.wf_stages()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT stage, COUNT(*) n FROM workflows WHERE status = 'active'"
+                " GROUP BY stage").fetchall()
+            done = int(self.conn.execute(
+                "SELECT COUNT(*) n FROM workflows WHERE status = 'done'"
+            ).fetchone()["n"])
+            cancelled = int(self.conn.execute(
+                "SELECT COUNT(*) n FROM workflows WHERE status = 'cancelled'"
+            ).fetchone()["n"])
+        cnt = [0] * len(stages)
+        for r in rows:
+            cnt[min(int(r["stage"]), len(stages) - 1)] = int(r["n"])
+        return {"stages": stages, "counts": cnt,
+                "done": done, "cancelled": cancelled}
+
+    def wf_stamp(self):
+        """制作流程的数据指纹（主机端轮询：别人推进了就自动刷列表）。"""
+        with self._lock:
+            a = self.conn.execute(
+                "SELECT COUNT(*) n, IFNULL(MAX(updated_at), '') u FROM workflows"
+            ).fetchone()
+            b = self.conn.execute(
+                "SELECT COUNT(*) n, IFNULL(MAX(id), 0) m FROM workflow_logs"
+            ).fetchone()
+        return [int(a["n"]), str(a["u"]), int(b["n"]), int(b["m"])]
+
+    def _wf_move(self, wf_id, by, note, forward=True, target=None):
+        """推进 / 退回。退回默认到相邻上一站，target 可指定更早的站
+        （如质检发现问题直接退回到「制作标签」，不必一站一站退）。返回 (ok, msg)。"""
+        by = (by or "").strip()
+        if not by:
+            return False, "请先填写你的名字（经手人）"
+        stages = self.wf_stages()
+        note = (note or "").strip()
+        with self._lock:
+            head = self.conn.execute("SELECT * FROM workflows WHERE id = ?",
+                                     (int(wf_id),)).fetchone()
+            if head is None:
+                return False, "制作单不存在"
+            if str(head["status"] or "active") != "active" and not forward:
+                pass                       # 已完成也允许退回（重新打开）
+            elif str(head["status"] or "active") != "active":
+                return False, "该单已结束（%s）" % head["status"]
+            st = int(head["stage"] or 0)
+            if forward:
+                new = st + 1
+            else:
+                if target is None:
+                    new = st - 1
+                else:
+                    try:
+                        new = int(target)
+                    except (TypeError, ValueError):
+                        return False, "目标节点不正确"
+                    if new < 0 or new >= st:
+                        return False, "只能退回到当前节点（%s）之前的节点" % stages[st]
+            if new < 0:
+                return False, "已在第一个节点（%s）" % stages[0]
+            if new > len(stages) - 1:
+                return False, "已在最后节点（%s）" % stages[-1]
+            ts = now_str()
+            done = forward and new == len(stages) - 1
+            self.conn.execute(
+                "UPDATE workflows SET stage = ?, status = ?, updated_at = ?,"
+                " done_at = CASE WHEN ? THEN ? ELSE NULL END WHERE id = ?",
+                (new, "done" if done else "active", ts, 1 if done else 0,
+                 ts, int(wf_id)))
+            act = "advance" if forward else "back"
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), new, act, by, ts,
+                 note or ("退回「%s」" % stages[new] if not forward else "")))
+            self.conn.commit()
+        head = dict(head)
+        if forward:
+            self.log_op("制作流程", head.get("no") or "",
+                        "%s → %s（%s）" % (stages[st], stages[new], by))
+        else:
+            self.log_op("制作流程", head.get("no") or "",
+                        "%s 退回 %s（%s）" % (stages[st], stages[new], by))
+        if done:
+            return True, "已完成！单据走完流程「%s」" % stages[-1]
+        return True, "已%s到「%s」（%s）" % ("推进" if forward else "退回",
+                                            stages[new], by)
+
+    def wf_advance(self, wf_id, by, note=""):
+        return self._wf_move(wf_id, by, note, forward=True)
+
+    def wf_back(self, wf_id, by, note="", target=None):
+        return self._wf_move(wf_id, by, note, forward=False, target=target)
+
+    def wf_cancel(self, wf_id, by, note=""):
+        by = (by or "").strip()
+        if not by:
+            return False, "请先填写你的名字（操作人）"
+        with self._lock:
+            head = self.conn.execute("SELECT status FROM workflows WHERE id = ?",
+                                     (int(wf_id),)).fetchone()
+            if head is None:
+                return False, "制作单不存在"
+            if str(head[0] or "active") != "active":
+                return False, "只有进行中的单据才能取消"
+            ts = now_str()
+            self.conn.execute(
+                "UPDATE workflows SET status = 'cancelled', updated_at = ?"
+                " WHERE id = ?", (ts, int(wf_id)))
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), 0, "cancel", by, ts, (note or "").strip()))
+            self.conn.commit()
+        self.log_op("制作流程", "", "取消单据 #%d（%s）" % (int(wf_id), by))
+        return True, "已取消"
+
+    def wf_resume(self, wf_id, by):
+        by = (by or "").strip()
+        if not by:
+            return False, "请先填写你的名字（操作人）"
+        with self._lock:
+            head = self.conn.execute("SELECT status FROM workflows WHERE id = ?",
+                                     (int(wf_id),)).fetchone()
+            if head is None:
+                return False, "制作单不存在"
+            if str(head[0] or "") != "cancelled":
+                return False, "只有已取消的单据才能恢复"
+            ts = now_str()
+            self.conn.execute(
+                "UPDATE workflows SET status = 'active', updated_at = ?"
+                " WHERE id = ?", (ts, int(wf_id)))
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), 0, "resume", by, ts, ""))
+            self.conn.commit()
+        self.log_op("制作流程", "", "恢复单据 #%d（%s）" % (int(wf_id), by))
+        return True, "已恢复为进行中"
+
+    def wf_delete(self, wf_id):
+        with self._lock:
+            head = self.conn.execute("SELECT no, title FROM workflows WHERE id = ?",
+                                     (int(wf_id),)).fetchone()
+            if head is None:
+                return False
+            self.conn.execute("DELETE FROM workflow_logs WHERE wf_id = ?",
+                              (int(wf_id),))
+            self.conn.execute("DELETE FROM workflows WHERE id = ?", (int(wf_id),))
+            self.conn.commit()
+        no = dict(head)["no"] or ""
+        try:                              # 连带清掉这张单的入库照片
+            self.photos_wipe("wf", no)
+        except Exception:
+            pass
+        self.log_op("制作流程", no, "删除单据：%s" % (dict(head)["title"] or ""))
+        return True
+
+    def wf_stock_in(self, wf_id, fields, by=""):
+        """入库：按制作单新增一条库存，并把单据照片带到库存记录上。
+
+        fields = {brand/category/model/condition/shelf/qty/price}
+        返回 (ok, msg)。客户端推进到入库时也走这一个方法，
+        照片复制发生在主机侧（照片文件只在主机上）。
+        """
+        with self._lock:
+            r = self.conn.execute("SELECT * FROM workflows WHERE id = ?",
+                                  (int(wf_id),)).fetchone()
+        if r is None:
+            return False, "制作单不存在"
+        rec = dict(r)
+        f = dict(fields or {})
+        model = str(f.get("model") or "").strip()
+        if not model:
+            return False, "入库需要至少填写「型号」"
+        try:
+            qty = int(float(f.get("qty") or 1))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            return False, "数量必须是大于 0 的整数"
+        try:
+            price = float(f.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        code = self.generate_codes(1)[0]
+        item = blank_record()
+        item["code"] = code
+        for k in ("brand", "category", "condition", "shelf"):
+            item[k] = str(f.get(k) or "").strip()
+        item["model"] = model
+        item["qty"] = qty
+        item["price"] = price
+        item["remark"] = "制作入库 %s %s" % (rec.get("no") or "", rec.get("title") or "")
+        try:
+            self.insert(item)
+        except Exception as e:
+            return False, "新增库存失败：%s" % e
+        self.wf_set_target(int(wf_id), code, by=by,
+                           note="入库：%s 型号 %s ×%d" % (code, model, qty))
+        n = 0
+        try:                              # 入库照片带到库存记录，之后在库存里也能看
+            n = self.photos_copy("wf", rec.get("no") or "", "item", code)
+        except Exception:
+            pass
+        extra = ("，已带入 %d 张照片" % n) if n else ""
+        return True, "已入库：%s（%s ×%d%s）" % (code, model, qty, extra)
+
+    def wf_set_target(self, wf_id, target, by="", note=""):
+        """入库后把生成的库存编号回写到单据（target），并留痕。"""
+        ts = now_str()
+        with self._lock:
+            self.conn.execute("UPDATE workflows SET target = ?, updated_at = ?"
+                              " WHERE id = ?",
+                              (str(target).strip(), ts, int(wf_id)))
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), 0, "stock", (by or "").strip(), ts,
+                 (note or "").strip()))
+            self.conn.commit()
+
+    def wf_logs(self, wf_id):
+        with self._lock:
+            rows = [dict(r) for r in self.conn.execute(
+                "SELECT * FROM workflow_logs WHERE wf_id = ? ORDER BY id",
+                (int(wf_id),)).fetchall()]
+        stages = self.wf_stages()
+        for r in rows:
+            st = int(r.get("stage") or 0)
+            r["stage_name"] = stages[st] if 0 <= st < len(stages) else ("节点%d" % st)
+            r["action_name"] = self.WF_ACTIONS.get(str(r.get("action") or ""),
+                                                   str(r.get("action") or ""))
+        return rows
+
+
     # ------------------------------------------------------------ 采购入库
     def _recalc_cost(self, item_id):
         """按该商品全部采购记录重算移动加权平均成本单价。"""
@@ -2456,6 +3102,234 @@ class Store(object):
         if del_ids and not dry_run:
             self.delete_ids(del_ids)
         return {"deleted": len(del_ids), "groups": len(groups)}
+
+    # ---------------------------------------------------------- 维护
+    def _db_files(self):
+        """数据库主文件 + WAL/SHM 中实际存在的那些。"""
+        out = []
+        for p in (self.path, self.path + "-wal", self.path + "-shm"):
+            try:
+                if os.path.isfile(p):
+                    out.append(p)
+            except OSError:
+                pass
+        return out
+
+    def db_size(self):
+        """数据库占用字节数（主文件 + WAL，SHM 只是共享内存索引，一并计入无妨）。"""
+        total = 0
+        for p in self._db_files():
+            try:
+                total += os.path.getsize(p)
+            except OSError:
+                pass
+        return total
+
+    def photos_root(self):
+        """当前仓库的照片根目录：<数据目录>/photos/<库文件名>/。"""
+        stem = os.path.splitext(os.path.basename(self.path))[0]
+        return os.path.join(os.path.dirname(os.path.abspath(self.path)),
+                            "photos", stem)
+
+    def photo_stats(self):
+        """照片张数与占用字节数（扫一遍目录，只读）。"""
+        n = 0
+        size = 0
+        for dirpath, _dirs, files in os.walk(self.photos_root()):
+            for fn in files:
+                if not fn.lower().endswith(PHOTO_EXTS):
+                    continue
+                try:
+                    size += os.path.getsize(os.path.join(dirpath, fn))
+                except OSError:
+                    continue
+                n += 1
+        return n, size
+
+    def table_counts(self):
+        """各表记录数（库存区分在用 / 已售完 / 回收站）。"""
+        def q(sql):
+            try:
+                with self._lock:
+                    row = self.conn.execute(sql).fetchone()
+                return int(row[0] or 0) if row else 0
+            except Exception:
+                return 0
+
+        live = "deleted_at IS NULL"
+        return {
+            "items": q('SELECT COUNT(*) FROM items WHERE %s' % live),
+            "sold": q('SELECT COUNT(*) FROM items WHERE %s AND sold_out = 1' % live),
+            "trash": q('SELECT COUNT(*) FROM items WHERE deleted_at IS NOT NULL'),
+            "sales": q('SELECT COUNT(*) FROM sales'),
+            "purchases": q('SELECT COUNT(*) FROM purchases'),
+            "customers": q('SELECT COUNT(*) FROM customers'),
+            "phone_items": q('SELECT COUNT(*) FROM phone_items'),
+            "phone_sales": q('SELECT COUNT(*) FROM phone_sales'),
+            "oplog": q('SELECT COUNT(*) FROM oplog'),
+        }
+
+    def orphan_photos(self):
+        """照片目录里存在、但库里找不到对应编号的目录（彻底删除记录后留下的）。"""
+        root = self.photos_root()
+        codes = set()
+        for tbl in ("items", "phone_items"):
+            try:
+                with self._lock:
+                    rows = self.conn.execute(
+                        'SELECT "code" FROM %s' % tbl).fetchall()
+            except Exception:
+                continue
+            for r in rows:
+                c = str(r[0] or "").strip()
+                if c:
+                    codes.add(_safe_code(c))
+        try:                          # 制作单照片（kind="wf"，编号是 WO-xxxxx）
+            with self._lock:
+                rows = self.conn.execute("SELECT no FROM workflows").fetchall()
+            for r in rows:
+                c = str(r[0] or "").strip()
+                if c:
+                    codes.add(_safe_code(c))
+        except Exception:
+            pass
+        out = []
+        for kind in PHOTO_KINDS:
+            kd = os.path.join(root, kind)
+            try:
+                entries = list(os.scandir(kd))
+            except OSError:
+                continue
+            for e in entries:
+                try:
+                    if not e.is_dir() or e.name in codes:
+                        continue
+                except OSError:
+                    continue
+                cnt, size = 0, 0
+                for dirpath, _dirs, files in os.walk(e.path):
+                    for fn in files:
+                        if not fn.lower().endswith(PHOTO_EXTS):
+                            continue
+                        cnt += 1
+                        try:
+                            size += os.path.getsize(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+                out.append({"kind": kind, "code": e.name, "n": cnt,
+                            "size": size})
+        return out
+
+    def photos_clear_orphans(self):
+        """删除孤立照片目录，返回 (删掉的目录数, 释放字节数)。
+
+        只动 <照片根>/<kind>/<编号> 这一层，且编号必须不在库里；
+        回收站里的记录算「在库」，它们的照片不会被删。
+        """
+        root = os.path.abspath(self.photos_root())
+        dirs, size = 0, 0
+        for o in self.orphan_photos():
+            d = os.path.abspath(os.path.join(root, o["kind"], o["code"]))
+            try:
+                if os.path.normcase(os.path.commonpath([d, root])) \
+                        != os.path.normcase(root):
+                    continue                    # 越界，宁可不删
+                if d == root:
+                    continue
+                shutil.rmtree(d)
+                dirs += 1
+                size += int(o.get("size") or 0)
+            except Exception:
+                continue
+        return dirs, size
+
+    def _wal_trim(self):
+        """把 WAL 收回主库并截断，让前后大小可直接对比（失败忽略）。"""
+        try:
+            with self._lock:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self.conn.commit()
+        except Exception:
+            pass
+
+    def vacuum(self):
+        """VACUUM 压缩数据库，返回 (压缩前, 压缩后) 字节数。
+
+        VACUUM 会重写整个库文件；若不算上 WAL，压缩后「总大小」可能反而变大
+        （旧页面还留在 -wal 里），所以前后各做一次 checkpoint。
+        """
+        self._wal_trim()
+        before = self.db_size()
+        with self._lock:
+            self.conn.commit()
+            self.conn.execute("VACUUM")
+            self.conn.commit()
+        self._wal_trim()
+        return before, self.db_size()
+
+    def integrity_check(self):
+        """PRAGMA integrity_check：返回 (是否正常, 消息列表)。"""
+        try:
+            with self._lock:
+                rows = self.conn.execute("PRAGMA integrity_check").fetchall()
+            msgs = [str(r[0]) for r in rows]
+            ok = len(msgs) == 1 and msgs[0].strip().lower() == "ok"
+            return ok, msgs[:5]
+        except Exception as e:
+            return False, [str(e)]
+
+    def health_check(self):
+        """数据体检：返回一组 {key,title,level,count,samples,hint}。
+
+        level=warn 表示建议处理，info 表示仅供参考。全部只读，不改数据。
+        """
+        def rows(sql):
+            try:
+                with self._lock:
+                    return [r[0] for r in self.conn.execute(sql).fetchall()]
+            except Exception:
+                return []
+
+        live = "deleted_at IS NULL"
+        qty_i = "CAST(COALESCE(qty, 0) AS INTEGER)"
+        out = []
+        out.append({
+            "key": "neg", "title": "库存数量为负", "level": "warn",
+            "rows": rows('SELECT "code" FROM items WHERE %s AND %s < 0'
+                         % (live, qty_i)),
+            "hint": "数量小于 0 通常是导入或出售时填错，改成实际数量即可。"})
+        out.append({
+            "key": "zero", "title": "数量为 0 但未标记售完", "level": "info",
+            "rows": rows('SELECT "code" FROM items WHERE %s AND sold_out = 0 '
+                         'AND %s = 0' % (live, qty_i)),
+            "hint": "卖完后忘记标「售完」的记录；不影响数据，只是列表里还当在售显示。"})
+        out.append({
+            "key": "dup", "title": "同型号多条记录", "level": "info",
+            "rows": rows('SELECT "model" FROM items WHERE %s AND model <> \'\' '
+                         'GROUP BY model HAVING COUNT(*) > 1' % live),
+            "hint": "同型号分批到货属正常；如果是重复导入，可用「清理重复记录」合并。"})
+        out.append({
+            "key": "cost", "title": "已出售但没记成本", "level": "info",
+            "rows": rows('SELECT DISTINCT s."code" FROM sales s '
+                         'LEFT JOIN items i ON i.id = s.item_id '
+                         'WHERE s.item_id <> 0 AND (i.cost IS NULL OR i.cost <= 0)'),
+            "hint": "这些商品的利润按售价全额计算；登记一次采购入库就会自动补上成本。"})
+        out.append({
+            "key": "lost", "title": "出售记录找不到对应商品", "level": "warn",
+            "rows": rows('SELECT DISTINCT "code" FROM sales WHERE item_id <> 0 '
+                         'AND item_id NOT IN (SELECT id FROM items)'),
+            "hint": "多半是商品被彻底删除过；出售记录本身还在，对账不受影响。"})
+        orphans = self.orphan_photos()
+        out.append({
+            "key": "photo", "title": "多余的照片文件", "level": "info",
+            "rows": ["%s %s（%d 张）" % ("商品" if o["kind"] == "item" else "手机",
+                                        o["code"], o["n"]) for o in orphans],
+            "size": sum(int(o.get("size") or 0) for o in orphans),
+            "hint": "截图里这些编号已经被彻底删除，照片还留在磁盘上，可点「清理」释放空间。"})
+        for r in out:
+            r["count"] = len(r["rows"])
+            r["samples"] = r["rows"][:8]
+        return out
 
     # ---------------------------------------------------------- 统计
     def stats(self, records):

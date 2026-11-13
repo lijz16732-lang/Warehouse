@@ -1,0 +1,2757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>仓管家</title>
+<style>
+/* ============================================================
+   设计令牌（v1.32.1 外观精修）
+   目的：把「随手写的一堆 px」收敛成一套规则——字号 5 档、间距 4 的倍数、
+   圆角 3 档、阴影 2 档。以后加界面只从这里取值，不再散落魔法数字。
+   ============================================================ */
+:root {
+  --accent:#2563eb; --accent-d:#1d4ed8; --accent-soft:#eaf1ff;
+  --bg:#f5f7fb; --fg:#16203a; --card:#ffffff;
+  --line:#e5eaf3; --line2:#d3dbe8; --line3:#eef2f8;
+  --muted:#8b95a7; --soft:#5b667a;
+  --th:#f7f9fc; --thf:#55617a;
+  --input:#ffffff; --seg:#eef2f8; --segOn:#ffffff;
+  --active:#eef4ff; --btnGray:#eef2f8; --btnGrayF:#4b566b;
+  --sold:#aab2c2; --ctline:#f0f3f8; --sheet:#ffffff;
+  --zebra:#fbfcfe; --danger:#dc3d43; --ok-bg:#e6f6ec; --ok-fg:#1f7a45;
+  --wait-bg:#fdf3e3; --wait-fg:#a86611;
+  --sh1:0 1px 2px rgba(20,32,60,.05);
+  --sh2:0 6px 18px rgba(20,32,60,.07);
+  --sh3:0 12px 32px rgba(20,32,60,.14);
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-pill:999px;
+  --fs-xs:11px; --fs-sm:12.5px; --fs-md:14px; --fs-lg:16px; --fs-xl:19px;
+}
+body.dark {
+  --accent:#5b95ff; --accent-d:#4a86f7; --accent-soft:#1b2740;
+  --bg:#0f131b; --fg:#e9edf5; --card:#171d28;
+  --line:#252d3b; --line2:#3a4457; --line3:#202734;
+  --muted:#7b8598; --soft:#a7b0c2;
+  --th:#1d2431; --thf:#a7b0c2;
+  --input:#141a24; --seg:#212936; --segOn:#2c3646;
+  --active:#1e2b45; --btnGray:#232b39; --btnGrayF:#c2cadb;
+  --sold:#586172; --ctline:#222a37; --sheet:#171d28;
+  --zebra:#1b222e; --danger:#e05561; --ok-bg:#16311f; --ok-fg:#5ed08a;
+  --wait-bg:#33260f; --wait-fg:#e0a44e;
+  --sh1:0 1px 2px rgba(0,0,0,.35);
+  --sh2:0 6px 18px rgba(0,0,0,.4);
+  --sh3:0 12px 32px rgba(0,0,0,.55);
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body { font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+       background:var(--bg); color:var(--fg); font-size:var(--fs-md);
+       height:100vh; display:flex; flex-direction:column; overflow:hidden;
+       -webkit-font-smoothing:antialiased;
+       /* 全局禁文字选中：长按是手势（多选等），不能让 WebView 弹复制/分享菜单。
+          只写容器真机不够（auto 会落到子元素重新解析），要全局 none + 输入框放行 */
+       user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+input, textarea { user-select:text; -webkit-user-select:text; }
+.hide { display:none !important; }
+input,select,textarea,button { font-family:inherit; font-size:var(--fs-md); }
+input,select,textarea { border:1px solid var(--line2); border-radius:var(--r-sm);
+                        padding:9px 12px; background:var(--input); color:var(--fg);
+                        width:100%; transition:border-color .15s, box-shadow .15s; }
+input:focus,select:focus,textarea:focus { outline:none; border-color:var(--accent);
+                        box-shadow:0 0 0 3px rgba(37,99,235,.14); }
+input::placeholder,textarea::placeholder { color:var(--muted); }
+button { border:0; border-radius:var(--r-sm); height:44px; padding:0 16px;
+         background:var(--accent); color:#fff; font-weight:600; font-size:var(--fs-md);
+         display:inline-flex; align-items:center; justify-content:center;
+         box-shadow:var(--sh1); transition:transform .08s, background .15s, opacity .15s; }
+button:active { transform:scale(.985); background:var(--accent-d); box-shadow:none; }
+button.gray { background:var(--btnGray); color:var(--btnGrayF); box-shadow:none; }
+button.gray:active { background:var(--line2); }
+button.danger { background:var(--danger); }
+button.small { height:32px; padding:0 12px; font-size:var(--fs-sm); font-weight:500;
+               border-radius:var(--r-sm); }
+button:disabled { opacity:.45; box-shadow:none; }
+
+/* 顶栏：与主色同源，加一层投影把内容和内容区拉开 */
+header { background:var(--accent); color:#fff; padding:12px 16px;
+         display:flex; align-items:center; gap:10px; flex:none; position:relative; z-index:5;
+         box-shadow:0 2px 10px rgba(37,99,235,.22); }
+header b { font-size:var(--fs-lg); font-weight:700; letter-spacing:.3px; flex:1;
+           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+header .badge { font-size:var(--fs-xs); font-weight:600; letter-spacing:.2px;
+                background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.35);
+                border-radius:var(--r-pill); padding:3px 10px; flex:none; }
+header .badge.rw { background:rgba(255,255,255,.92); color:#1a7f45; }
+header button { height:30px; padding:0 12px; font-size:var(--fs-sm); font-weight:600;
+                background:rgba(255,255,255,.18); box-shadow:none; flex:none; }
+header button:active { background:rgba(255,255,255,.3); }
+
+/* 底栏：文字导航靠「顶部指示条 + 字重」表达选中，比整块高亮干净 */
+nav { display:flex; background:var(--card); border-top:1px solid var(--line); flex:none;
+      padding:5px 0 calc(5px + env(safe-area-inset-bottom)); }
+nav div { flex:1; text-align:center; padding:5px 0 4px; color:var(--muted);
+          font-size:var(--fs-xs); font-weight:500; position:relative;
+          transition:color .15s; }
+nav div i { display:block; font-style:normal; font-size:19px; line-height:22px;
+            font-weight:400; margin-bottom:1px; }
+nav div::before { content:""; position:absolute; top:0; left:50%; transform:translateX(-50%) scaleX(0);
+                  width:22px; height:3px; border-radius:0 0 3px 3px; background:var(--accent);
+                  transition:transform .18s ease; }
+nav div.on { color:var(--accent); font-weight:700; }
+nav div.on i { font-weight:600; }
+nav div.on::before { transform:translateX(-50%) scaleX(1); }
+
+main { flex:1; overflow:auto; padding:14px; -webkit-overflow-scrolling:touch; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:var(--r-lg);
+        padding:16px; margin-bottom:14px; box-shadow:var(--sh1); }
+.card h3 { font-size:var(--fs-lg); font-weight:700; letter-spacing:.2px; margin-bottom:10px; }
+.card .hint { color:var(--muted); font-size:var(--fs-sm); margin-top:10px; line-height:1.7; }
+.frow { display:flex; gap:10px; align-items:center; }
+.fcol { flex:1; margin-bottom:9px; }
+.fcol label { display:block; font-size:var(--fs-sm); color:var(--soft);
+              margin-bottom:5px; font-weight:500; }
+/* 带「拍照识别」的标签行：按钮改成轻量蓝字链接感，不再挤成一坨灰块 */
+label.lbl-io { display:flex; align-items:center; }
+label.lbl-io button { margin-left:auto; height:26px; padding:0 10px;
+                      font-size:var(--fs-xs); font-weight:600;
+                      background:var(--accent-soft); color:var(--accent);
+                      border:0; box-shadow:none; }
+/* 分段 */
+.seg { display:flex; background:var(--seg); border-radius:var(--r-md); padding:3px;
+       margin:0 0 10px; }
+.seg div { flex:1; text-align:center; padding:7px 0; font-size:var(--fs-sm);
+           color:var(--soft); border-radius:var(--r-sm); font-weight:500;
+           transition:background .15s, color .15s; }
+.seg div.on { background:var(--segOn); color:var(--accent); font-weight:700;
+              box-shadow:var(--sh1); }
+/* 表格：容器限高自身滚动，th sticky 才能吸顶
+   （否则滚动发生在 #main 上，sticky 相对 tblwrap 永远不生效）
+   CSS 是兜底值，JS 会按实际空间精调（fitTbls） */
+.tblwrap { overflow:auto; max-height:calc(100vh - 250px); background:var(--card);
+           border:1px solid var(--line); border-radius:var(--r-lg); box-shadow:var(--sh1); }
+table { border-collapse:collapse; min-width:100%; }
+th { background:var(--th); color:var(--thf); font-size:var(--fs-xs); font-weight:700;
+     letter-spacing:.4px; padding:11px 12px; white-space:nowrap; position:sticky; top:0;
+     z-index:2; text-align:left; border-bottom:1px solid var(--line2); }
+td { padding:12px; border-bottom:1px solid var(--line3); font-size:13.5px;
+     white-space:nowrap; font-variant-numeric:tabular-nums; }
+/* 表格超出屏幕时横向滑动（列宽/文字保持原样，不截断）；上方给一条滑动提示 */
+.tblbox { position:relative; }
+/* 长按行是「进入多选」，必须彻底禁掉文字选中：真机 WebView 上 user-select
+   只写容器不够（auto 会落到 td 重新参与解析，系统照样弹复制/分享菜单并
+   抢走长按手势），要直接落到 th/td 上 */
+.tblwrap, .tblwrap th, .tblwrap td {
+  user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+/* 滑动提示：独立一行放在统计和表格之间，不悬浮、不盖表头 */
+.swhint { width:max-content; margin:0 auto 8px; font-size:var(--fs-xs); font-weight:600;
+          color:var(--accent); background:var(--accent-soft); border-radius:var(--r-pill);
+          padding:4px 11px; }
+body.dark .swhint { background:#1e2b45; color:#8fb4ff; }
+/* 长按多选：勾选圆圈列 + 选中行高亮 + 底部选择条 */
+td.ckbox { padding:12px 4px; text-align:center; color:var(--line2); font-size:17px; }
+tr.picked td { background:var(--accent-soft) !important; }
+tr.picked td.ckbox { color:var(--accent); font-weight:700; }
+.selbar { position:fixed; left:12px; right:12px; bottom:calc(72px + env(safe-area-inset-bottom));
+          z-index:9; display:flex; align-items:center; gap:8px; background:var(--card);
+          border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+          box-shadow:var(--sh3); }
+.selbar span { flex:1; text-align:center; font-size:var(--fs-sm); color:var(--soft); }
+tbody tr:nth-child(even) td { background:var(--zebra); }
+tbody tr:last-child td { border-bottom:0; }
+td:first-child { font-weight:600; color:var(--accent); }
+tr.sold td { color:var(--sold); }
+tr.sold td:first-child { color:var(--sold); }
+tr:active td { background:var(--active) !important; }
+/* 空状态：画一个虚线占位块，比一行灰字更像"设计过的" */
+.empty { text-align:center; color:var(--muted); padding:46px 16px; font-size:var(--fs-sm);
+         line-height:1.7; font-weight:400; }
+.empty::before { content:""; display:block; width:46px; height:46px; margin:0 auto 12px;
+                 border:2px dashed var(--line2); border-radius:14px; opacity:.8; }
+.searchrow { display:flex; gap:10px; margin-bottom:8px; }
+.searchrow input { flex:1; }
+.searchrow button { flex:none; padding:0 16px; }
+.stat { color:var(--muted); font-size:var(--fs-sm); margin:6px 2px 0; }
+.tag { display:inline-block; font-size:var(--fs-xs); font-weight:600; border-radius:var(--r-pill);
+       padding:3px 9px; margin-left:6px; }
+.tag.ok { background:var(--ok-bg); color:var(--ok-fg); }
+.tag.wait { background:var(--wait-bg); color:var(--wait-fg); }
+/* 快捷筛选 / 搜索历史 chips：与 seg 统一成一套语言 */
+.chips { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
+.chips span { font-size:var(--fs-sm); font-weight:500; padding:6px 12px;
+              border-radius:var(--r-pill); background:var(--card);
+              border:1px solid var(--line); color:var(--soft);
+              transition:background .15s, color .15s, border-color .15s; }
+.chips span.on { background:var(--accent); border-color:var(--accent); color:#fff;
+                 box-shadow:0 2px 8px rgba(37,99,235,.28); }
+/* 搜索历史尾部的「清空」：虚线灰字，不与历史词混淆 */
+.chips span.kwclr { border-style:dashed; color:var(--muted); }
+/* 搜索历史只占一行：不换行横向滑动，长词省略号（点词仍搜完整词） */
+#kwHist { flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }
+#kwHist span { flex:none; max-width:9em; overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
+/* 弹层 */
+#mask { position:fixed; inset:0; background:rgba(12,18,32,.48); z-index:20;
+        display:flex; align-items:flex-end; justify-content:center;
+        backdrop-filter:blur(2px); }
+#sheet { background:var(--sheet); border-radius:22px 22px 0 0; width:100%; max-height:88vh;
+         overflow:auto; padding:10px 18px 28px; box-shadow:var(--sh3); }
+#sheet::before { content:""; display:block; width:38px; height:4px; border-radius:2px;
+                 background:var(--line2); margin:0 auto 12px; }
+#sheet h3 { margin-bottom:14px; display:flex; align-items:center;
+            font-size:var(--fs-lg); font-weight:700; }
+#sheet h3 span { flex:1; }
+#sheet .btnrow { display:flex; gap:10px; margin-top:16px; }
+#sheet .btnrow button { flex:1; }
+#toast { position:fixed; left:50%; bottom:96px; transform:translateX(-50%);
+         background:rgba(18,24,38,.92); color:#fff; padding:11px 18px;
+         border-radius:var(--r-pill); font-size:var(--fs-sm); font-weight:500;
+         z-index:30; max-width:82vw; text-align:center; box-shadow:var(--sh3);
+         backdrop-filter:blur(6px); }
+/* 列题行 / 设置行 */
+.ctrow { display:flex; align-items:center; gap:10px; padding:8px 0;
+         border-bottom:1px solid var(--ctline); }
+.ctrow .def { flex:none; width:64px; font-size:var(--fs-sm); color:var(--muted); }
+.ctrow input { flex:1; padding:9px 11px; }
+.statline { font-size:var(--fs-sm); color:var(--soft); line-height:1.8; margin-top:10px; }
+/* 勾选行（表格列自定义） */
+.ckrow { display:flex; align-items:center; gap:10px; padding:11px 2px;
+         border-bottom:1px solid var(--ctline); font-size:var(--fs-md); color:var(--fg); }
+.ckrow input { width:auto; flex:none; }
+.ckrow.dis { color:var(--muted); }
+/* 照片（v1.25.0） */
+.phrow { display:flex; flex-wrap:wrap; gap:10px; }
+.phmark { width:34px; min-width:34px; max-width:34px; text-align:center;
+          font-size:var(--fs-md); padding:0 2px; white-space:nowrap; overflow:hidden; }
+.phthumb { width:74px; height:74px; border-radius:var(--r-md); object-fit:cover;
+           background:var(--seg); border:1px solid var(--line); cursor:pointer; }
+.phadd { width:74px; height:74px; border-radius:var(--r-md); border:1.5px dashed var(--line2);
+         background:none; color:var(--muted); font-size:26px; line-height:70px;
+         text-align:center; padding:0; box-shadow:none; }
+.phdel { position:absolute; margin:-26px 0 0 46px; width:26px; height:26px; border-radius:50%;
+         border:none; background:rgba(0,0,0,.58); color:#fff; font-size:14px; padding:0;
+         box-shadow:none; }
+.phbig { width:100%; max-height:56vh; object-fit:contain; border-radius:var(--r-md);
+         background:var(--seg); }
+.phcnt { text-align:center; font-size:var(--fs-sm); color:var(--muted); margin:8px 0; }
+/* 悬浮录入按钮：可拖动（touch-action:none 让拖动不被页面滚动抢走） */
+.fab { position:fixed; right:14px; bottom:calc(72px + env(safe-area-inset-bottom));
+       height:38px; padding:0 14px 0 12px; border-radius:var(--r-pill);
+       font-size:var(--fs-sm); font-weight:600; letter-spacing:.5px;
+       box-shadow:0 6px 16px rgba(37,99,235,.32); z-index:8; gap:4px;
+       touch-action:none; }
+.fab:active { transform:scale(.96); }
+/* 拖动中：不再做按下缩放，给一点放大+阴影，像被"拎起来" */
+.fab.drag { transform:scale(1.06); opacity:.94; transition:none;
+            box-shadow:0 10px 24px rgba(37,99,235,.45); }
+body.dark .fab { box-shadow:0 8px 22px rgba(0,0,0,.55); }
+/* 深色下顶栏用更深一档的蓝：浅蓝底 + 白字对比度不够（约 2.6:1） */
+body.dark header { background:var(--accent-d); box-shadow:0 2px 10px rgba(0,0,0,.45); }
+/* ---------- 设置页：分组 + 列表行 ----------
+   原来的问题是六张同样大小的卡片平铺，没有主次，表格列还占三屏。
+   现在按「连接 / 显示 / 数据」分三组，组内用列表行承载，箭头提示可点。 */
+.sec { margin-bottom:16px; }
+.sec + .sec { margin-top:24px; }
+.sec-t { font-size:var(--fs-sm); font-weight:600; letter-spacing:.8px;
+         color:var(--muted); margin:0 4px 8px; }
+.card.tight { padding:12px 16px; }
+.row { display:flex; align-items:center; gap:12px; padding:9px 0; }
+.row + .row { border-top:1px solid var(--line3); }
+.row > label { flex:none; width:76px; font-size:var(--fs-md); font-weight:500; color:var(--fg); }
+.row input { flex:1; min-width:0; }
+.row .seg { flex:1; margin:0; }
+.row-note { flex:1; font-size:var(--fs-sm); color:var(--muted); line-height:1.5; }
+.row-head { display:flex; align-items:center; gap:12px; padding:2px 0 10px; }
+.row-head > div:first-child { flex:1; min-width:0; }
+.row-t { font-size:var(--fs-lg); font-weight:700; letter-spacing:.2px; }
+.row-sub { font-size:var(--fs-sm); color:var(--muted); margin-top:4px; line-height:1.5; }
+.btnrow { display:flex; gap:10px; margin-top:12px; }
+.btnrow button { flex:1; }
+/* 行式按钮：整行可点、右侧箭头，比一排彩色块更像"设置" */
+.rowbtn { display:flex; width:100%; height:50px; padding:0 2px; background:none;
+          color:var(--fg); font-size:var(--fs-md); font-weight:500;
+          justify-content:flex-start; border-radius:0; box-shadow:none;
+          border-bottom:1px solid var(--line3); }
+.rowbtn::after { content:"\203A"; margin-left:auto; color:var(--muted);
+                 font-size:19px; line-height:1; }
+.rowbtn:active { background:var(--active); color:var(--accent); }
+/* 次要 / 危险操作：描边按钮，避免满屏实心色块 */
+.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent);
+         box-shadow:none; font-weight:600; }
+.ghost:active { background:var(--accent-soft); color:var(--accent-d); }
+.danger-ghost { background:transparent; color:var(--danger);
+                border:1px solid rgba(220,61,67,.45); box-shadow:none; font-weight:600; }
+.danger-ghost:active { background:rgba(220,61,67,.08); }
+/* 表格列：两列网格，一屏看完 */
+.colgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.colgrid .ckrow { border:1px solid var(--line); border-radius:10px; padding:11px 12px;
+                  font-size:var(--fs-sm); }
+.colgrid .ckrow input { accent-color:var(--accent); }
+/* :has() 要 Chrome 105+；老 WebView 不支持时靠 JS 打 .on 类兜底 */
+.colgrid .ckrow.on,
+.colgrid .ckrow:has(input:checked) { border-color:var(--accent); background:var(--active); }
+.colgrid .ckrow.dis { opacity:.55; }
+/* 无障碍：系统开了「减少动态效果」就关掉过渡 */
+@media (prefers-reduced-motion: reduce) {
+  * { transition:none !important; animation:none !important; }
+}
+/* ============================================================
+   v1.41 电脑端增强：统计卡 / 明细行 / 弹窗内表单
+   一律用设计令牌，深色模式自动跟随
+   ============================================================ */
+.kv { display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding:10px 0; border-bottom:1px solid var(--line3); font-size:var(--fs-md); }
+.kv:last-child { border-bottom:0; }
+.kv .k { color:var(--soft); font-size:var(--fs-sm); }
+.kv .v { font-weight:600; }
+.kv .v.bad { color:var(--danger); }
+.kv .v.ok { color:var(--ok-fg); }
+.statgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px; }
+.statcard { background:var(--card); border:1px solid var(--line); border-radius:var(--r-md);
+            padding:12px; box-shadow:var(--sh1); }
+.statcard .lb { font-size:var(--fs-xs); color:var(--muted); }
+.statcard .vv { font-size:var(--fs-xl); font-weight:700; margin-top:2px; letter-spacing:.3px; }
+.statcard .ss { font-size:var(--fs-xs); color:var(--muted); margin-top:3px; }
+.minibtn { height:32px; padding:0 12px; font-size:var(--fs-xs); border-radius:var(--r-sm);
+           box-shadow:none; font-weight:600; }
+.minibtn.gray { background:var(--btnGray); color:var(--btnGrayF); }
+.minibtn.danger { background:transparent; color:var(--danger);
+                  border:1px solid rgba(220,61,67,.45); }
+.fld { margin-top:12px; }
+.fld label { display:block; font-size:var(--fs-sm); color:var(--soft); margin-bottom:5px; }
+.fld input, .fld select { width:100%; height:42px; border:1px solid var(--line);
+                          border-radius:10px; padding:0 12px; font-size:var(--fs-md);
+                          background:var(--input); color:var(--fg); }
+.chips2 { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.chips2 button { height:34px; padding:0 12px; font-size:var(--fs-sm); font-weight:500;
+                 background:var(--btnGray); color:var(--btnGrayF); box-shadow:none; }
+.chips2 button.on { background:var(--accent); color:#fff; font-weight:600; }
+.strow2 { display:flex; align-items:center; gap:8px; padding:11px 0;
+          border-bottom:1px solid var(--line3); }
+.strow2:last-child { border-bottom:0; }
+.strow2 .sm { flex:1; min-width:0; }
+.strow2 .sm b { font-size:var(--fs-md); }
+.strow2 .sm span { display:block; font-size:var(--fs-xs); color:var(--muted); margin-top:2px; }
+.strow2 input { width:74px; height:36px; text-align:center; border:1px solid var(--line);
+                border-radius:8px; font-size:var(--fs-md); background:var(--input);
+                color:var(--fg); }
+.strow2 input.diff { border-color:#e8890c; background:rgba(232,137,12,.12); }
+.shlist { max-height:52vh; overflow-y:auto; margin-top:6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <b>仓管家</b>
+  <span class="badge" id="hPerm">本地模式</span>
+</header>
+
+<main id="main">
+  <!-- 库存 -->
+  <div id="pInv">
+    <div class="seg">
+      <div id="segLoc" class="on">手机库存</div>
+      <div id="segPc">电脑库存</div>
+    </div>
+    <div class="searchrow"><input id="inKw" placeholder="搜编号 / 品牌 / 型号 / 货架 / 备注">
+      <button id="btnKw">搜索</button></div>
+    <div class="chips" id="fltRow"></div>
+    <div class="chips hide" id="kwHist"></div>
+    <div class="stat" id="invStat"></div>
+    <!-- 列超出屏幕时提示可左右滑动，滑过之后自动消失 -->
+    <div id="swHint" class="swhint hide">↔ 左右滑动看更多列</div>
+    <div class="tblbox">
+      <div class="tblwrap"><table id="tInv"><thead></thead><tbody></tbody></table></div>
+    </div>
+    <!-- 悬浮「＋ 录入」：录入是最高频动作，放拇指可及处；随本页签一起隐藏 -->
+    <button id="fabAdd" class="fab" type="button">＋ 录入</button>
+    <!-- 长按行进入多选后的操作条 -->
+    <div id="selBar" class="selbar hide">
+      <button id="btnSelAll" class="gray small">全选</button>
+      <button id="btnSelDel" class="danger small">删除</button>
+      <span id="selCnt">已选 0 项</span>
+      <button id="btnSelCancel" class="gray small">取消</button>
+    </div>
+  </div>
+  <!-- 录入 -->
+  <div id="pAdd" class="hide">
+    <div class="card">
+      <h3>新增入库（编号自动生成）</h3>
+      <div class="frow">
+        <div class="fcol"><label>品牌</label><input id="aBrand"></div>
+        <div class="fcol"><label>品类</label><input id="aCate"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label class="lbl-io">型号<button type="button" class="gray small" id="btnScanModel">拍照识别</button></label><input id="aModel"></div>
+        <div class="fcol"><label>成色</label><input id="aCond"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label>单价</label><input id="aPrice" inputmode="decimal"></div>
+        <div class="fcol"><label>数量</label><input id="aQty" inputmode="numeric" value="1"></div>
+      </div>
+      <div class="fcol"><label>货架</label><input id="aShelf"></div>
+      <div class="fcol"><label>备注</label><textarea id="aRemark" rows="2"></textarea></div>
+      <div class="fcol"><label>照片（拍照 / 相册，最多 10 张）</label>
+        <div id="addPhRow" class="phrow"></div>
+        <div class="phcnt" id="addPhCnt">0/10 张</div></div>
+      <button id="btnAdd" style="width:100%">保存到手机</button>
+      <div class="hint">数据存在手机里，离线可用；开启「数据共享到电脑端」后会自动/手动同步到电脑。</div>
+    </div>
+  </div>
+  <!-- 出售 -->
+  <div id="pSell" class="hide">
+    <div class="card">
+      <h3>登记出售（手机库存）</h3>
+      <div class="fcol"><label>商品编号</label><input id="sCode" autocapitalize="characters" placeholder="手机库存里的编号"></div>
+      <div class="frow">
+        <div class="fcol"><label>数量</label><input id="sQty" inputmode="numeric" value="1"></div>
+        <div class="fcol"><label>单价</label><input id="sPrice" inputmode="decimal" placeholder="留空按原价"></div>
+      </div>
+      <div class="frow">
+        <div class="fcol"><label>买家</label><input id="sBuyer"></div>
+        <div class="fcol"><label>备注</label><input id="sRemark"></div>
+      </div>
+      <button id="btnSell" style="width:100%">登记出售</button>
+      <div class="hint" id="sellMsg"></div>
+    </div>
+  </div>
+  <!-- 记录：手机出售 / 电脑出售 / 退货 / 统计（v1.41 合并成一页，顶部切换） -->
+  <div id="pRec" class="hide">
+    <div class="seg" id="recSeg">
+      <div data-r="loc" class="on">出售</div>
+      <div data-r="pc">电脑</div>
+      <div data-r="ret">退货</div>
+      <div data-r="sum">统计</div>
+    </div>
+    <div id="recLoc">
+      <div class="stat" id="recStat" style="margin:0 2px 8px">手机上的出售记录；「待同步」的会在连接电脑后自动上传。</div>
+      <div class="tblwrap"><table id="tRec"><thead></thead><tbody></tbody></table></div>
+      <!-- 出售记录长按多选操作条（与库存页同款交互） -->
+      <div id="recSelBar" class="selbar hide">
+        <button id="btnRSelAll" class="gray small">全选</button>
+        <button id="btnRSelDel" class="danger small">删除</button>
+        <span id="rSelCnt">已选 0 项</span>
+        <button id="btnRSelCancel" class="gray small">取消</button>
+      </div>
+    </div>
+    <div id="recPc" class="hide">
+      <div class="searchrow"><input id="pcKw" placeholder="搜编号 / 买家 / 备注">
+        <button id="btnPcKw">搜索</button></div>
+      <div class="stat" id="pcRecStat" style="margin:0 2px 8px"></div>
+      <div class="tblwrap"><table id="tPc"><thead></thead><tbody></tbody></table></div>
+    </div>
+    <div id="recRet" class="hide">
+      <div class="stat" id="retStat" style="margin:0 2px 8px"></div>
+      <div class="tblwrap"><table id="tRet"><thead></thead><tbody></tbody></table></div>
+    </div>
+    <div id="recSum" class="hide"></div>
+  </div>
+  <!-- 设置 -->
+  <div id="pSet" class="hide">
+
+    <div class="sec">
+      <div class="sec-t">连接到电脑</div>
+      <div class="card">
+        <div class="hint" style="margin:0 0 12px">手机数据照常存在手机里；开启后录入 / 出售会直接同步到电脑「手机数据」区（电脑端需先「开启共享」）。</div>
+        <button id="btnQrConn" class="ghost" style="width:100%;margin-bottom:2px">扫码连接电脑</button>
+        <div class="row">
+          <label for="shBase">电脑地址</label>
+          <input id="shBase" placeholder="192.168.1.5:8765" autocapitalize="off">
+        </div>
+        <div class="row">
+          <label for="shCode">连接码</label>
+          <input id="shCode" type="password" inputmode="numeric" placeholder="电脑上的 6 位数字">
+        </div>
+        <div class="btnrow">
+          <button id="btnShareConn">连接电脑</button>
+          <button id="btnShareOff" class="gray">断开</button>
+        </div>
+        <div class="statline" id="shareStat"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button id="btnSync" class="gray">立即同步</button>
+          <button id="btnAuto" class="gray">自动同步：关</button>
+        </div>
+        <div class="stat" id="syncStat"></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">显示与偏好</div>
+      <div class="card tight">
+        <div class="row">
+          <label for="inPrefix">编号前缀</label>
+          <input id="inPrefix" placeholder="APP">
+          <button id="btnPrefix" class="gray small">保存</button>
+        </div>
+        <div class="row">
+          <label>外观</label>
+          <div class="seg">
+            <div id="thLight">浅色</div>
+            <div id="thDark">深色</div>
+            <div id="thAuto">跟随系统</div>
+          </div>
+        </div>
+        <div class="stat" id="prefixStat"></div>
+      </div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">库存表格列</div>
+            <div class="row-sub">勾选要在库存表里显示的列，编号始终显示</div>
+          </div>
+          <button id="btnColReset" class="gray small">恢复默认</button>
+        </div>
+        <div id="colList" class="colgrid"></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">电脑端工具</div>
+      <div class="card tight">
+        <button id="btnTrash" class="rowbtn">回收站<span class="row-sub" id="trashTip"></span></button>
+        <button id="btnStocktake" class="rowbtn">盘点单<span class="row-sub" id="stTip"></span></button>
+        <div class="hint">需要连接电脑。删除的商品先进回收站，30 天内容可恢复；盘点单用来核对账面与实盘数量。</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-t">数据与隐私</div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">数据管理</div>
+            <div class="row-sub" id="dataStat"></div>
+          </div>
+        </div>
+        <div class="btnrow">
+          <button id="btnExport" class="gray">导出全部数据</button>
+          <button id="btnWipe" class="danger-ghost">清空手机数据</button>
+        </div>
+        <div class="hint">导出为 JSON 备份，可存到电脑或转发给自己；清空只影响手机。</div>
+      </div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
+            <div class="row-t">隐私</div>
+            <div class="row-sub" id="legalStat">隐私政策</div>
+          </div>
+        </div>
+        <button id="btnPrivacy" class="rowbtn">隐私政策</button>
+        <button id="btnTerms" class="rowbtn">用户协议</button>
+        <button id="btnInfoList" class="rowbtn">个人信息收集使用清单</button>
+        <div class="row">
+          <label>启动验证</label>
+          <div class="row-note">用手机锁屏密码验证身份</div>
+          <button id="btnLock" class="gray small">关</button>
+        </div>
+        <button id="btnWithdraw" class="danger-ghost" style="width:100%;margin-top:10px">撤回同意并清除数据</button>
+        <div class="hint">撤回后本机数据会被删除并退出应用，撤回前建议先导出备份。</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<nav>
+  <div data-t="inv" class="on"><i>▦</i><span>库存</span></div>
+  <div data-t="add"><i>✚</i><span>录入</span></div>
+  <div data-t="sell"><i>¥</i><span>出售</span></div>
+  <div data-t="rec"><i>☰</i><span>记录</span></div>
+  <div data-t="set"><i>⚙</i><span>设置</span></div>
+</nav>
+
+<!-- 编辑商品 -->
+<div id="mask" class="hide">
+  <div id="sheet">
+    <h3><span id="shTitle">修改商品</span><button class="gray small" id="shClose">关闭</button></h3>
+    <div id="shBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="hide"></div>
+
+<script>
+'use strict';
+var $ = function (id) { return document.getElementById(id); };
+var LS = window.localStorage;
+var base = '';                        // 电脑地址（共享用）
+var titles = {};                      // 电脑端列题
+var curItem = null;                   // 正在编辑的本地记录
+var invView = 'loc';                  // loc=手机库存 pc=电脑库存
+
+/* ================= 本地数据库 ================= */
+var DEF_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
+function blankDB() {
+  return { items: [], sales: [], seq: 1, prefix: 'APP',
+           theme: 'auto', locCols: DEF_COLS.slice(), kwHist: [],
+           share: { base: '', code: '', token: '', auto: 0, last: '' } };
+}
+var DB = blankDB();
+function loadDB() {
+  try {
+    var raw = LS.getItem('cgm_db');
+    if (raw) DB = JSON.parse(raw);
+  } catch (e) { DB = blankDB(); }
+  if (!DB.share) DB.share = blankDB().share;
+  if (!DB.theme) DB.theme = 'auto';                      // 旧版本数据补默认
+  if (!DB.locCols || !DB.locCols.length) DB.locCols = DEF_COLS.slice();
+  if (!DB.kwHist) DB.kwHist = [];
+}
+function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
+
+/* ================= 照片（v1.25.0） =================
+   每件商品最多 10 张；照片按 lid 存在独立 localStorage 键里（cgm_ph_<lid>），
+   不跟 cgm_db 一起序列化，避免每次保存都搬运几百 KB 的图片数据。
+   每张 {n:名字, d:dataURL, s:是否已同步到电脑}；连上电脑后自动补传 s=0 的。 */
+var PH_MAX = 10;
+/* 页面脚本出错直接弹出来（WebView 无控制台，静默失败最难排查） */
+window.onerror = function (msg) {
+  try { toast('脚本错误：' + msg); } catch (e) {}
+};
+function phKey(lid) { return 'cgm_ph_' + lid; }
+function getPh(lid) {
+  try { return JSON.parse(LS.getItem(phKey(lid)) || '[]') || []; }
+  catch (e) { return []; }
+}
+function setPh(lid, arr) {
+  try { LS.setItem(phKey(lid), JSON.stringify(arr)); return true; }
+  catch (e) { toast('手机存储空间不足，照片没保存上（可删几张旧照片）'); return false; }
+}
+function delPh(lid) { LS.removeItem(phKey(lid)); }
+function phNewName() {
+  return 'P' + Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36);
+}
+function compressImg(file, cb) {
+  if (file && file.durl) { cb(file.durl); return; }   // 原生桥已压缩好的 dataURL 直接过
+  var fr = new FileReader();
+  fr.onerror = function () {
+    toast('有一张照片读取失败，已跳过');
+    cb(null);
+  };
+  fr.onload = function () {
+    var img = new Image();
+    img.onerror = function () {
+      toast('有一张照片格式无法识别，已跳过');
+      cb(null);
+    };
+    img.onload = function () {
+      var m = 1024, w = img.width || 800, h = img.height || 600;
+      if (Math.max(w, h) > m) {
+        var r = m / Math.max(w, h);
+        w = Math.max(1, Math.round(w * r)); h = Math.max(1, Math.round(h * r));
+      }
+      var c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      cb(c.toDataURL('image/jpeg', 0.6));
+    };
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+var phInput = null;
+/* 拉起系统选择器（拍照 / 相册，accept=image/* 由系统决定），把选中的文件交给 cb */
+function pickImageFiles(cb) {
+  /* App 内优先走原生桥：原生完成「拍照/相册→权限→读取→压缩」，直接回 base64，
+     不依赖 WebView 的 <input type=file> 回传（部分机型会丢失结果，照片永远到不了页面） */
+  if (window.AndroidPhotos && AndroidPhotos.available && AndroidPhotos.available()) {
+    var b64s = [];
+    try { b64s = JSON.parse(AndroidPhotos.pick() || '[]'); } catch (e) { b64s = []; }
+    if (!b64s.length) { toast('没有获取到照片，请重试'); cb([]); return; }
+    toast('已获取 ' + b64s.length + ' 张照片');
+    cb(b64s.map(function (d) { return { durl: d }; }));
+    return;
+  }
+  if (!phInput) {
+    phInput = document.createElement('input');
+    phInput.type = 'file'; phInput.accept = 'image/*'; phInput.multiple = true;
+    phInput.style.display = 'none';
+    document.body.appendChild(phInput);
+  }
+  phInput.onchange = function () {
+    var fs = Array.prototype.slice.call(phInput.files || []);
+    phInput.value = '';
+    if (!fs.length) toast('没有获取到照片，请重试');
+    cb(fs);
+  };
+  phInput.click();
+}
+function pickPhotos(lid, cb) {
+  pickImageFiles(function (fs) {
+    if (!fs.length) return;
+    var arr = getPh(lid);
+    var done = 0, added = 0, full = arr.length >= PH_MAX;
+    fs.forEach(function (f) {
+      compressImg(f, function (durl) {
+        done += 1;
+        if (durl && arr.length < PH_MAX) { arr.push({ n: phNewName(), d: durl, s: 0 }); added += 1; }
+        if (done === fs.length) {
+          if (!added && full) { toast('每件商品最多 ' + PH_MAX + ' 张照片'); return; }
+          if (setPh(lid, arr) && added && cb) cb(added);
+        }
+      });
+    });
+  });
+}
+/* ---------- 录入页照片（还没生成编号，先暂存 addPhBuf，保存后落到该记录名下） ---------- */
+var addPhBuf = [];
+function renderAddPh() {
+  var c = $('addPhRow'); if (!c) return;
+  c.innerHTML = '';
+  addPhBuf.forEach(function (ph, i) {
+    var im = document.createElement('img');
+    im.className = 'phthumb'; im.src = ph.d;
+    im.onclick = function () {
+      askConfirm('删除这张照片？', '删除', function () {
+        addPhBuf.splice(i, 1); renderAddPh();
+      });
+    };
+    c.appendChild(im);
+  });
+  if (addPhBuf.length < PH_MAX) {
+    var b = document.createElement('button');
+    b.className = 'phadd'; b.textContent = '+';
+    b.onclick = function () {
+      pickImageFiles(function (fs) {
+        if (!fs.length) return;
+        var done = 0;
+        fs.forEach(function (f) {
+          compressImg(f, function (durl) {
+            done += 1;
+            if (durl && addPhBuf.length < PH_MAX) {
+              addPhBuf.push({ n: phNewName(), d: durl, s: 0 });
+            }
+            if (done === fs.length) {
+              if (addPhBuf.length >= PH_MAX) toast('每条记录最多 ' + PH_MAX + ' 张照片');
+              renderAddPh();
+            }
+          });
+        });
+      });
+    };
+    c.appendChild(b);
+  }
+  var tip = $('addPhCnt');
+  if (tip) tip.textContent = addPhBuf.length + '/' + PH_MAX + ' 张';
+}
+function itemByLid(lid) {
+  for (var i = 0; i < DB.items.length; i += 1)
+    if (DB.items[i].lid === lid) return DB.items[i];
+  return null;
+}
+function nextCode() {
+  var p = (DB.prefix || 'APP').replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '') || 'APP';
+  var c = p + '-' + ('00000' + DB.seq).slice(-5);
+  DB.seq += 1;
+  return c;
+}
+function pendingCount() {
+  var n = 0;
+  DB.items.forEach(function (it) { if (it.dirty) n += 1; });
+  DB.sales.forEach(function (s) { if (s.dirty) n += 1; });
+  return n;
+}
+function nowStr() {
+  var d = new Date(), p2 = function (x) { return ('0' + x).slice(-2); };
+  return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) +
+         ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+}
+function toast(msg, ms) {
+  var t = $('toast'); t.textContent = msg; t.classList.remove('hide');
+  clearTimeout(t._h); t._h = setTimeout(function () { t.classList.add('hide'); }, ms || 2600);
+}
+
+/* ================= 确认弹层 ================= */
+var confirmCb = null;
+function askConfirm(msg, okText, cb) {
+  $('shTitle').textContent = '请确认';
+  var b = $('shBody');
+  b.innerHTML = '';
+  var p = document.createElement('div');
+  p.style.cssText = 'font-size:14px;line-height:1.7;color:var(--soft)';
+  p.textContent = msg;
+  b.appendChild(p);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var no = document.createElement('button'); no.className = 'gray'; no.textContent = '取消';
+  var yes = document.createElement('button'); yes.className = 'danger'; yes.textContent = okText || '确定';
+  no.onclick = function () { $('mask').classList.add('hide'); confirmCb = null; };
+  yes.onclick = function () { $('mask').classList.add('hide'); if (confirmCb) confirmCb(); confirmCb = null; };
+  confirmCb = cb;
+  row.appendChild(no); row.appendChild(yes); b.appendChild(row);
+  $('mask').classList.remove('hide');
+}
+
+/* ================= 电脑接口（XHR + X-MToken） ================= */
+function api(method, path, body) {
+  return new Promise(function (resolve, reject) {
+    var x = new XMLHttpRequest();
+    x.open(method, base + path, true);
+    x.setRequestHeader('X-MToken', DB.share.token || '');
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      var j = {};
+      try { j = JSON.parse(x.responseText); } catch (e2) {}
+      if (x.status === 401 && j.need_login) { dropShare('连接已失效，请重新连接电脑'); reject(new Error('need_login')); return; }
+      if (x.status === 0) { reject(new Error('连不上电脑（检查共享是否开启、同一 WiFi）')); return; }
+      if (x.status >= 400 || j.ok === false) { reject(new Error(j.error || ('请求失败 ' + x.status))); return; }
+      resolve(j);
+    };
+    if (body === undefined) x.send();
+    else { x.setRequestHeader('Content-Type', 'application/json'); x.send(JSON.stringify(body)); }
+  });
+}
+function dropShare(msg) {
+  DB.share.token = '';
+  saveDB(); refreshHead();
+  if (msg) toast(msg);
+}
+/* 只允许局域网地址：10.x / 172.16-31.x / 192.168.x / 127.x / localhost / 单标签主机名。
+   与服务端 NetGuard 一致，防止把库存数据填到公网地址上发出去。
+   注意：本页脚本不用正则反斜杠，避免被 HTML 转义吃掉。 */
+function isLanBase(v) {
+  var h = String(v || '').replace(/^https?:\/\//, '');
+  var cut = h.length, i = h.indexOf('/');
+  if (i >= 0 && i < cut) cut = i;
+  i = h.indexOf('?');
+  if (i >= 0 && i < cut) cut = i;
+  h = h.slice(0, cut);
+  i = h.indexOf(':');
+  if (i >= 0) h = h.slice(0, i);
+  h = h.toLowerCase();
+  if (!h) return false;
+  if (h === 'localhost') return true;
+  var p = h.split('.');
+  if (p.length === 1) return true;                 // my-pc、desktop
+  if (p.length === 4) {
+    var a = parseInt(p[0], 10), b = parseInt(p[1], 10);
+    if (isNaN(a) || isNaN(b)) return false;
+    if (a === 10 || a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  return h.slice(-6) === '.local' || h.slice(-4) === '.lan' || h.slice(-5) === '.home';
+}
+function normBase(v) {
+  v = (v || '').trim();
+  if (!v) return '';
+  if (v.indexOf('http') !== 0) v = 'http://' + v;
+  v = v.replace(/\/+$/, '');
+  v = v.replace(/\/m(\/)?$/, '');
+  return v;
+}
+function refreshHead() {
+  var conn = !!DB.share.token;
+  $('hPerm').textContent = conn ? '已连接电脑' : '本地模式';
+  $('hPerm').className = 'badge' + (conn ? ' rw' : '');
+}
+
+/* 连接电脑（手填 / 扫二维码共用）：thenSync=true 时连上就把待同步数据推上去 */
+function connectTo(b, code, thenSync) {
+  b = normBase(b);
+  code = (code || '').trim();
+  if (!b) { toast('请填写电脑地址'); return; }
+  if (!isLanBase(b)) {
+    toast('只能连接局域网内的电脑（如 192.168.1.5），不支持公网地址');
+    return;
+  }
+  if (!code) { toast('请填写连接码'); return; }
+  base = b;
+  $('btnShareConn').disabled = true;
+  var x = new XMLHttpRequest();
+  x.open('POST', b + '/m/login', true);
+  x.setRequestHeader('Content-Type', 'application/json');
+  x.onreadystatechange = function () {
+    if (x.readyState !== 4) return;
+    $('btnShareConn').disabled = false;
+    var j = {};
+    try { j = JSON.parse(x.responseText); } catch (e2) {}
+    if (x.status === 0) { toast('连不上电脑（检查是否已开启共享、同一 WiFi）'); return; }
+    if (!j.ok) { toast(j.error || '连接失败'); return; }
+    DB.share.base = b; DB.share.token = j.token || '';
+    DB.share.code = '';          /* 连接码是凭据，只本次会话用，不写进本地存储 */
+    saveDB();
+    if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
+    $('shBase').value = b;
+    $('shCode').value = code;
+    refreshHead(); renderShare(); renderSync();
+    toast('已连接电脑');
+    api('GET', '/m/api/whoami').then(function (w) {
+      refreshHead(); renderShare(); renderSync();
+      CAN_WRITE = !!w.can_write; renderTools();
+      toast('已连接：' + (w.warehouse || '电脑端'));
+      if (thenSync) {
+        // 连上后不自动上传：待同步数保留，由用户点「立即同步到电脑」决定
+        var n = pendingCount();
+        if (n) { toast('已连接 · 待同步 ' + n + ' 条，点「立即同步到电脑」上传'); }
+        else { toast('已连接（手机数据已全部同步过）'); }
+        renderSync();
+      }
+    }).catch(function () { refreshHead(); renderShare(); renderSync(); });
+  };
+  x.send(JSON.stringify({ code: code, app: 1 }));
+}
+$('btnShareConn').onclick = function () {
+  connectTo($('shBase').value, $('shCode').value, false);
+};
+
+/* 扫电脑二维码：按钮 → 原生扫码 → __qrResult 回填并自动连接 + 同步一次 */
+$('btnQrConn').onclick = function () {
+  if (!window.AndroidOcr || !window.AndroidOcr.scanQr) {
+    toast('扫码需要新版 App，请先安装最新版');
+    return;
+  }
+  window.AndroidOcr.scanQr();
+};
+window.__qrResult = function (text) {
+  var info = parseQr(text);
+  if (!info) { toast('这不是仓管家的连接二维码'); return; }
+  if (!info.code) { toast('二维码里没有连接码，请扫电脑端「手机访问」里的二维码'); return; }
+  $('shBase').value = info.base;
+  $('shCode').value = info.code;
+  toast('识别成功，正在连接…');
+  connectTo(info.base, info.code, true);
+};
+/* 二维码内容（电脑端生成）：http://192.168.1.5:8765/m#c=123456
+   兼容 ?c= / ?code= / &code= 几种写法（不用正则：页面里不能出现反斜杠） */
+function parseQr(text) {
+  if (!text) return null;
+  var s = String(text).trim();
+  var at = s.indexOf('http://');
+  if (at < 0) at = s.indexOf('https://');
+  if (at < 0) return null;
+  var rest = s.slice(at);
+  var cut = rest.length;
+  var h = rest.indexOf('#');
+  var q = rest.indexOf('?');
+  if (h >= 0 && h < cut) cut = h;
+  if (q >= 0 && q < cut) cut = q;
+  var base = normBase(rest.slice(0, cut));
+  if (!base) return null;
+  var tail = rest.slice(cut);
+  var code = '';
+  var names = ['c=', 'code='];
+  for (var i = 0; i < names.length && !code; i++) {
+    var p = tail.indexOf(names[i]);
+    if (p < 0) continue;
+    var v = tail.slice(p + names[i].length);
+    var keep = '';
+    for (var j = 0; j < v.length; j++) {
+      var ch = v.charAt(j);
+      if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z')
+          || (ch >= 'A' && ch <= 'Z')) keep += ch;
+      else break;
+    }
+    code = keep;
+  }
+  return { base: base, code: code };
+}
+$('btnShareOff').onclick = function () {
+  if (DB.share.token) api('POST', '/m/logout').catch(function () {});
+  DB.share.token = '';
+  CAN_WRITE = false;
+  saveDB(); refreshHead(); renderShare(); renderSync(); renderTools();
+  toast('已断开（手机数据不受影响）');
+};
+
+/* ================= 同步到电脑 =================
+   手机数据同步进电脑端「手机数据」区（独立存放，不追加主库存）。
+   /m/api/m_item 按手机本地 id 覆盖保存商品；/m/api/m_sale 保存出售记录（幂等）。
+   只写独立的手机数据表、不碰主库存，所以登录后直接同步，不需要申请录入。 */
+function pushItem(it) {
+  return api('POST', '/m/api/m_item', {
+    lid: it.lid, code: it.code || '',
+    brand: it.brand || '', category: it.category || '', model: it.model || '',
+    condition: it.condition || '', price: it.price || 0, qty: it.qty || 0,
+    shelf: it.shelf || '', listed: it.listed === 0 ? 0 : 1,
+    remark: it.remark || '', sold_out: it.sold_out ? 1 : 0
+  }).then(function () { it.dirty = 0; saveDB(); });
+}
+function pushSale(s) {
+  var it = itemByLid(s.lidRef);
+  return api('POST', '/m/api/m_sale', {
+    lid: s.lid, item_lid: s.lidRef || 0, code: (it && it.code) || s.code || '',
+    brand: s.brand || (it && it.brand) || '', category: (it && it.category) || '',
+    model: s.model || (it && it.model) || '',
+    qty: s.qty, price: s.price, total: s.total || 0,
+    buyer: s.buyer || '', sale_date: s.sale_date || nowStr(),
+    out_type: s.out_type || '出售', remark: s.remark || ''
+  }).then(function () { s.dirty = 0; saveDB(); });
+}
+/* 商品记录同步成功后，把它还没上传过的照片补传到电脑「手机数据」区。
+   只挑 s=0 的传，按商品逐张串行；prog(done,total) 用于显示上传进度；
+   一条失败不影响后面的照片（下次同步自动重试）。 */
+function pushPhotos(prog) {
+  var list = [];
+  DB.items.forEach(function (it) {
+    if (it.dirty || !it.code) return;      // 记录本身没同步成功前先不传照片
+    var arr = getPh(it.lid);               // 同一商品共用一次解析的数组（s 标记要写回）
+    arr.forEach(function (ph) { if (!ph.s) list.push({ arr: arr, ph: ph, lid: it.lid, code: it.code }); });
+  });
+  var done = 0, fail = 0;
+  var p = Promise.resolve();
+  list.forEach(function (o) {
+    p = p.then(function () {
+      done += 1;
+      if (prog) prog(done, list.length);
+      return api('POST', '/m/api/photo_add', {
+        kind: 'phone', code: o.code, name: o.ph.n + '.jpg',
+        data: o.ph.d.split(',')[1]
+      });
+    }).then(function () { o.ph.s = 1; setPh(o.lid, o.arr); })
+      .catch(function () {
+        fail += 1;                          // 不中断：下次同步自动重试
+      });
+  });
+  return p.then(function () { return { ok: list.length - fail, fail: fail }; });
+}
+function pendingPhotos() {
+  var n = 0;
+  DB.items.forEach(function (it) {
+    if (it.dirty) return;
+    var arr = getPh(it.lid);
+    arr.forEach(function (ph) { if (!ph.s) n += 1; });
+  });
+  return n;
+}
+/* full=true：全量推送（不看是否待同步），点「立即同步」用它 → 任何时候都能同步，
+   不需要先在数据里点保存；/m/api/m_item、m_sale 按手机 lid 幂等覆盖，重复同步安全。 */
+function syncAll(manual, full) {
+  if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
+  var items = DB.items.filter(function (it) { return full ? true : it.dirty; });
+  var sales = DB.sales.filter(function (s) { return full ? true : s.dirty; });
+  var phN = pendingPhotos();
+  if (!items.length && !sales.length && !phN) {
+    if (manual) toast('手机里还没有数据，先在「录入」里添加');
+    renderSync(); return Promise.resolve();
+  }
+  var p = Promise.resolve();
+  items.forEach(function (it) {
+    p = p.then(function () { return pushItem(it); });
+  });
+  sales.forEach(function (s) {
+    p = p.then(function () { return pushSale(s); });
+  });
+  return p.then(function () { return pushPhotos(function (done, total) {
+    if (total) $('syncStat').textContent = '正在上传照片 ' + done + '/' + total + '…';
+  }); }).then(function (phRes) {
+    DB.share.last = nowStr();
+    saveDB(); renderSync(); refreshHead();
+    if (manual) {
+      var n = items.length + sales.length;
+      var phUploaded = phRes && phRes.ok, phFail = phRes && phRes.fail;
+      if (phFail) {
+        toast('同步完成：记录 ' + n + ' 条；照片 ' + phFail + ' 张上传失败'
+              + '（检查电脑连接，下次同步自动重试）');
+      } else if (phUploaded) {
+        toast('同步完成：记录 ' + n + ' 条，照片 ' + phUploaded + ' 张已上传');
+      } else if (n) {
+        toast('同步完成：已上传 ' + n + ' 条');
+      } else {
+        toast('照片已全部同步到电脑');
+      }
+    } else if (phFail) {
+      toast('有 ' + phFail + ' 张照片上传失败，下次同步自动重试');
+    }
+  }).catch(function (e) {
+    renderSync();
+    if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
+  });
+}
+$('btnSync').onclick = function () { syncAll(true, true); };
+$('btnAuto').onclick = function () {
+  DB.share.auto = DB.share.auto ? 0 : 1;
+  saveDB(); renderShare(); renderSync();
+  toast(DB.share.auto ? '已开启自动同步（每次改动后自动上传）' : '已关闭自动同步');
+};
+function autoSync() {
+  /* 待同步的不只是记录：给已同步过的记录补拍的照片也要能触发自动上传 */
+  if (DB.share.auto && DB.share.token &&
+      (pendingCount() || pendingPhotos())) syncAll(false);
+}
+function renderShare() {
+  $('shBase').value = DB.share.base || $('shBase').value;
+  $('btnAuto').textContent = '自动同步：' + (DB.share.auto ? '开' : '关');
+  $('btnAuto').className = DB.share.auto ? '' : 'gray';
+  $('shareStat').innerHTML = '';
+  var line = $('shareStat');
+  line.textContent = DB.share.token
+    ? '已连接：' + (DB.share.base || '') + '（数据直接同步到电脑「手机数据」）'
+    : '未连接。连接后手机数据可同步到电脑。';
+}
+function renderSync() {
+  var n = pendingCount();
+  $('syncStat').textContent = (n ? '待同步 ' + n + ' 条' : '已全部同步') +
+    ' · 手机共 ' + (DB.items.length + DB.sales.length) + ' 条' +
+    (DB.share.last ? ' · 上次同步 ' + DB.share.last : '') +
+    (n && !DB.share.token ? '（连接电脑后同步）' : '');
+  /* 只要已连接就能随时点同步（没有待同步数据时点了会提示，不置灰） */
+  $('btnSync').disabled = !DB.share.token;
+}
+
+/* ================= 库存 ================= */
+var LOC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
+var PC_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
+
+/* ================= 快捷筛选（手机库存） ================= */
+var FLTS = [['all', '全部'], ['sale', '在售'], ['sold', '已售完'], ['dirty', '待同步']];
+var curFlt = 'all';
+function renderFlts() {
+  var box = $('fltRow'); box.innerHTML = '';
+  FLTS.forEach(function (p) {
+    var el = document.createElement('span');
+    el.textContent = p[1];
+    if (curFlt === p[0]) el.className = 'on';
+    el.onclick = function () { curFlt = p[0]; renderFlts(); refreshInv(); };
+    box.appendChild(el);
+  });
+}
+
+/* ================= 搜索历史（最近 8 条，点一下直接搜） ================= */
+function pushKwHist(kw) {
+  kw = (kw || '').trim();
+  if (!kw) return;
+  var i = DB.kwHist.indexOf(kw);
+  if (i >= 0) DB.kwHist.splice(i, 1);
+  DB.kwHist.unshift(kw);
+  if (DB.kwHist.length > 8) DB.kwHist.length = 8;
+  saveDB(); renderKwHist();
+}
+/* 搜索历史：默认收起，点搜索框才浮出（失焦/搜索后自动收起），尾部可清空 */
+var KW_FOCUS = false;
+function renderKwHist() {
+  var box = $('kwHist');
+  box.innerHTML = '';
+  if (!DB.kwHist.length) { box.classList.add('hide'); return; }
+  DB.kwHist.forEach(function (k) {
+    var el = document.createElement('span');
+    el.textContent = k;
+    el.onmousedown = function (e) { e.preventDefault(); };   // 先于 blur，防止历史还没点就被收走
+    el.onclick = function () {
+      $('inKw').value = k;
+      refreshInv(); kwHistHide(); $('inKw').blur();
+    };
+    box.appendChild(el);
+  });
+  var clr = document.createElement('span');
+  clr.className = 'kwclr';
+  clr.textContent = '清空';
+  clr.onclick = function () {
+    DB.kwHist = []; saveDB(); kwHistHide();
+    toast('已清空搜索历史');
+  };
+  box.appendChild(clr);
+  if (KW_FOCUS) box.classList.remove('hide');
+}
+function kwHistShow() {
+  KW_FOCUS = true;
+  if (DB.kwHist.length) $('kwHist').classList.remove('hide');
+}
+function kwHistHide() {
+  KW_FOCUS = false;
+  $('kwHist').classList.add('hide');
+}
+$('inKw').addEventListener('focus', kwHistShow);
+$('inKw').addEventListener('blur', function () { setTimeout(kwHistHide, 180); });
+/* 表格列自定义：用户在设置页勾选，编号始终显示 */
+function curCols() {
+  return (DB.locCols && DB.locCols.length) ? DB.locCols : LOC_COLS;
+}
+/* 库存搜索：执行时记录到搜索历史 */
+function runSearch() {
+  pushKwHist($('inKw').value);
+  selExit();
+  refreshInv();
+  kwHistHide(); $('inKw').blur();     // 搜完就收起历史和键盘，不占屏幕
+}
+function refreshInv() {
+  (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
+}
+$('btnKw').onclick = runSearch;
+$('inKw').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') runSearch();
+});
+$('segLoc').onclick = function () {
+  selExit();
+  invView = 'loc'; $('segLoc').className = 'on'; $('segPc').className = '';
+  $('fltRow').classList.remove('hide');
+  loadLoc($('inKw').value);
+  setTimeout(fitTbls, 0);
+};
+$('segPc').onclick = function () {
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  selExit();                            // 电脑库存只读，退出多选态
+  invView = 'pc'; $('segPc').className = 'on'; $('segLoc').className = '';
+  $('fltRow').classList.add('hide');   // 快捷筛选只对手机库存有意义
+  loadPc($('inKw').value);
+  setTimeout(fitTbls, 0);
+};
+/* 长按多选状态（只对手机库存；电脑库存只读） */
+var SEL = { on: false, set: [] };
+var LOCV_ROWS = [];                       // 当前筛选下全部行，供「全选」
+/* 出售记录页的多选状态（记录没有编辑弹窗，长按只做多选删除） */
+var RSEL = { on: false, set: [] };
+/* 列宽交给浏览器自动排（内容完整、超出就横向滑动）；只补多选勾选列 */
+function mkHead(tbl, cols, phMark) {
+  var thead = tbl.tHead; thead.innerHTML = '';
+  var tr = document.createElement('tr');
+  var selOn = (tbl.id === 'tInv' && SEL.on) || (tbl.id === 'tRec' && RSEL.on);
+  if (selOn) {
+    var thc = document.createElement('th');
+    thc.style.padding = '11px 2px';
+    tr.appendChild(thc);
+  }
+  if (phMark) {
+    var thm = document.createElement('th');
+    thm.textContent = '📷';
+    tr.appendChild(thm);
+  }
+  cols.forEach(function (f) {
+    var th = document.createElement('th');
+    th.textContent = titles[f] || CT_DEFS[f] || f;
+    tr.appendChild(th);
+  });
+  thead.appendChild(tr);
+}
+function loadLoc(kw) {
+  kw = (kw || '').toLowerCase();
+  var cols = curCols();
+  mkHead($('tInv'), cols);
+  var tb = $('tInv').tBodies[0]; tb.innerHTML = '';
+  var rows = DB.items.filter(function (it) {
+    if (curFlt === 'sale' && it.sold_out) return false;
+    if (curFlt === 'sold' && !it.sold_out) return false;
+    if (curFlt === 'dirty' && !it.dirty) return false;
+    if (!kw) return true;
+    return cols.concat(['category', 'remark', 'condition']).some(function (f) {
+      return String(it[f] || '').toLowerCase().indexOf(kw) >= 0;
+    });
+  });
+  rows.sort(function (a, b) { return a.lid - b.lid; });
+  LOCV_ROWS = rows.map(function (r) { return r.lid; });   // 「全选」用
+  $('invStat').textContent = SEL.on
+    ? ('已选 ' + SEL.set.length + ' / ' + rows.length + ' 条（点行勾选，长按可退出后修改）')
+    : '手机库存 ' + DB.items.length + ' 条（点行可修改；长按行可多选删除）';
+  var colspan = cols.length + (SEL.on ? 1 : 0);
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="' + colspan +
+      '" class="empty">没有符合条件的记录</td></tr>';
+    updateSwHint();
+    return;
+  }
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    if (r.sold_out) tr.className = 'sold';
+    if (SEL.on) {
+      if (SEL.set.indexOf(r.lid) >= 0) tr.classList.add('picked');
+      var tc = document.createElement('td');
+      tc.className = 'ckbox';
+      tc.textContent = SEL.set.indexOf(r.lid) >= 0 ? '✔' : '○';
+      tr.appendChild(tc);
+    }
+    cols.forEach(function (f) {
+      var td = document.createElement('td');
+      td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
+      tr.appendChild(td);
+    });
+    var lpT = null, lpFired = false;          // 长按 480ms 进入多选
+    if (!SEL.on) {
+      tr.addEventListener('touchstart', function () {
+        lpFired = false;
+        lpT = setTimeout(function () { lpFired = true; selEnter(r.lid); }, 480);
+      }, { passive: true });
+      tr.addEventListener('touchmove', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchcancel', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchend', function () { clearTimeout(lpT); });
+      tr.oncontextmenu = function (e) {       // 电脑浏览器里右键等价于长按
+        e.preventDefault();
+        selEnter(r.lid);
+      };
+    }
+    tr.onclick = function () {
+      if (lpFired) { lpFired = false; return; }   // 长按结束后的那次 click 吞掉
+      if (SEL.on) selToggle(r.lid); else openEdit(r);
+    };
+    tb.appendChild(tr);
+  });
+  updateSwHint();
+}
+/* ---------- 多选操作（进入 / 勾选 / 全选 / 删除 / 退出） ---------- */
+function selEnter(lid) {
+  SEL = { on: true, set: [lid] };
+  $('selCnt').textContent = '已选 1 项';
+  $('selBar').classList.remove('hide');
+  $('fabAdd').classList.add('hide');
+  loadLoc($('inKw').value);
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+}
+function selExit() {
+  if (!SEL.on) return;
+  SEL = { on: false, set: [] };
+  $('selBar').classList.add('hide');
+  $('fabAdd').classList.remove('hide');
+  loadLoc($('inKw').value);
+}
+function selToggle(lid) {
+  var i = SEL.set.indexOf(lid);
+  if (i >= 0) SEL.set.splice(i, 1); else SEL.set.push(lid);
+  if (!SEL.set.length) { selExit(); return; }     // 一个都不剩就退出多选
+  $('selCnt').textContent = '已选 ' + SEL.set.length + ' 项';
+  loadLoc($('inKw').value);
+}
+$('btnSelAll').onclick = function () {
+  SEL.set = LOCV_ROWS.slice();
+  $('selCnt').textContent = '已选 ' + SEL.set.length + ' 项';
+  loadLoc($('inKw').value);
+};
+$('btnSelCancel').onclick = selExit;
+$('btnSelDel').onclick = function () {
+  if (!SEL.set.length) { toast('先勾选要删除的行'); return; }
+  var n = SEL.set.length, lids = SEL.set.slice();
+  askConfirm('删除选中的 ' + n + ' 条？\n已同步到电脑的记录不会被删除。', '删除', function () {
+    lids.forEach(function (lid) { delPh(lid); });
+    DB.items = DB.items.filter(function (x) { return lids.indexOf(x.lid) < 0; });
+    saveDB(); selExit();
+    renderSync(); renderData();
+    toast('已删除 ' + n + ' 条（本地）');
+  });
+};
+var PC_PAGE = { kw: '', offset: 0, total: 0, hasMore: false, loading: false };
+function pcRow(r, cols) {
+  var tr = document.createElement('tr');
+  if (r.sold_out) tr.className = 'sold';
+  var td = document.createElement('td');
+  td.className = 'phmark';
+  td.textContent = r.ph ? '📷' : '';
+  tr.appendChild(td);
+  cols.forEach(function (f) {
+    var td = document.createElement('td');
+    td.textContent = (r[f] === null || r[f] === undefined) ? '' : r[f];
+    tr.appendChild(td);
+  });
+  tr.onclick = function () { pcActions(r); };   // 点行：照片 / 出售 / 修改 / 删除
+  return tr;
+}
+function pcMoreRow(cols) {
+  var tr = document.createElement('tr');
+  tr.className = 'more';
+  var td = document.createElement('td');
+  td.colSpan = cols.length + 1;
+  td.className = 'empty';
+  td.textContent = '上拉加载更多…（已显示 ' + PC_PAGE.offset + ' / ' + PC_PAGE.total + '）';
+  tr.appendChild(td);
+  return tr;
+}
+function pcNearBottom() {
+  var m = $('main'), w = $('tInv').parentNode;
+  return (m.scrollTop + m.clientHeight >= m.scrollHeight - 120) ||
+         (w.scrollTop + w.clientHeight >= w.scrollHeight - 120);
+}
+function pcMaybeLoad() {
+  if (invView === 'pc' && PC_PAGE.hasMore && !PC_PAGE.loading && pcNearBottom()) pcLoadMore();
+}
+$('main').addEventListener('scroll', pcMaybeLoad);
+/* 容器限高后表格在自己内部滚动，加载更多要听 tblwrap 的滚动 */
+$('tInv').parentNode.addEventListener('scroll', pcMaybeLoad);
+/* 列超出屏幕时给「可左右滑动」提示；滑过或列放得下就藏起来 */
+function updateSwHint() {
+  var w = $('tInv').parentNode, h = $('swHint');
+  if (!w || !h) return;
+  var more = w.scrollWidth > w.clientWidth + 2 && w.scrollLeft < 8;
+  h.classList.toggle('hide', !more);
+}
+$('tInv').parentNode.addEventListener('scroll', updateSwHint);
+/* 表格容器限高精调：让 th sticky 吸顶且主页面尽量不滚动 */
+function fitTbl(id) {
+  var m = $('main'), w = $(id).parentNode;
+  if (!w.offsetHeight) return;                 // 页签隐藏时跳过
+  var top = w.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop;
+  // 库存页右下角有悬浮「＋ 录入」，给表格底部留 50px，免得最后一行被按钮盖住
+  var h = m.clientHeight - top - 14 - (id === 'tInv' ? 50 : 0);
+  if (h > 160) w.style.maxHeight = h + 'px';
+}
+function fitTbls() { fitTbl('tInv'); fitTbl('tRec'); fitTbl('tPc'); fitTbl('tRet'); updateSwHint(); }
+window.addEventListener('resize', fitTbls);
+function pcLoadMore() {
+  if (PC_PAGE.loading || !PC_PAGE.hasMore) return;
+  PC_PAGE.loading = true;
+  var cols = curCols();
+  var tb = $('tInv').tBodies[0];
+  var more = tb.querySelector('tr.more');
+  if (more) more.remove();
+  api('GET', '/m/api/items?kw=' + encodeURIComponent(PC_PAGE.kw || '') +
+      '&offset=' + PC_PAGE.offset).then(function (j) {
+    PC_PAGE.loading = false;
+    (j.items || []).forEach(function (r) { tb.appendChild(pcRow(r, cols)); });
+    PC_PAGE.offset += (j.items || []).length;
+    PC_PAGE.hasMore = !!j.has_more;
+    $('invStat').textContent = '电脑库存 ' + PC_PAGE.total + ' 条（已显示 ' +
+      PC_PAGE.offset + '；只读）';
+    if (PC_PAGE.hasMore) tb.appendChild(pcMoreRow(cols));
+    setTimeout(pcMaybeLoad, 50);          // 一屏装得下时继续补
+  }).catch(function (e) {
+    PC_PAGE.loading = false;
+    toast(e.message || String(e));
+  });
+}
+function loadPc(kw) {
+  var cols = curCols();
+  PC_PAGE = { kw: kw || '', offset: 0, total: 0, hasMore: false, loading: false };
+  mkHead($('tInv'), cols, true);
+  var tb = $('tInv').tBodies[0];
+  tb.innerHTML = '<tr><td colspan="' + (cols.length + 1) + '" class="empty">读取电脑库存…</td></tr>';
+  api('GET', '/m/api/items?kw=' + encodeURIComponent(PC_PAGE.kw) +
+      '&offset=0').then(function (j) {
+    tb.innerHTML = '';
+    PC_PAGE.total = j.total || 0;
+    PC_PAGE.offset = (j.items || []).length;
+    PC_PAGE.hasMore = !!j.has_more;
+    $('invStat').textContent = '电脑库存 ' + j.total + ' 条（已显示 ' + PC_PAGE.offset +
+      '；只读；修改请在电脑端或手机录入后同步）';
+    if (!(j.items || []).length) {
+      tb.innerHTML = '<tr><td colspan="' + (cols.length + 1) + '" class="empty">没有找到记录</td></tr>';
+      return;
+    }
+    (j.items || []).forEach(function (r) { tb.appendChild(pcRow(r, cols)); });
+    if (PC_PAGE.hasMore) tb.appendChild(pcMoreRow(cols));
+    updateSwHint();
+    setTimeout(pcMaybeLoad, 50);          // 首屏未满时自动续载
+  }).catch(function (e) {
+    tb.innerHTML = '<tr><td colspan="' + (cols.length + 1) + '" class="empty">' +
+      (e.message || e) + '</td></tr>';
+  });
+}
+/* ---------- 照片缩略图排（本地商品编辑弹窗里用） ---------- */
+function renderPhRow(container, lid) {
+  container.innerHTML = '';
+  var arr = getPh(lid);
+  arr.forEach(function (ph, i) {
+    var im = document.createElement('img');
+    im.className = 'phthumb'; im.src = ph.d;
+    im.onclick = function () { phViewerLocal(lid, i, function () { renderPhRow(container, lid); }); };
+    container.appendChild(im);
+  });
+  if (arr.length < PH_MAX) {
+    var b = document.createElement('button');
+    b.className = 'phadd'; b.textContent = '+';
+    b.onclick = function () { pickPhotos(lid, function () { renderPhRow(container, lid); }); };
+    container.appendChild(b);
+  }
+  var tip = document.createElement('div');
+  tip.className = 'phcnt';
+  tip.textContent = arr.length + '/' + PH_MAX + ' 张' +
+    (DB.share.token ? '；连上电脑后自动同步' : '（连接电脑后同步）');
+  container.appendChild(tip);
+}
+/* 本地照片查看（大图 / 删除 / 翻页） */
+function phViewerLocal(lid, idx, onChange) {
+  var arr = getPh(lid);
+  if (!arr.length) return;
+  $('shTitle').textContent = '照片';
+  var b = $('shBody'); b.innerHTML = '';
+  var cur = idx;
+  var im = document.createElement('img'); im.className = 'phbig';
+  var cnt = document.createElement('div'); cnt.className = 'phcnt';
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bPrev = document.createElement('button'); bPrev.className = 'gray'; bPrev.textContent = '‹';
+  var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除这张';
+  var bNext = document.createElement('button'); bNext.className = 'gray'; bNext.textContent = '›';
+  row.appendChild(bPrev); row.appendChild(bDel); row.appendChild(bNext);
+  b.appendChild(im); b.appendChild(cnt); b.appendChild(row);
+  function show() {
+    im.src = arr[cur].d;
+    cnt.textContent = (cur + 1) + ' / ' + arr.length;
+    bPrev.disabled = cur <= 0; bNext.disabled = cur >= arr.length - 1;
+  }
+  bPrev.onclick = function () { if (cur > 0) { cur -= 1; show(); } };
+  bNext.onclick = function () { if (cur < arr.length - 1) { cur += 1; show(); } };
+  bDel.onclick = function () {
+    askConfirm('删除这张照片？已同步到电脑的不会被删（要在电脑上删）。', '删除', function () {
+      arr.splice(cur, 1); setPh(lid, arr);
+      if (!arr.length) { $('mask').classList.add('hide'); } else { cur = Math.min(cur, arr.length - 1); show(); }
+      if (onChange) onChange();
+    });
+  };
+  show();
+  $('mask').classList.remove('hide');
+}
+
+/* ---------- 电脑库存照片（查看 / 添加 / 删除，走 HTTP 接口） ---------- */
+function openPcPhotos(r) {
+  if (!DB.share.token) { toast('先在「设置」里连接电脑'); return; }
+  var code = r.code || '';
+  $('shTitle').textContent = '照片 · ' + code;
+  var b = $('shBody'); b.innerHTML = '';
+  var grid = document.createElement('div');
+  grid.className = 'phrow';
+  var tip = document.createElement('div'); tip.className = 'phcnt'; tip.textContent = '读取中…';
+  b.appendChild(grid); b.appendChild(tip);
+  var row = document.createElement('div'); row.className = 'btnrow';
+  var bAdd = document.createElement('button'); bAdd.textContent = '＋ 添加照片';
+  var bClose = document.createElement('button'); bClose.className = 'gray'; bClose.textContent = '关闭';
+  row.appendChild(bAdd); row.appendChild(bClose); b.appendChild(row);
+  var names = [];
+  function load() {
+    tip.textContent = '读取中…';
+    api('GET', '/m/api/photos?kind=item&code=' + encodeURIComponent(code))
+      .then(function (j) { names = j.photos || []; render(); })
+      .catch(function (e) { tip.textContent = e.message || String(e); });
+  }
+  function render() {
+    grid.innerHTML = '';
+    tip.textContent = names.length + '/' + PH_MAX + ' 张（电脑端存储，点击看大图）';
+    names.forEach(function (n, i) {
+      var im = document.createElement('img');
+      im.className = 'phthumb';
+      /* <img> 直连带不上会话令牌 → 统一用接口取 base64 再显示 */
+      im.onclick = function () { phViewerPc(i); };
+      api('GET', '/m/api/photo_get?kind=item&code=' + encodeURIComponent(code) +
+          '&name=' + encodeURIComponent(n))
+        .then(function (j) { im.src = 'data:image/jpeg;base64,' + j.data; })
+        .catch(function () { im.src = ''; });
+      grid.appendChild(im);
+    });
+    if (names.length < PH_MAX) {
+      var add = document.createElement('button');
+      add.className = 'phadd'; add.textContent = '+';
+      add.onclick = addPc;
+      grid.appendChild(add);
+    }
+  }
+  function addPc() {
+    if (names.length >= PH_MAX) { toast('每条记录最多 ' + PH_MAX + ' 张'); return; }
+    pickImageFiles(function (fs) {
+      if (!fs.length) return;
+      var done = 0, fails = 0;
+      fs.forEach(function (f) {
+        compressImg(f, function (durl) {
+          done += 1;
+          var go = durl && names.length < PH_MAX;
+          var run = go
+            ? api('POST', '/m/api/photo_add', { kind: 'item', code: code,
+                name: phNewName() + '.jpg', data: durl.split(',')[1] })
+                .then(function (j) { names.push(j.name); })
+            : Promise.resolve();
+          run.catch(function (e) { fails += 1; toast(e.message || String(e)); })
+            .then(function () {
+              if (done === fs.length && !fails) load();
+            });
+        });
+      });
+    });
+  }
+  function phViewerPc(idx) {
+    var cur = idx;
+    $('shTitle').textContent = '照片 · ' + code;
+    b.innerHTML = '';
+    var im = document.createElement('img'); im.className = 'phbig';
+    var c2 = document.createElement('div'); c2.className = 'phcnt';
+    var row2 = document.createElement('div'); row2.className = 'btnrow';
+    var bp = document.createElement('button'); bp.className = 'gray'; bp.textContent = '‹';
+    var bd = document.createElement('button'); bd.className = 'danger'; bd.textContent = '删除这张';
+    var bn = document.createElement('button'); bn.className = 'gray'; bn.textContent = '›';
+    row2.appendChild(bp); row2.appendChild(bd); row2.appendChild(bn);
+    b.appendChild(im); b.appendChild(c2); b.appendChild(row2);
+    function show() {
+      im.src = '';
+      c2.textContent = (cur + 1) + ' / ' + names.length + '（加载中…）';
+      api('GET', '/m/api/photo_get?kind=item&code=' + encodeURIComponent(code) +
+          '&name=' + encodeURIComponent(names[cur]))
+        .then(function (j) { im.src = 'data:image/jpeg;base64,' + j.data; c2.textContent = (cur + 1) + ' / ' + names.length; })
+        .catch(function (e) { c2.textContent = e.message || String(e); });
+      bp.disabled = cur <= 0; bn.disabled = cur >= names.length - 1;
+    }
+    bp.onclick = function () { if (cur > 0) { cur -= 1; show(); } };
+    bn.onclick = function () { if (cur < names.length - 1) { cur += 1; show(); } };
+    bd.onclick = function () {
+      askConfirm('删除电脑上的这张照片？', '删除', function () {
+        api('POST', '/m/api/photo_del', { kind: 'item', code: code, name: names[cur] })
+          .then(function () {
+            names.splice(cur, 1);
+            if (!names.length) { load(); return; }
+            cur = Math.min(cur, names.length - 1); show();
+          })
+          .catch(function (e) { toast(e.message || String(e)); });
+      });
+    };
+    show();
+  }
+  bClose.onclick = function () { $('mask').classList.add('hide'); };
+  load();
+  $('mask').classList.remove('hide');
+}
+var phInputPc = null;
+
+/* 编辑本地商品 */
+function openEdit(r) {
+  curItem = r;
+  ocrTarget = 'edit';
+  $('shTitle').textContent = '修改 ' + r.code;
+  var b = $('shBody'); b.innerHTML = '';
+  function field(label, id, val, extra, scan) {
+    var w = document.createElement('div'); w.className = 'fcol';
+    var l = document.createElement('label');
+    if (scan) {
+      l.className = 'lbl-io';
+      l.appendChild(document.createTextNode(label));
+      var sb = document.createElement('button');
+      sb.type = 'button'; sb.className = 'gray small'; sb.textContent = '拍照识别';
+      sb.onclick = function () { startScan('edit'); };
+      l.appendChild(sb);
+    } else {
+      l.textContent = label;
+    }
+    var inp = document.createElement('input'); inp.id = id; inp.value = val || '';
+    if (extra) inp.setAttribute('inputmode', extra);
+    w.appendChild(l); w.appendChild(inp);
+    return w;
+  }
+  function two(a, c) {
+    var w = document.createElement('div'); w.className = 'frow';
+    w.appendChild(a); w.appendChild(c); b.appendChild(w);
+  }
+  var fBrand = field('品牌', 'eBrand', r.brand);
+  var fCate = field('品类', 'eCate', r.category);
+  var fModel = field('型号', 'eModel', r.model, null, true);
+  var fCond = field('成色', 'eCond', r.condition);
+  var fPrice = field('单价', 'ePrice', r.price, 'decimal');
+  var fQty = field('数量', 'eQty', r.qty, 'numeric');
+  var fShelf = field('货架', 'eShelf', r.shelf);
+  two(fBrand, fCate); two(fModel, fCond); two(fPrice, fQty);
+  b.appendChild(fShelf);
+  /* 照片区（最多 10 张，拍照或相册，连电脑自动同步） */
+  var phSec = document.createElement('div'); phSec.className = 'fcol';
+  var phLbl = document.createElement('label'); phLbl.textContent = '照片';
+  phSec.appendChild(phLbl);
+  var phRow = document.createElement('div'); phRow.className = 'phrow';
+  phSec.appendChild(phRow);
+  b.appendChild(phSec);
+  renderPhRow(phRow, r.lid);
+  var rowBtn = document.createElement('div'); rowBtn.className = 'btnrow';
+  var bDel = document.createElement('button'); bDel.className = 'danger'; bDel.textContent = '删除';
+  var bSave = document.createElement('button'); bSave.textContent = '保存';
+  rowBtn.appendChild(bDel); rowBtn.appendChild(bSave); b.appendChild(rowBtn);
+  bSave.onclick = function () {
+    r.brand = document.getElementById('eBrand').value;
+    r.category = document.getElementById('eCate').value;
+    r.model = document.getElementById('eModel').value;
+    r.condition = document.getElementById('eCond').value;
+    r.price = parseFloat(document.getElementById('ePrice').value) || 0;
+    r.qty = parseInt(document.getElementById('eQty').value, 10) || 0;
+    r.shelf = document.getElementById('eShelf').value;
+    r.sold_out = r.qty <= 0 ? 1 : 0; r.dirty = 1;
+    saveDB(); $('mask').classList.add('hide');
+    toast('已保存到手机' + (DB.share.auto ? '，正在同步…' : ''));
+    loadLoc($('inKw').value); renderSync(); renderData(); autoSync();
+  };
+  bDel.onclick = function () {
+    $('mask').classList.add('hide');
+    askConfirm('删除手机上的 ' + r.code + ' ？\n已同步到电脑的记录不会被删除。', '删除', function () {
+      DB.items = DB.items.filter(function (x) { return x.lid !== r.lid; });
+      delPh(r.lid);
+      saveDB(); loadLoc($('inKw').value); renderSync(); renderData();
+      toast('已删除（本地）');
+    });
+  };
+  $('mask').classList.remove('hide');
+}
+$('shClose').onclick = function () { $('mask').classList.add('hide'); };
+
+/* ================= 拍照识别型号 =================
+   相机实时取景，本机离线 OCR（模型随 App 打包），识别到的文字点一下就填进型号框。
+   完全在手机上跑，不需要电脑、不需要网络。 */
+var ocrTarget = 'add';
+function startScan(target) {
+  ocrTarget = target || 'add';
+  var b = window.AndroidOcr;
+  if (!b || typeof b.scan !== 'function') {
+    toast('拍照识别需要仓管家手机 App（用手机浏览器打开时不可用）');
+    return;
+  }
+  try {
+    b.scan();
+  } catch (e) {
+    toast('打不开拍照识别：' + (e.message || e));
+  }
+}
+window.__ocrFill = function (text) {
+  if (!text) return;
+  var box = null;
+  if (ocrTarget === 'edit') box = $('eModel');
+  if (!box) box = $('aModel');
+  if (!box) { toast('识别结果：' + text); return; }
+  box.value = text;
+  try { box.focus(); } catch (e) {}
+  toast('已填入型号：' + text);
+};
+$('btnScanModel').onclick = function () { startScan('add'); };
+
+/* ================= 录入 ================= */
+$('btnAdd').onclick = function () {
+  var it = {
+    lid: Date.now(),
+    code: nextCode(),
+    brand: $('aBrand').value.trim(), category: $('aCate').value.trim(),
+    model: $('aModel').value.trim(), condition: $('aCond').value.trim(),
+    price: parseFloat($('aPrice').value) || 0,
+    qty: parseInt($('aQty').value, 10) || 1,
+    shelf: $('aShelf').value.trim(), listed: 1,
+    remark: $('aRemark').value.trim(), sold_out: 0, dirty: 1
+  };
+  if (!it.brand && !it.category && !it.model) { toast('品牌 / 品类 / 型号 至少填一项'); return; }
+  if (addPhBuf.length) {                     // 录入页暂存的照片随记录保存
+    setPh(it.lid, addPhBuf.map(function (ph) { return { n: ph.n, d: ph.d, s: 0 }; }));
+    addPhBuf = [];
+    renderAddPh();
+  }
+  DB.items.push(it);
+  saveDB();
+  toast('已入库：' + it.code + (DB.share.auto ? '，正在同步…' : '（待同步）'));
+  $('aModel').value = ''; $('aRemark').value = '';
+  renderSync(); renderData(); autoSync();
+};
+
+/* ================= 出售 ================= */
+$('btnSell').onclick = function () {
+  var code = $('sCode').value.trim();
+  var it = null;
+  DB.items.forEach(function (x) { if (x.code.toLowerCase() === code.toLowerCase()) it = x; });
+  if (!it) { toast('没有找到编号 ' + (code || '（请填写）')); return; }
+  if (it.sold_out || it.qty <= 0) { toast(it.code + ' 已售完'); return; }
+  var qty = parseInt($('sQty').value, 10) || 1;
+  if (qty > it.qty) { toast('库存只有 ' + it.qty + ' 个'); return; }
+  var price = $('sPrice').value === '' ? it.price : (parseFloat($('sPrice').value) || 0);
+  var s = {
+    lid: Date.now(), lidRef: it.lid, code: it.code,
+    brand: it.brand, model: it.model, qty: qty, price: price,
+    total: Math.round(qty * price * 100) / 100,
+    buyer: $('sBuyer').value.trim(), sale_date: nowStr(),
+    out_type: '出售', remark: $('sRemark').value.trim(), dirty: 1
+  };
+  DB.sales.push(s);
+  it.qty -= qty;
+  if (it.qty <= 0) { it.qty = 0; it.sold_out = 1; }
+  it.dirty = 1;
+  saveDB();
+  $('sellMsg').textContent = '已售出 ' + it.code + ' × ' + qty + '，合计 ¥' + s.total +
+    '，剩余 ' + it.qty;
+  toast('已登记出售' + (DB.share.auto ? '，正在同步…' : '（待同步）'));
+  $('sCode').value = '';
+  renderSync(); renderData(); autoSync();
+};
+
+/* ================= 记录 ================= */
+var REC_COLS = ['sale_date', 'code', 'brand', 'model', 'qty', 'total', 'buyer'];
+function loadRec() {
+  var tb = $('tRec').tBodies[0]; tb.innerHTML = '';
+  mkHead($('tRec'), REC_COLS);
+  var rows = DB.sales.slice().reverse();
+  $('recStat').textContent = RSEL.on
+    ? ('已选 ' + RSEL.set.length + ' / ' + rows.length + ' 条（点行勾选）')
+    : '手机出售记录 ' + rows.length + ' 条（长按行可多选删除）';
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="' + (REC_COLS.length + (RSEL.on ? 1 : 0)) +
+      '" class="empty">暂无出售记录</td></tr>';
+    return;
+  }
+  rows.forEach(function (s) {
+    var tr = document.createElement('tr');
+    if (RSEL.on) {
+      if (RSEL.set.indexOf(s.lid) >= 0) tr.classList.add('picked');
+      var tc = document.createElement('td');
+      tc.className = 'ckbox';
+      tc.textContent = RSEL.set.indexOf(s.lid) >= 0 ? '✔' : '○';
+      tr.appendChild(tc);
+    }
+    REC_COLS.forEach(function (f) {
+      var td = document.createElement('td');
+      td.textContent = (s[f] === null || s[f] === undefined) ? '' : s[f];
+      tr.appendChild(td);
+    });
+    var tdS = document.createElement('td');
+    var tag = document.createElement('span');
+    tag.className = 'tag ' + (s.dirty ? 'wait' : 'ok');
+    tag.textContent = s.dirty ? '待同步' : '已同步';
+    tdS.appendChild(tag);
+    tr.appendChild(tdS);
+    var lpT = null, lpFired = false;          // 长按 480ms 进入多选（同库存页）
+    if (!RSEL.on) {
+      tr.addEventListener('touchstart', function () {
+        lpFired = false;
+        lpT = setTimeout(function () { lpFired = true; recSelEnter(s.lid); }, 480);
+      }, { passive: true });
+      tr.addEventListener('touchmove', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchcancel', function () { clearTimeout(lpT); }, { passive: true });
+      tr.addEventListener('touchend', function () { clearTimeout(lpT); });
+      tr.oncontextmenu = function (e) {       // 电脑浏览器里右键等价于长按
+        e.preventDefault();
+        recSelEnter(s.lid);
+      };
+    }
+    tr.onclick = function () {
+      if (lpFired) { lpFired = false; return; }   // 长按结束后的那次 click 吞掉
+      if (RSEL.on) recSelToggle(s.lid);
+    };
+    tb.appendChild(tr);
+  });
+}
+/* ---------- 出售记录多选（进入 / 勾选 / 全选 / 删除 / 退出） ---------- */
+function recSelEnter(lid) {
+  RSEL = { on: true, set: [lid] };
+  $('rSelCnt').textContent = '已选 1 项';
+  $('recSelBar').classList.remove('hide');
+  loadRec();
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+}
+function recSelExit() {
+  if (!RSEL.on) return;
+  RSEL = { on: false, set: [] };
+  $('recSelBar').classList.add('hide');
+  loadRec();
+}
+function recSelToggle(lid) {
+  var i = RSEL.set.indexOf(lid);
+  if (i >= 0) RSEL.set.splice(i, 1); else RSEL.set.push(lid);
+  if (!RSEL.set.length) { recSelExit(); return; }   // 一个都不剩就退出多选
+  $('rSelCnt').textContent = '已选 ' + RSEL.set.length + ' 项';
+  loadRec();
+}
+$('btnRSelAll').onclick = function () {
+  RSEL.set = DB.sales.map(function (s) { return s.lid; });
+  $('rSelCnt').textContent = '已选 ' + RSEL.set.length + ' 项';
+  loadRec();
+};
+$('btnRSelCancel').onclick = recSelExit;
+$('btnRSelDel').onclick = function () {
+  if (!RSEL.set.length) { toast('先勾选要删除的记录'); return; }
+  var n = RSEL.set.length, lids = RSEL.set.slice();
+  askConfirm('删除选中的 ' + n + ' 条出售记录？\n已同步到电脑的不受影响；未同步的将不再上传。', '删除', function () {
+    DB.sales = DB.sales.filter(function (x) { return lids.indexOf(x.lid) < 0; });
+    saveDB(); recSelExit();
+    renderSync(); renderData();
+    toast('已删除 ' + n + ' 条（本地）');
+  });
+}
+
+/* ================= 电脑端增强（v1.41） =================
+   库存页「电脑库存」原来只能看照片；现在补上出售 / 修改 / 删除。
+   记录页加「电脑 / 退货 / 统计」，设置页加回收站与盘点单。
+   所有写操作走 /m/api/*，需要电脑端给这台手机授权录入（只读时服务端会拒）。 */
+var CAN_WRITE = false;
+var REC_TAB = 'loc';
+var PC_KW = '';
+
+function escHtml(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/[&<>]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+    });
+}
+function openSheet(title, build) {
+  $('shTitle').textContent = title;
+  var b = $('shBody');
+  b.innerHTML = '';
+  build(b);
+  $('mask').classList.remove('hide');
+}
+function closeSheet() { $('mask').classList.add('hide'); }
+function mkEl(tag, cls, txt) {
+  var e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (txt !== undefined) e.textContent = txt;
+  return e;
+}
+function inpEl(val, ph, type) {
+  var i = document.createElement('input');
+  if (type) i.type = type;
+  if (val !== undefined && val !== null) i.value = val;
+  if (ph) i.placeholder = ph;
+  return i;
+}
+function fld(label, inp) {
+  var d = mkEl('div', 'fld');
+  d.appendChild(mkEl('label', '', label));
+  d.appendChild(inp);
+  return d;
+}
+/* 电脑端是否给这台手机开了录入权限（没连电脑就直接 false） */
+function refreshPerm() {
+  if (!DB.share.token) { CAN_WRITE = false; renderTools(); return Promise.resolve(); }
+  return api('GET', '/m/api/whoami').then(function (w) {
+    CAN_WRITE = !!w.can_write;
+    renderTools();
+  }).catch(function () { CAN_WRITE = false; renderTools(); });
+}
+function canWriteOr(msg) {
+  if (!DB.share.token) { toast('先在「设置」里连接电脑'); return false; }
+  if (!CAN_WRITE) {
+    toast(msg || '只读模式：请在电脑端「局域网共享」里给这台手机开启录入权限');
+    return false;
+  }
+  return true;
+}
+function renderTools() {
+  var on = !!DB.share.token;
+  $('trashTip').textContent = on ? (CAN_WRITE ? '删除的商品可恢复' : '只读可看') : '需连接电脑';
+  $('stTip').textContent = on ? (CAN_WRITE ? '核对实盘数量' : '只读可看') : '需连接电脑';
+}
+function tblHead(tbl, labels) {
+  var th = tbl.tHead; th.innerHTML = '';
+  var tr = document.createElement('tr');
+  labels.forEach(function (t) { tr.appendChild(mkEl('th', '', t)); });
+  th.appendChild(tr);
+}
+function tblEmpty(tbl, cols, txt) {
+  tbl.tBodies[0].innerHTML = '<tr><td colspan="' + cols + '" class="empty">' +
+    escHtml(txt) + '</td></tr>';
+}
+function money(v) {
+  return '¥' + (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
+}
+
+/* ---------- 电脑库存：点行后的操作面板 ---------- */
+function pcActions(r) {
+  openSheet('商品 ' + (r.code || ''), function (b) {
+    var info = mkEl('div', 'statline', '');
+    info.style.margin = '0 0 12px';
+    info.textContent = ([r.brand, r.model].filter(Boolean).join(' ') || '（未填品牌型号）') +
+      ' · 库存 ' + (r.qty === undefined ? 0 : r.qty) + ' 件 · 单价 ¥' + (r.price || 0) +
+      (r.shelf ? ' · ' + r.shelf : '');
+    b.appendChild(info);
+    var row = mkEl('div', 'btnrow');
+    var bPh = mkEl('button', 'gray', '照片');
+    var bSell = mkEl('button', '', '出售');
+    var bEdit = mkEl('button', 'gray', '修改');
+    var bDel = mkEl('button', 'danger-ghost', '删除');
+    bPh.onclick = function () { openPcPhotos(r); };
+    bSell.onclick = function () { pcSellSheet(r); };
+    bEdit.onclick = function () { pcEditSheet(r); };
+    bDel.onclick = function () { pcDelItem(r); };
+    row.appendChild(bPh); row.appendChild(bSell);
+    row.appendChild(bEdit); row.appendChild(bDel);
+    b.appendChild(row);
+    var tip = mkEl('div', 'stat', '在手机上直接改电脑库存，需要电脑端给这台手机授权录入；未授权时只能查看。');
+    tip.style.marginTop = '12px';
+    b.appendChild(tip);
+  });
+}
+function pcSellSheet(r) {
+  var left = parseInt(r.qty, 10) || 0;
+  if (!left) { toast('这件已经售完了'); return; }
+  openSheet('出售 ' + (r.code || ''), function (b) {
+    var info = mkEl('div', 'statline', '库存 ' + left + ' 件 · 单价 ¥' + (r.price || 0));
+    info.style.margin = '0 0 4px';
+    b.appendChild(info);
+    var iQty = inpEl('1', '', 'number'); iQty.min = '1'; iQty.max = String(left);
+    var iPrice = inpEl(r.price || '', '', 'number');
+    var iBuyer = inpEl('', '客户名');
+    var iRemark = inpEl('');
+    b.appendChild(fld('数量', iQty));
+    b.appendChild(fld('单价（元）', iPrice));
+    b.appendChild(fld('买家（可选）', iBuyer));
+    var paid = '1';
+    var pc = mkEl('div', 'chips2');
+    var c1 = mkEl('button', 'on', '已收款');
+    var c0 = mkEl('button', '', '挂账（计入应收）');
+    c1.onclick = function () { paid = '1'; c1.className = 'on'; c0.className = ''; };
+    c0.onclick = function () { paid = '0'; c0.className = 'on'; c1.className = ''; };
+    pc.appendChild(c1); pc.appendChild(c0);
+    var f = mkEl('div', 'fld');
+    f.appendChild(mkEl('label', '', '收款'));
+    f.appendChild(pc);
+    b.appendChild(f);
+    b.appendChild(fld('备注（可选）', iRemark));
+    var go = mkEl('button', '', '确认出售');
+    go.style.width = '100%'; go.style.marginTop = '16px';
+    go.onclick = function () {
+      if (!canWriteOr()) return;
+      go.disabled = true;
+      api('POST', '/m/api/sell', {
+        code: r.code, qty: iQty.value, price: iPrice.value,
+        buyer: iBuyer.value.trim(), remark: iRemark.value.trim(), paid: paid
+      }).then(function (j) {
+        go.disabled = false;
+        toast(j.message || '已登记出售');
+        closeSheet();
+        if (invView === 'pc') loadPc($('inKw').value);
+        if (REC_TAB === 'sum') loadSummary();
+      }).catch(function (e) { go.disabled = false; toast(e.message || String(e)); });
+    };
+    b.appendChild(go);
+  });
+}
+function pcEditSheet(r) {
+  openSheet('修改 ' + (r.code || ''), function (b) {
+    var iBrand = inpEl(r.brand || ''), iCate = inpEl(r.category || '');
+    var iModel = inpEl(r.model || ''), iCond = inpEl(r.condition || '');
+    var iPrice = inpEl(r.price || '', '', 'number');
+    var iQty = inpEl(r.qty === undefined ? 0 : r.qty, '', 'number');
+    var iShelf = inpEl(r.shelf || ''), iRemark = inpEl(r.remark || '');
+    b.appendChild(fld('品牌', iBrand));
+    b.appendChild(fld('品类', iCate));
+    b.appendChild(fld('型号', iModel));
+    b.appendChild(fld('成色', iCond));
+    b.appendChild(fld('单价（元）', iPrice));
+    b.appendChild(fld('数量', iQty));
+    b.appendChild(fld('货架', iShelf));
+    b.appendChild(fld('备注', iRemark));
+    var go = mkEl('button', '', '保存修改');
+    go.style.width = '100%'; go.style.marginTop = '16px';
+    go.onclick = function () {
+      if (!canWriteOr()) return;
+      go.disabled = true;
+      api('POST', '/m/api/update_all', {
+        id: r.id, brand: iBrand.value.trim(), category: iCate.value.trim(),
+        model: iModel.value.trim(), condition: iCond.value.trim(),
+        price: iPrice.value, qty: iQty.value,
+        shelf: iShelf.value.trim(), remark: iRemark.value.trim()
+      }).then(function (j) {
+        go.disabled = false;
+        toast(j.message || '已保存');
+        closeSheet();
+        if (invView === 'pc') loadPc($('inKw').value);
+      }).catch(function (e) { go.disabled = false; toast(e.message || String(e)); });
+    };
+    b.appendChild(go);
+  });
+}
+function pcDelItem(r) {
+  askConfirm('把 ' + (r.code || '') + ' 移入回收站？之后可以恢复。', '删除', function () {
+    if (!canWriteOr()) return;
+    api('POST', '/m/api/del', { id: r.id }).then(function (j) {
+      toast(j.message || '已移入回收站');
+      if (invView === 'pc') loadPc($('inKw').value);
+    }).catch(function (e) { toast(e.message || String(e)); });
+  });
+}
+
+/* ---------- 记录页：出售 / 电脑 / 退货 / 统计 ---------- */
+function recTab(name) {
+  if (name !== 'loc' && !DB.share.token) { toast('先在「设置」里连接电脑'); name = 'loc'; }
+  REC_TAB = name;
+  var ss = document.querySelectorAll('#recSeg div'), i;
+  for (i = 0; i < ss.length; i += 1)
+    ss[i].className = (ss[i].getAttribute('data-r') === name) ? 'on' : '';
+  ['recLoc', 'recPc', 'recRet', 'recSum'].forEach(function (id) {
+    $(id).classList.add('hide');
+  });
+  if (name === 'loc') { $('recLoc').classList.remove('hide'); recSelExit(); loadRec(); }
+  else if (name === 'pc') { $('recPc').classList.remove('hide'); loadPcSales(); }
+  else if (name === 'ret') { $('recRet').classList.remove('hide'); loadReturns(); }
+  else { $('recSum').classList.remove('hide'); loadSummary(); }
+  setTimeout(fitTbls, 0);
+}
+(function () {
+  var ss = document.querySelectorAll('#recSeg div');
+  for (var i = 0; i < ss.length; i += 1)
+    ss[i].onclick = function () { recTab(this.getAttribute('data-r')); };
+})();
+$('btnPcKw').onclick = function () { loadPcSales($('pcKw').value.trim()); };
+$('pcKw').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') loadPcSales($('pcKw').value.trim());
+});
+
+var PC_SALES = [];
+function loadPcSales(kw) {
+  if (kw !== undefined) PC_KW = kw;
+  var tbl = $('tPc');
+  tblHead(tbl, ['日期', '编号', '型号', '数量', '合计', '买家', '收款', '可退']);
+  if (!DB.share.token) { tblEmpty(tbl, 8, '先在「设置」里连接电脑'); $('pcRecStat').textContent = ''; return; }
+  $('pcRecStat').textContent = '读取中…';
+  api('GET', '/m/api/sales?kw=' + encodeURIComponent(PC_KW)).then(function (j) {
+    PC_SALES = j.sales || [];
+    renderPcSales();
+  }).catch(function (e) {
+    tblEmpty(tbl, 8, e.message || String(e));
+    $('pcRecStat').textContent = '';
+  });
+}
+function renderPcSales() {
+  var tbl = $('tPc'), tb = tbl.tBodies[0], rows = PC_SALES;
+  $('pcRecStat').textContent = '电脑出售记录 ' + rows.length + ' 条（点一行可退货 / 撤销）';
+  if (!rows.length) { tblEmpty(tbl, 8, '没有找到出售记录'); return; }
+  tb.innerHTML = '';
+  rows.forEach(function (s) {
+    var tr = document.createElement('tr');
+    [s.sale_date, s.code, s.model, s.qty, s.total, s.buyer].forEach(function (v) {
+      tr.appendChild(mkEl('td', '', v === null || v === undefined ? '' : v));
+    });
+    var tdP = document.createElement('td');
+    tdP.appendChild(mkEl('span', 'tag ' + (s.paid ? 'ok' : 'wait'), s.paid ? '已收' : '挂账'));
+    tr.appendChild(tdP);
+    tr.appendChild(mkEl('td', '', s.left === undefined ? s.qty : s.left));
+    tr.onclick = function () { saleActions(s); };
+    tb.appendChild(tr);
+  });
+}
+function saleActions(s) {
+  openSheet('出售单 ' + (s.code || ''), function (b) {
+    var left = s.left === undefined ? s.qty : s.left;
+    var info = mkEl('div', 'statline', '');
+    info.style.margin = '0 0 12px';
+    info.textContent = (s.sale_date || '') + ' · ' + (s.buyer || '未填买家') +
+      ' · 数量 ' + s.qty + ' · 合计 ¥' + s.total + ' · ' + (s.paid ? '已收款' : '挂账未收') +
+      (Number(s.returned || 0) > 0 ? ' · 已退 ' + s.returned : '');
+    b.appendChild(info);
+    var row = mkEl('div', 'btnrow');
+    var bRet = mkEl('button', '', '退货');
+    var bUndo = mkEl('button', 'gray', '撤销整单');
+    row.appendChild(bRet); row.appendChild(bUndo);
+    b.appendChild(row);
+    bRet.onclick = function () {
+      if (!canWriteOr()) return;
+      if (!Number(left)) { toast('这笔已经全部退回，不能继续退'); return; }
+      returnForm(b, s, Number(left));
+    };
+    bUndo.onclick = function () {
+      if (!canWriteOr()) return;
+      askConfirm('撤销这笔出售？库存会加回去，记录作废。', '撤销', function () {
+        api('POST', '/m/api/sale_undo', { sale_id: s.id }).then(function (j) {
+          toast(j.message || '已撤销');
+          closeSheet();
+          loadPcSales();
+          if (invView === 'pc') loadPc($('inKw').value);
+        }).catch(function (e) { toast(e.message || String(e)); });
+      });
+    };
+  });
+}
+function returnForm(b, s, left) {
+  b.innerHTML = '';
+  var info = mkEl('div', 'statline', '可退 ' + left + ' 件 · 单价 ¥' + (s.price || 0));
+  info.style.margin = '0 0 4px';
+  b.appendChild(info);
+  var iQty = inpEl(String(left), '', 'number'); iQty.min = '1'; iQty.max = String(left);
+  var iRefund = inpEl(String(Math.round(left * Number(s.price || 0) * 100) / 100), '', 'number');
+  b.appendChild(fld('退货数量', iQty));
+  b.appendChild(fld('退款金额（元）', iRefund));
+  var restock = '1';
+  var pc = mkEl('div', 'chips2');
+  var c1 = mkEl('button', 'on', '退回库存');
+  var c0 = mkEl('button', '', '不回库存');
+  c1.onclick = function () { restock = '1'; c1.className = 'on'; c0.className = ''; };
+  c0.onclick = function () { restock = '0'; c0.className = 'on'; c1.className = ''; };
+  pc.appendChild(c1); pc.appendChild(c0);
+  var f = mkEl('div', 'fld');
+  f.appendChild(mkEl('label', '', '货物去向'));
+  f.appendChild(pc);
+  b.appendChild(f);
+  var go = mkEl('button', '', '确认退货');
+  go.style.width = '100%'; go.style.marginTop = '16px';
+  go.onclick = function () {
+    if (!canWriteOr()) return;
+    go.disabled = true;
+    api('POST', '/m/api/return_sale', {
+      sale_id: s.id, qty: iQty.value, refund: iRefund.value, restock: restock
+    }).then(function (j) {
+      go.disabled = false;
+      toast(j.message || '已退货');
+      closeSheet();
+      loadPcSales();
+      if (invView === 'pc') loadPc($('inKw').value);
+      if (REC_TAB === 'sum') loadSummary();
+    }).catch(function (e) { go.disabled = false; toast(e.message || String(e)); });
+  };
+  b.appendChild(go);
+}
+function loadReturns() {
+  var tbl = $('tRet');
+  tblHead(tbl, ['日期', '编号', '型号', '退货数', '退款', '买家', '货物']);
+  if (!DB.share.token) { tblEmpty(tbl, 7, '先在「设置」里连接电脑'); $('retStat').textContent = ''; return; }
+  $('retStat').textContent = '读取中…';
+  api('GET', '/m/api/returns').then(function (j) {
+    var rows = j.returns || [];
+    $('retStat').textContent = '退货记录 ' + rows.length + ' 条';
+    if (!rows.length) { tblEmpty(tbl, 7, '还没有退货记录'); return; }
+    var tb = tbl.tBodies[0];
+    tb.innerHTML = '';
+    rows.forEach(function (r) {
+      var tr = document.createElement('tr');
+      [r.return_date, r.code, r.model, r.qty, r.refund, r.buyer].forEach(function (v) {
+        tr.appendChild(mkEl('td', '', v === null || v === undefined ? '' : v));
+      });
+      tr.appendChild(mkEl('td', '', r.restock ? '回库' : '不回库'));
+      tb.appendChild(tr);
+    });
+  }).catch(function (e) {
+    tblEmpty(tbl, 7, e.message || String(e));
+    $('retStat').textContent = '';
+  });
+}
+function loadSummary() {
+  var box = $('recSum');
+  if (!DB.share.token) { box.innerHTML = '<div class="empty">统计要连电脑：先在「设置」里连接电脑</div>'; return; }
+  box.innerHTML = '<div class="stat" style="margin:14px 2px">读取中…</div>';
+  refreshPerm();
+  api('GET', '/m/api/stats?days=30').then(function (s) {
+    renderSummary(s);
+  }).catch(function (e) {
+    box.innerHTML = '<div class="empty">' + escHtml(e.message || String(e)) + '</div>';
+  });
+}
+function renderSummary(s) {
+  var box = $('recSum');
+  box.innerHTML = '';
+  function card(lb, vv, ss) {
+    var c = mkEl('div', 'statcard');
+    c.appendChild(mkEl('div', 'lb', lb));
+    c.appendChild(mkEl('div', 'vv', vv));
+    if (ss) c.appendChild(mkEl('div', 'ss', ss));
+    return c;
+  }
+  var g1 = mkEl('div', 'statgrid');
+  g1.appendChild(card('今日销售额', money(s.today.amount),
+    s.today.orders + ' 单 · ' + s.today.qty + ' 件'));
+  g1.appendChild(card('今日利润', money(s.today.profit), '退款 ' + money(s.today.refund)));
+  box.appendChild(g1);
+  var g2 = mkEl('div', 'statgrid');
+  g2.appendChild(card('本月销售额', money(s.month.amount), s.month.orders + ' 单'));
+  g2.appendChild(card('本月利润', money(s.month.profit), '近 ' + s.days + ' 天 ' + money(s.range.amount)));
+  box.appendChild(g2);
+  var g3 = mkEl('div', 'statgrid');
+  g3.appendChild(card('在库件数', String(s.stock.qty), s.stock.items + ' 个型号'));
+  g3.appendChild(card('库存货值', money(s.stock.value), '按单价估算'));
+  box.appendChild(g3);
+
+  var un = s.unpaid || { total: 0, buyers: [] };
+  var c1 = mkEl('div', 'card');
+  c1.appendChild(mkEl('div', 'row-t', '应收挂账 ' + money(un.total)));
+  if (!un.buyers || !un.buyers.length) {
+    var okp = mkEl('div', 'stat', '没有挂账，全部已收款');
+    okp.style.marginTop = '8px';
+    c1.appendChild(okp);
+  } else {
+    un.buyers.forEach(function (x) {
+      var line = mkEl('div', 'kv');
+      line.appendChild(mkEl('span', 'k', x.name + ' · ' + x.count + ' 笔'));
+      line.appendChild(mkEl('span', 'v bad', money(x.amount)));
+      var btn = mkEl('button', 'minibtn gray', '结清');
+      btn.onclick = function () { settleBuyer(x.name); };
+      line.appendChild(btn);
+      c1.appendChild(line);
+    });
+    var all = mkEl('button', 'minibtn gray', '全部结清');
+    all.style.marginTop = '10px';
+    all.onclick = function () { settleBuyer(''); };
+    c1.appendChild(all);
+  }
+  box.appendChild(c1);
+
+  var c2 = mkEl('div', 'card');
+  c2.appendChild(mkEl('div', 'row-t', '低库存 ' + (s.low_count || 0) + ' 个'));
+  if (!s.low || !s.low.length) {
+    var ok2 = mkEl('div', 'stat', '库存都在阈值以上');
+    ok2.style.marginTop = '8px';
+    c2.appendChild(ok2);
+  } else {
+    s.low.forEach(function (r) {
+      var line = mkEl('div', 'kv');
+      line.appendChild(mkEl('span', 'k', r.code + ' ' + (r.model || r.brand || '')));
+      line.appendChild(mkEl('span', 'v bad',
+        '剩 ' + r.qty + (r.shelf ? ' · ' + r.shelf : '')));
+      c2.appendChild(line);
+    });
+  }
+  box.appendChild(c2);
+
+  var c3 = mkEl('div', 'card');
+  c3.appendChild(mkEl('div', 'row-t', '本月利润榜'));
+  if (!s.top || !s.top.length) {
+    var ok3 = mkEl('div', 'stat', '本月还没有出售');
+    ok3.style.marginTop = '8px';
+    c3.appendChild(ok3);
+  } else {
+    s.top.forEach(function (t, i) {
+      var line = mkEl('div', 'kv');
+      line.appendChild(mkEl('span', 'k', (i + 1) + '. ' + t.model));
+      line.appendChild(mkEl('span', 'v ok', money(t.profit) + ' · ' + t.qty + ' 件'));
+      c3.appendChild(line);
+    });
+  }
+  box.appendChild(c3);
+}
+function settleBuyer(name) {
+  if (!canWriteOr()) return;
+  askConfirm(name ? ('结清「' + name + '」的全部挂账？') : '结清全部客户的挂账？', '结清', function () {
+    api('POST', '/m/api/settle', { buyer: name || '' }).then(function (j) {
+      toast(j.message || '已结清');
+      loadSummary();
+    }).catch(function (e) { toast(e.message || String(e)); });
+  });
+}
+
+/* ---------- 回收站 ---------- */
+$('btnTrash').onclick = function () {
+  if (!DB.share.token) { toast('先在「设置」里连接电脑'); return; }
+  openSheet('回收站', function (b) {
+    b.innerHTML = '<div class="stat">读取中…</div>';
+    renderTrash(b);
+  });
+};
+function renderTrash(b) {
+  api('GET', '/m/api/trash').then(function (j) {
+    b.innerHTML = '';
+    var rows = j.items || [];
+    var tip = mkEl('div', 'stat', '共 ' + (j.count || 0) + ' 条（恢复后回到库存）');
+    tip.style.margin = '0 0 6px';
+    b.appendChild(tip);
+    if (!rows.length) { b.appendChild(mkEl('div', 'empty', '回收站是空的')); return; }
+    var list = mkEl('div', 'shlist');
+    rows.forEach(function (r) {
+      var line = mkEl('div', 'strow2');
+      var sm = mkEl('div', 'sm');
+      sm.appendChild(mkEl('b', '', r.code));
+      sm.appendChild(mkEl('span', '',
+        ([r.brand, r.model].filter(Boolean).join(' ') || '-') + ' · ' + r.qty +
+        ' 件 · ' + (r.deleted_at || '')));
+      line.appendChild(sm);
+      var br = mkEl('button', 'minibtn gray', '恢复');
+      br.onclick = function () { trashAct('restore', r.id, b); };
+      var bp = mkEl('button', 'minibtn danger', '彻底删');
+      bp.onclick = function () {
+        askConfirm('彻底删除 ' + r.code + '？照片也会一起删掉，不能恢复。', '彻底删除', function () {
+          trashAct('purge', r.id, b);
+        });
+      };
+      line.appendChild(br);
+      line.appendChild(bp);
+      list.appendChild(line);
+    });
+    b.appendChild(list);
+  }).catch(function (e) {
+    b.innerHTML = '';
+    b.appendChild(mkEl('div', 'empty', e.message || String(e)));
+  });
+}
+function trashAct(op, id, b) {
+  if (!canWriteOr('只读模式：恢复 / 彻底删除需要电脑端授权录入')) return;
+  var path = op === 'restore' ? '/m/api/restore' : '/m/api/purge';
+  api('POST', path, { ids: [id] }).then(function (j) {
+    toast(j.message || '已完成');
+    renderTrash(b);
+    if (invView === 'pc') loadPc($('inKw').value);
+  }).catch(function (e) { toast(e.message || String(e)); });
+}
+
+/* ---------- 盘点单 ---------- */
+$('btnStocktake').onclick = function () {
+  if (!DB.share.token) { toast('先在「设置」里连接电脑'); return; }
+  openSheet('盘点单', function (b) { renderStList(b); });
+};
+function renderStList(b) {
+  b.innerHTML = '<div class="stat">读取中…</div>';
+  api('GET', '/m/api/stocktake?op=list').then(function (j) {
+    b.innerHTML = '';
+    var list = j.list || [];
+    var nb = mkEl('button', '', '＋ 新建盘点单');
+    nb.style.width = '100%';
+    nb.onclick = function () { renderStNew(b); };
+    b.appendChild(nb);
+    if (!list.length) {
+      var em = mkEl('div', 'empty', '还没有盘点单');
+      b.appendChild(em);
+      return;
+    }
+    var box = mkEl('div', 'shlist');
+    list.forEach(function (s) {
+      var line = mkEl('div', 'strow2');
+      var sm = mkEl('div', 'sm');
+      sm.appendChild(mkEl('b', '', s.name || s.no || ('盘点单 ' + s.id)));
+      sm.appendChild(mkEl('span', '',
+        (s.status === 'done' ? '已提交' : '草稿') + ' · ' + (s.created_at || '') +
+        ' · ' + (s.count || 0) + ' 项' +
+        (s.diff ? ' · 差异 ' + s.diff : '')));
+      line.appendChild(sm);
+      line.onclick = function () { renderStDetail(b, s.id); };
+      box.appendChild(line);
+    });
+    b.appendChild(box);
+  }).catch(function (e) {
+    b.innerHTML = '';
+    b.appendChild(mkEl('div', 'empty', e.message || String(e)));
+  });
+}
+function renderStNew(b) {
+  b.innerHTML = '';
+  var iName = inpEl('', '如 11 月全仓盘点');
+  var iBrand = inpEl('', '留空=全部品牌');
+  var iCate = inpEl('', '留空=全部品类');
+  b.appendChild(fld('盘点单名称', iName));
+  b.appendChild(fld('只看品牌（可选）', iBrand));
+  b.appendChild(fld('只看品类（可选）', iCate));
+  var row = mkEl('div', 'btnrow');
+  var back = mkEl('button', 'gray', '返回');
+  var go = mkEl('button', '', '创建');
+  back.onclick = function () { renderStList(b); };
+  go.onclick = function () {
+    if (!canWriteOr()) return;
+    go.disabled = true;
+    api('POST', '/m/api/stocktake', {
+      op: 'new', name: iName.value.trim(), brand: iBrand.value.trim(),
+      category: iCate.value.trim(), only_stock: 1
+    }).then(function (j) {
+      go.disabled = false;
+      toast(j.message || '已创建');
+      if (j.id) renderStDetail(b, j.id); else renderStList(b);
+    }).catch(function (e) { go.disabled = false; toast(e.message || String(e)); });
+  };
+  row.appendChild(back); row.appendChild(go);
+  b.appendChild(row);
+}
+function renderStDetail(b, id) {
+  b.innerHTML = '<div class="stat">读取中…</div>';
+  api('GET', '/m/api/stocktake?op=detail&id=' + id).then(function (j) {
+    b.innerHTML = '';
+    var head = j.head || {}, rows = j.rows || [];
+    var done = head.status === 'done';
+    var info = mkEl('div', 'statline', '');
+    info.style.margin = '0 0 8px';
+    info.textContent = (head.name || head.no || '盘点单') + ' · ' + (done ? '已提交' : '草稿') +
+      ' · ' + rows.length + ' 项' + (head.created_at ? ' · ' + head.created_at : '');
+    b.appendChild(info);
+    if (!rows.length) {
+      b.appendChild(mkEl('div', 'empty', '这张盘点单没有明细'));
+    } else {
+      var list = mkEl('div', 'shlist');
+      rows.forEach(function (r) {
+        var line = mkEl('div', 'strow2');
+        var sm = mkEl('div', 'sm');
+        sm.appendChild(mkEl('b', '', r.code + ' ' + (r.model || r.brand || '')));
+        sm.appendChild(mkEl('span', '', '账面 ' + r.book + (r.shelf ? ' · ' + r.shelf : '')));
+        line.appendChild(sm);
+        var inp = inpEl(String(r.real), '', 'number');
+        inp.disabled = done;
+        if (Number(r.real) !== Number(r.book)) inp.className = 'diff';
+        inp.onchange = function () {
+          if (!canWriteOr()) return;
+          api('POST', '/m/api/stocktake', {
+            op: 'set', row_id: r.id, real_qty: inp.value
+          }).then(function () {
+            r.real = Number(inp.value) || 0;
+            inp.className = (r.real !== Number(r.book)) ? 'diff' : '';
+            toast('已记录 ' + r.code + ' 实盘 ' + r.real);
+          }).catch(function (e) { toast(e.message || String(e)); });
+        };
+        line.appendChild(inp);
+        list.appendChild(line);
+      });
+      b.appendChild(list);
+    }
+    var row = mkEl('div', 'btnrow');
+    var back = mkEl('button', 'gray', '返回列表');
+    back.onclick = function () { renderStList(b); };
+    row.appendChild(back);
+    if (!done) {
+      var cm = mkEl('button', '', '提交盘点');
+      cm.onclick = function () {
+        if (!canWriteOr()) return;
+        askConfirm('提交后按实盘数调整库存，且不能再改。确定？', '提交', function () {
+          api('POST', '/m/api/stocktake', { op: 'commit', id: head.id || id }).then(function (r) {
+            toast(r.message || '已提交');
+            renderStDetail(b, id);
+            if (invView === 'pc') loadPc($('inKw').value);
+          }).catch(function (e) { toast(e.message || String(e)); });
+        });
+      };
+      row.appendChild(cm);
+    }
+    b.appendChild(row);
+  }).catch(function (e) {
+    b.innerHTML = '';
+    b.appendChild(mkEl('div', 'empty', e.message || String(e)));
+  });
+}
+
+/* ================= 设置 ================= */
+$('btnPrefix').onclick = function () {
+  var v = $('inPrefix').value.trim().replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '');
+  DB.prefix = v || 'APP';
+  saveDB();
+  $('prefixStat').textContent = '新编号将形如 ' + DB.prefix + '-00001（已生成的不变）';
+  toast('前缀已保存：' + DB.prefix);
+};
+$('btnWipe').onclick = function () {
+  askConfirm('确定清空手机上的全部库存和出售记录？\n已同步到电脑的数据不受影响，但未同步的会丢失。', '全部清空', function () {
+    var keep = { seq: DB.seq, prefix: DB.prefix, share: DB.share,
+                 theme: DB.theme, locCols: DB.locCols, kwHist: DB.kwHist };
+    var rm = [], i;
+    for (i = 0; i < LS.length; i += 1) {
+      if (LS.key(i).indexOf('cgm_ph_') === 0) rm.push(LS.key(i));
+    }
+    rm.forEach(function (k) { LS.removeItem(k); });   // 照片一并清掉
+    DB = blankDB(); DB.seq = keep.seq; DB.prefix = keep.prefix; DB.share = keep.share;
+    DB.theme = keep.theme; DB.locCols = keep.locCols; DB.kwHist = keep.kwHist;
+    saveDB();
+    loadLoc(''); loadRec(); renderSync(); renderData();
+    toast('已清空手机数据');
+  });
+};
+function renderData() {
+  $('dataStat').textContent = '手机库存 ' + DB.items.length + ' 条 · 出售记录 ' +
+    DB.sales.length + ' 条 · 待同步 ' + pendingCount() + ' 条';
+}
+
+/* ================= 隐私与数据（合规：告知 / 查阅复制 / 删除 / 撤回同意） =================
+   AndroidInfo 由原生注入；在浏览器里打开本页时这些功能不可用，用文案兜底。 */
+function legal() {
+  return (window.AndroidInfo && AndroidInfo.showPrivacy) ? AndroidInfo : null;
+}
+function legalVersion() {
+  try { return (legal() && AndroidInfo.legalVersion) ? AndroidInfo.legalVersion() : ''; }
+  catch (e) { return ''; }
+}
+function renderLegal() {
+  var v = legalVersion();
+  var on = false;
+  try { on = (legal() && AndroidInfo.startupLock) ? !!AndroidInfo.startupLock() : false; }
+  catch (e2) { on = false; }
+  $('legalStat').textContent = v
+    ? ('已同意 · 隐私政策 v' + v)
+    : '请在 App 内阅读并同意隐私政策';
+  $('btnLock').textContent = on ? '开' : '关';
+  $('btnLock').className = 'small' + (on ? '' : ' gray');
+}
+$('btnPrivacy').onclick = function () {
+  var b = legal();
+  if (b) { b.showPrivacy(); } else { toast('请在手机 App 内查看《隐私政策》'); }
+};
+$('btnTerms').onclick = function () {
+  var b = legal();
+  if (b) { b.showTerms(); } else { toast('请在手机 App 内查看《用户协议》'); }
+};
+$('btnInfoList').onclick = function () {
+  var b = legal();
+  if (b) { b.showPersonalInfo(); } else { toast('请在手机 App 内查看清单'); }
+};
+$('btnLock').onclick = function () {
+  var b = legal();
+  if (!b || !b.setStartupLock) { toast('需要新版 App 才支持启动验证'); return; }
+  b.setStartupLock(!b.startupLock());
+  setTimeout(renderLegal, 400);
+};
+$('btnWithdraw').onclick = function () {
+  var b = legal();
+  if (!b || !b.withdrawConsent) { toast('请在 App 内操作'); return; }
+  b.withdrawConsent();           /* 二次确认由原生弹窗负责 */
+};
+
+/* 导出全部数据：JSON 备份 → 原生写文件 → 系统分享面板（PIPL 第 45 条查阅复制权）。
+   刻意不导出会话令牌与连接码：它们是凭据，不属于用户要备份的数据。 */
+function buildExport() {
+  var photos = {};
+  var i, k, n = 0;
+  for (i = 0; i < LS.length; i += 1) {
+    k = LS.key(i);
+    if (k && k.indexOf('cgm_ph_') === 0) { photos[k] = LS.getItem(k); n += 1; }
+  }
+  return {
+    app: '仓管家手机版',
+    kind: 'backup',
+    format: 1,
+    exported_at: new Date().toISOString(),
+    privacy_version: legalVersion(),
+    items: DB.items,
+    sales: DB.sales,
+    seq: DB.seq,
+    prefix: DB.prefix,
+    settings: { theme: DB.theme, locCols: DB.locCols, kwHist: DB.kwHist,
+                server: DB.share.base || '' },
+    photo_count: n,
+    photos: photos
+  };
+}
+$('btnExport').onclick = function () {
+  var b = legal();
+  if (!b || !b.exportData) { toast('导出需要新版 App'); return; }
+  var data = buildExport();
+  var s = JSON.stringify(data);
+  /* 原生桥一次传太大的字符串会占内存，超过 6MB 就先只导表格数据 */
+  if (s.length > 6 * 1024 * 1024) {
+    data.photos = {};
+    data.photos_omitted = true;
+    s = JSON.stringify(data);
+    toast('照片较多，本次导出不含照片');
+  }
+  b.exportData(s);
+};
+
+/* 库存页「＋ 录入」：切页签 + 聚焦第一个输入框，省一次点击
+   按钮可拖动：按住挪位置，松开记住（存本机），轻点仍是进录入页 */
+var FAB_DRAG = { moved: false };
+(function () {
+  var fab = $('fabAdd');
+  var sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
+  function place(l, t, save) {
+    var w = fab.offsetWidth, h = fab.offsetHeight;
+    l = Math.max(6, Math.min(l, window.innerWidth - w - 6));
+    t = Math.max(6, Math.min(t, window.innerHeight - h - 64));   // 别钻到底栏下面
+    fab.style.left = l + 'px'; fab.style.top = t + 'px';
+    fab.style.right = 'auto'; fab.style.bottom = 'auto';
+    if (save) { try { LS.setItem('fabPos', Math.round(l) + ',' + Math.round(t)); } catch (e) {} }
+  }
+  try {                                        // 恢复上次拖到的位置
+    var sv = LS.getItem('fabPos');
+    if (sv) {
+      var a = sv.split(',');
+      if (a.length === 2) place(parseFloat(a[0]), parseFloat(a[1]), false);
+    }
+  } catch (e) {}
+  fab.addEventListener('touchstart', function (e) {
+    var t = e.touches[0], r = fab.getBoundingClientRect();
+    sx = t.clientX; sy = t.clientY; ox = r.left; oy = r.top;
+    dragging = true; FAB_DRAG.moved = false;
+    fab.classList.add('drag');
+  }, { passive: true });
+  fab.addEventListener('touchmove', function (e) {
+    if (!dragging) return;
+    var t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (!FAB_DRAG.moved && Math.abs(dx) + Math.abs(dy) < 6) return;   // 抖动不算拖
+    FAB_DRAG.moved = true;
+    place(ox + dx, oy + dy, false);
+  }, { passive: true });
+  fab.addEventListener('touchend', function () {
+    dragging = false;
+    fab.classList.remove('drag');
+    if (FAB_DRAG.moved) {
+      var r = fab.getBoundingClientRect();
+      place(r.left, r.top, true);
+    }
+  });
+  fab.addEventListener('touchcancel', function () {
+    dragging = false;
+    fab.classList.remove('drag');
+  });
+})();
+$('fabAdd').onclick = function () {
+  if (FAB_DRAG.moved) { FAB_DRAG.moved = false; return; }   // 拖动结束时的那次点击不算点击
+  tab2('add');
+  setTimeout(function () {
+    var el = $('aBrand');
+    if (el) el.focus();
+  }, 80);
+};
+
+/* ================= 页签 ================= */
+function tab2(name) {
+  selExit(); recSelExit();          // 切页签一律退出多选（操作条是 fixed 的，不退会浮在新页面上）
+  var tabs = document.querySelectorAll('nav div');
+  for (var i = 0; i < tabs.length; i += 1)
+    tabs[i].className = (tabs[i].getAttribute('data-t') === name) ? 'on' : '';
+  var map = { inv: 'Inv', add: 'Add', sell: 'Sell', rec: 'Rec', set: 'Set' };
+  ['Inv', 'Add', 'Sell', 'Rec', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
+  $('p' + map[name]).classList.remove('hide');
+  if (name === 'inv') (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
+  if (name === 'add') renderAddPh();
+  if (name === 'rec') { refreshPerm(); recTab(REC_TAB); }
+  if (name === 'set') { renderShare(); renderSync(); renderData(); renderColList(); renderTools(); }
+  if (name === 'inv' || name === 'rec') setTimeout(fitTbls, 0);   // 显示后重算限高
+}
+(function () {
+  var tabs = document.querySelectorAll('nav div');
+  for (var i = 0; i < tabs.length; i += 1)
+    tabs[i].onclick = function () { tab2(this.getAttribute('data-t')); };
+})();
+
+/* ================= 列题（电脑端共享设置，用于电脑库存表头） ================= */
+var CT_DEFS = { code: '编号', brand: '品牌', category: '品类', model: '型号',
+                condition: '成色', price: '单价', qty: '数量', shelf: '货架',
+                listed: '上架', remark: '备注', total: '合计', sale_date: '日期',
+                buyer: '买家', out_type: '类型' };
+function loadTitles() {
+  if (!DB.share.token) { titles = {}; return Promise.resolve(); }
+  return api('GET', '/m/api/coltitles').then(function (j) {
+    titles = j.titles || {};
+  }).catch(function () { titles = {}; });
+}
+
+/* ================= 外观：浅色 / 深色 / 跟随系统 ================= */
+var _mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  var t = DB.theme || 'auto';
+  var dark = t === 'dark' || (t === 'auto' && _mqDark && _mqDark.matches);
+  document.body.classList.toggle('dark', dark);
+  renderThemeSeg();
+}
+function setTheme(t) { DB.theme = t; saveDB(); applyTheme(); }
+function renderThemeSeg() {
+  var t = DB.theme || 'auto';
+  [['thLight', 'light'], ['thDark', 'dark'], ['thAuto', 'auto']].forEach(function (p) {
+    var el = $(p[0]);
+    if (el) el.className = (t === p[1]) ? 'on' : '';
+  });
+}
+if (_mqDark && _mqDark.addEventListener)
+  _mqDark.addEventListener('change', function () { if (DB.theme === 'auto') applyTheme(); });
+$('thLight').onclick = function () { setTheme('light'); };
+$('thDark').onclick = function () { setTheme('dark'); };
+$('thAuto').onclick = function () { setTheme('auto'); };
+
+/* ================= 库存表格列自定义 ================= */
+var ALL_COLS = [['code', '编号'], ['brand', '品牌'], ['category', '品类'],
+                ['model', '型号'], ['condition', '成色'], ['price', '单价'],
+                ['qty', '数量'], ['shelf', '货架'], ['remark', '备注']];
+function renderColList() {
+  var box = $('colList'); box.innerHTML = '';
+  ALL_COLS.forEach(function (p) {
+    var row = document.createElement('label');
+    row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '') +
+                    (DB.locCols.indexOf(p[0]) >= 0 ? ' on' : '');
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = DB.locCols.indexOf(p[0]) >= 0;
+    if (p[0] === 'code') cb.disabled = true;
+    cb.onchange = function () {
+      var i = DB.locCols.indexOf(p[0]);
+      if (cb.checked) {
+        if (i < 0) DB.locCols.push(p[0]);
+      } else {
+        if (p[0] === 'code') { cb.checked = true; return; }
+        if (DB.locCols.length <= 1) { cb.checked = true; toast('至少保留一列'); return; }
+        if (i >= 0) DB.locCols.splice(i, 1);
+      }
+      row.className = 'ckrow' + (p[0] === 'code' ? ' dis' : '') + (cb.checked ? ' on' : '');
+      saveDB(); refreshInv();
+    };
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(' ' + p[1]));
+    box.appendChild(row);
+  });
+}
+$('btnColReset').onclick = function () {
+  DB.locCols = DEF_COLS.slice();
+  saveDB(); renderColList(); refreshInv();
+  toast('已恢复默认列');
+};
+
+/* ================= 启动 ================= */
+loadDB();
+$('inPrefix').value = DB.prefix || 'APP';
+applyTheme();
+renderFlts(); renderKwHist();
+refreshHead();
+renderSync(); renderData(); renderLegal();
+(function () {
+  var m = (location.hash || '').match(/base=([^&]+)/);
+  if (m) {
+    try {
+      var b = decodeURIComponent(m[1]);
+      if (b && !DB.share.base) { DB.share.base = b; saveDB(); }
+    } catch (e2) {}
+  }
+  base = DB.share.base || '';
+  $('shBase').value = base;
+  if (base && DB.share.token) {
+    api('GET', '/m/api/whoami').then(function (w) {
+      refreshHead(); renderShare();
+      CAN_WRITE = !!w.can_write; renderTools();
+      loadTitles().then(function () { if (invView === 'pc') loadPc($('inKw').value); });
+      autoSync();          /* 已连接电脑：开机就把待同步的数据送上去 */
+    }).catch(function () {});
+  } else {
+    renderShare(); renderTools();
+  }
+  loadLoc(''); loadRec();
+  setTimeout(fitTbls, 0);          // 首屏渲染后精调表格限高（th 吸顶）
+})();
+</script>
+</body>
+</html>

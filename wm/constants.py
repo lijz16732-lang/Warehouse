@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.35.0"
+APP_VERSION = "1.42.7"
 
 
 def app_icon_path():
@@ -164,6 +164,68 @@ def center_window(win, master=None, size=None, vertical_ratio=0.34, design=True,
                 win.deiconify()           # 兜底：异常路径也要让窗口显示出来
             except Exception:
                 pass
+
+
+def guard_combobox(cb):
+    """readonly 下拉框防「变空白」保险：
+
+    ① 创建时控件未映射（隐藏页里预先建好），之后映射显示时值可能不绘制
+       —— <Map> 时强制重设一遍当前值，Tcl 写 trace 同值也触发，逼它重绘；
+    ② 偶发时序下 textvariable 被清成空串 —— 监视变量，空了就恢复上一个值。
+    （「弹层关闭后白字白底变空白」的根因是 clam 主题 readonly+focus 状态
+    默认 fg 为白色，已在 wm/theme.py 的 TCombobox foreground map 修复。）
+    非 readonly 下拉不受影响（用户可清空输入），直接原样返回。幂等。
+    """
+    if getattr(cb, "_wm_guarded", False):
+        return cb
+    try:
+        if str(cb.cget("state")) != "readonly":
+            return cb
+    except Exception:
+        return cb
+    cb._wm_guarded = True
+
+    good = {"v": cb.get()}
+
+    def resync(_e=None):
+        try:
+            v = cb.get()
+            if v:
+                cb.set(v)
+        except Exception:
+            pass
+
+    try:
+        cb.bind("<Map>", lambda _e: cb.after_idle(resync), add="+")
+    except Exception:
+        pass
+    try:
+        name = str(cb.cget("textvariable"))
+        if name:
+            def _watch(*_a):
+                # 注意：写 trace 触发时 cb.get() 读到的还是控件内部旧值，
+                # 必须直接读 textvariable 本身
+                try:
+                    cur = str(cb.tk.globalgetvar(name))
+                except Exception:
+                    return
+                if cur:
+                    good["v"] = cur
+                elif good["v"]:
+                    try:
+                        cb.set(good["v"])
+                    except Exception:
+                        pass
+
+            _cmd = "_wmguard_%d" % id(cb)
+            cb.tk.createcommand(_cmd, _watch)
+            cb.tk.call("trace", "add", "variable", name, "write", _cmd)
+    except Exception:
+        pass
+
+    resync()
+    return cb
+
 
 # --------------------------------------------------------------------------
 # 字段定义 (key, 中文名, 类型, 默认列宽, 对齐, 是否可参与筛选)

@@ -228,7 +228,11 @@ def apply_theme(root, scale=1.0):
         lightcolor=CLR_BORDER, darkcolor=CLR_BORDER)
     style.map("TCombobox",
               fieldbackground=[("readonly", CLR_INPUT), ("disabled", CLR_BORDER_LT)],
-              bordercolor=[("focus", CLR_ACCENT), ("hover", CLR_SB)])
+              bordercolor=[("focus", CLR_ACCENT), ("hover", CLR_SB)],
+              # clam 主题默认给 readonly+focus 状态的 fg 是白色：弹层关闭
+              # 不选择时焦点留在下拉框上，就会「白字白底变空白」——
+              # 显式映射回正常文字色
+              foreground=[("readonly", CLR_TEXT)])
     root.option_add("*TCombobox*Listbox.font", (fam, 10))
     root.option_add("*TCombobox*Listbox.background", CLR_INPUT)
     root.option_add("*TCombobox*Listbox.foreground", CLR_TEXT)
