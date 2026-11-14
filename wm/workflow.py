@@ -280,6 +280,19 @@ class FlowDialog(tk.Toplevel):
         self.transient(master)
         apply_window_icon(self)
 
+        # 底栏和提示最先 pack（side=bottom 优先占位）：添加照片后内容变高，
+        # 窗口空间不足时 Tk 会裁掉后 pack 的控件——按钮栏必须保住
+        foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        foot.pack(fill="x", side="bottom")
+        ttk.Button(foot, text="确定", style="Accent.TButton", width=10,
+                   command=self._ok).pack(side="right", padx=(8, 16), pady=12)
+        ttk.Button(foot, text="取消", width=10,
+                   command=self.destroy).pack(side="right", pady=12)
+        self.msg = tk.Label(self, text="", bg=CLR_BG, fg=CLR_WARN,
+                            font=(self.fam, 9), anchor="w")
+        self.msg.pack(fill="x", padx=18, side="bottom")
+
         body = tk.Frame(self, bg=CLR_BG)
         body.pack(fill="both", expand=True, padx=18, pady=14)
         body.columnconfigure(1, weight=1)
@@ -400,7 +413,8 @@ class FlowDialog(tk.Toplevel):
                      % stages[-1],
                      bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9), anchor="w"
                      ).pack(fill="x", padx=12, pady=(8, 0))
-            self.photo_strip = PhotoStrip(box, tab.app, kind="wf")
+            self.photo_strip = PhotoStrip(box, tab.app, kind="wf",
+                                          on_change=self._refit)
             self.photo_strip.pack(fill="x", pady=(0, 6))
             self.photo_strip.set_code(rec.get("no") or "")
             try:                  # 照片条 + 双列字段需要更宽的空间
@@ -408,23 +422,21 @@ class FlowDialog(tk.Toplevel):
             except Exception:
                 pass
 
-        self.msg = tk.Label(self, text="", bg=CLR_BG, fg=CLR_WARN,
-                            font=(self.fam, 9), anchor="w")
-        self.msg.pack(fill="x", padx=18)
-
-        foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                        highlightthickness=1)
-        foot.pack(fill="x", side="bottom")
-        ttk.Button(foot, text="确定", style="Accent.TButton", width=10,
-                   command=self._ok).pack(side="right", padx=(8, 16), pady=12)
-        ttk.Button(foot, text="取消", width=10,
-                   command=self.destroy).pack(side="right", pady=12)
         self.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self.destroy())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         center_window(self, master, force=True)
         self.grab_set()
         self.focus_force()
+
+    def _refit(self):
+        """照片增删后内容变高：窗口跟着长高并保持居中（按钮永远可见）。"""
+        try:
+            self.update_idletasks()
+            if self.winfo_reqheight() > self.winfo_height() + 2:
+                center_window(self, self.master, force=True)
+        except Exception:
+            pass
 
     def _toggle_stock(self):
         state = "normal" if self.var_stock.get() else "disabled"
@@ -812,6 +824,14 @@ class DetailDialog(tk.Toplevel):
         self.transient(master)
         apply_window_icon(self)
 
+        # 底栏最先 pack：添加照片后内容变高，窗口空间不足时
+        # Tk 会裁掉后 pack 的控件——关闭按钮必须保住
+        foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        foot.pack(fill="x", side="bottom")
+        ttk.Button(foot, text="关闭", width=10,
+                   command=self.destroy).pack(side="right", padx=(8, 16), pady=12)
+
         stages = tab.app.store.wf_stages()
         ex = rec.get("extra")
         ex_lines = ("\n" + "\n".join("%s：%s" % (k, v) for k, v in ex.items())
@@ -835,7 +855,8 @@ class DetailDialog(tk.Toplevel):
         ph = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                       highlightthickness=1)
         ph.pack(fill="x")
-        self.photo_strip = PhotoStrip(ph, tab.app, kind="wf")
+        self.photo_strip = PhotoStrip(ph, tab.app, kind="wf",
+                                      on_change=self._refit)
         self.photo_strip.pack(fill="x", pady=(0, 6))
         self.photo_strip.set_code(rec.get("no") or "")
 
@@ -856,15 +877,19 @@ class DetailDialog(tk.Toplevel):
         txt.insert("1.0", "\n".join(lines) or "（暂无流转记录）")
         txt.configure(state="disabled")
 
-        foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                        highlightthickness=1)
-        foot.pack(fill="x", side="bottom")
-        ttk.Button(foot, text="关闭", width=10,
-                   command=self.destroy).pack(side="right", padx=(8, 16), pady=12)
         self.bind("<Escape>", lambda e: self.destroy())
         center_window(self, master, force=True)
         self.grab_set()
         self.focus_force()
+
+    def _refit(self):
+        """照片增删后内容变高：窗口跟着长高并保持居中（按钮永远可见）。"""
+        try:
+            self.update_idletasks()
+            if self.winfo_reqheight() > self.winfo_height() + 2:
+                center_window(self, self.master, force=True)
+        except Exception:
+            pass
 
 
 class WorkflowTab(ttk.Frame):

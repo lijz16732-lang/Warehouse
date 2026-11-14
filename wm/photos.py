@@ -32,11 +32,12 @@ class PhotoStrip(tk.Frame):
     保存后由调用方取出逐张落盘（store.photo_add）。
     """
 
-    def __init__(self, master, app, kind="item", pending=False):
+    def __init__(self, master, app, kind="item", pending=False, on_change=None):
         tk.Frame.__init__(self, master, bg=CLR_CARD)
         self.app = app
         self.kind = kind
         self.pending = bool(pending)
+        self.on_change = on_change    # 照片增删后回调（弹窗用来重算高度）
         self.pending_list = []        # [(name, raw_bytes)] 暂存区
         self.code = None
         self._imgs = {}               # name -> PhotoImage（防被 GC）
@@ -58,6 +59,17 @@ class PhotoStrip(tk.Frame):
     # ------------------------------------------------------------ 数据
     def set_code(self, code):
         """切换当前记录（None = 未选中，显示提示）。"""
+        self._set_code(code)
+        self._notify()
+
+    def _notify(self):
+        try:
+            if self.on_change:
+                self.on_change()
+        except Exception:
+            pass
+
+    def _set_code(self, code):
         if self.pending:
             self.code = "__pending__"
             self._render_pending()
@@ -110,6 +122,7 @@ class PhotoStrip(tk.Frame):
                      font=(self.app.fam, 8)).pack(side="left")
         for name, _raw in self.pending_list:
             self._thumb(name)
+        self._notify()
 
     def _bytes_of(self, name):
         """取照片原始字节（暂存 / 本机直接读；客户端经 RPC base64）。"""
