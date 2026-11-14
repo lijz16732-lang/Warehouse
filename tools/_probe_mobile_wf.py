@@ -173,13 +173,22 @@ wf3 = int(b.get("id") or 0)
 check("手机发起时可直接指定工位",
       c == 200 and wf3 and st.wf_one(wf3)["station"] == "发起制作A", b)
 c, b, _ = handle_wf(srv, ip, tok, {"q": "list", "status": "active",
-                                   "stage": "0", "station": "发起制作B"})
-check("指定给别人的单不在我的列表里",
+                                   "stage": "0", "station": "发起制作B",
+                                   "mine_stage": "0"})
+check("别站的单也看得到（只是 mine=false）",
+      any(r["id"] == wf3 and r["mine"] is False for r in (b.get("rows") or [])),
+      b.get("rows"))
+c, b, _ = handle_wf(srv, ip, tok, {"q": "list", "status": "active",
+                                   "stage": "0", "station": "发起制作B",
+                                   "mine_stage": "0", "only": "1"})
+check("勾「只看我的」时别站的单不出现",
       all(r["id"] != wf3 for r in (b.get("rows") or [])), b.get("rows"))
 c, b, _ = handle_wf(srv, ip, tok, {"q": "list", "status": "active",
-                                   "stage": "0", "station": "发起制作A"})
-check("指定给我的单在我的列表里",
-      any(r["id"] == wf3 for r in (b.get("rows") or [])), b.get("rows"))
+                                   "stage": "0", "station": "发起制作A",
+                                   "mine_stage": "0"})
+check("指定给我的单 mine=true、可推进",
+      any(r["id"] == wf3 and r["mine"] is True for r in (b.get("rows") or [])),
+      b.get("rows"))
 c, b, _ = handle_wf(srv, ip, tok, None, {
     "op": "move", "id": wf3, "by": "小周", "stage": 0,
     "station": "发起制作B", "to_station": "制作标签B"})

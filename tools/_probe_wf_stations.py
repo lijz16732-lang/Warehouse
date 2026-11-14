@@ -92,19 +92,59 @@ chk("_my_station / _my_stage 一致",
       tab._my_station() == "制作标签B" and tab._my_stage() == 1,
       (tab._my_station(), tab._my_stage()))
 
-# ---- 3. 列表按工位过滤 ----
+# ---- 3. 看得见整条流程，但只有本站的单能推（v1.43.1） ----
 w_mine, _ = store.wf_create("给我的单", by="张三")
 store.wf_advance(w_mine, "张三", "印好", station="制作标签B")
 w_other, _ = store.wf_create("给别人的单", by="张三")
 store.wf_advance(w_other, "张三", "印好", station="制作标签")
 w_pool, _ = store.wf_create("公共池的单", by="张三")
 store.wf_advance(w_pool, "张三", "印好")          # 不指定 = 该站任何人
+w_down, _ = store.wf_create("已经走到下一站的单", by="张三")
+store.wf_advance(w_down, "张三", "印好")
+store.wf_advance(w_down, "李四", "贴好")          # 停在「贴标签」(第 3 站)
+tab.var_only_mine.set(False)
 tab.refresh_rows()
 root.update()
 ids = [int(i) for i in tab.tree.get_children()]
+chk("默认看得到全部在办单（含别站）",
+      all(x in ids for x in (w_mine, w_other, w_pool, w_down)), ids)
 chk("指定给我的单看得到", w_mine in ids, ids)
-chk("指定给别人的单看不到", w_other not in ids, ids)
-chk("没指定人的公共单看得到", w_pool in ids, ids)
+chk("别站的单也看得到（看流程）", w_down in ids, ids)
+chk("别站的单灰显 tag=other",
+      "other" in tab.tree.item(str(w_down), "tags"),
+      tab.tree.item(str(w_down), "tags"))
+chk("我这一站的单不灰显",
+      "other" not in tab.tree.item(str(w_mine), "tags"),
+      tab.tree.item(str(w_mine), "tags"))
+
+# 选中别站的单 → 推进/退回按钮禁用
+tab.tree.selection_set(str(w_down))
+tab.tree.focus(str(w_down))
+tab._sync_action_btns()
+root.update()
+chk("选中别站的单时「推进」禁用", "disabled" in tab.btn_adv.state(),
+    tab.btn_adv.state())
+chk("选中别站的单时「退回」禁用", "disabled" in tab.btn_back.state(),
+    tab.btn_back.state())
+chk("提示行说明为什么不能推", "只读" in tab.lbl_hint.cget("text"),
+    tab.lbl_hint.cget("text"))
+tab.tree.selection_set(str(w_mine))
+tab.tree.focus(str(w_mine))
+tab._sync_action_btns()
+root.update()
+chk("选中本站的单时「推进」可用", "disabled" not in tab.btn_adv.state(),
+    tab.btn_adv.state())
+
+# 勾上「只看本站」→ 别站的单不列
+tab.var_only_mine.set(True)
+tab.refresh_rows()
+root.update()
+ids2 = [int(i) for i in tab.tree.get_children()]
+chk("只看本站时别站的单不列", w_down not in ids2, ids2)
+chk("只看本站时我的单还在", w_mine in ids2 and w_pool in ids2, ids2)
+tab.var_only_mine.set(False)
+tab.refresh_rows()
+root.update()
 
 # ---- 4. 推进弹窗能选「交给谁」 ----
 rec = [r for r in store.wf_list("active", station="制作标签B")
@@ -116,8 +156,10 @@ chk("「交给谁」列出目标节点工位",
       svals[0] == "该节点任意人" and stages[2] in svals, svals)
 chk("不默认指定人（公共池）", fd.var_station.get() == "该节点任意人",
     fd.var_station.get())
-# 在该节点再加一个人，验证能选具体工位
-store.wf_set_stations([{"name": "贴标签A", "stage": 2},
+# 在该节点再加一个人，验证能选具体工位（保留第 2 站的 制作标签A/B）
+store.wf_set_stations([{"name": "制作标签A", "stage": 1},
+                       {"name": "制作标签B", "stage": 1},
+                       {"name": "贴标签A", "stage": 2},
                        {"name": "贴标签B", "stage": 2}])
 fd._fill_stations(2)
 root.update()
@@ -160,7 +202,7 @@ fd2.var_target.set(stages[1])
 fd2._fill_stations(1)
 root.update()
 chk("换成「制作标签」后工位下拉跟着换",
-      stages[1] in list(fd2.cb_station.cget("values"))
+      "制作标签B" in list(fd2.cb_station.cget("values"))
       and "贴标签A" not in list(fd2.cb_station.cget("values")),
       list(fd2.cb_station.cget("values")))
 fd2.destroy()

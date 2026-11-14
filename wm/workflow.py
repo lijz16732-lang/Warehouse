@@ -1110,6 +1110,12 @@ class WorkflowTab(ttk.Frame):
         e.bind("<KeyRelease>", lambda ev: self._debounce())
         ttk.Button(flt, text="重置", style="Ghost.TButton", width=6,
                    command=self.reset_kw).pack(side="left", padx=(6, 0))
+        # 工位固定的同时也要看得见整条流程：默认列全部在办单，
+        # 只有停在本机工位的单能推进；勾上就只看自己这站
+        self.var_only_mine = tk.BooleanVar(value=False)
+        ttk.Checkbutton(flt, text="只看本站", variable=self.var_only_mine,
+                        command=self.refresh_rows).pack(side="left",
+                                                       padx=(12, 0))
         self._job = None
 
         wrap = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
@@ -1129,10 +1135,11 @@ class WorkflowTab(ttk.Frame):
                              stretch=(key in ("title", "note")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        # tag 优先级 = 创建先后（先创建优先）：已取消 > 已完成 > 加急 > 临近超时 > 斑马纹
+        # tag 优先级 = 创建先后（先创建优先）：已取消 > 已完成 > 加急 > 别站 > 临近超时 > 斑马纹
         self.tree.tag_configure("cancelled", foreground="#98A2B3")
         self.tree.tag_configure("done", foreground="#0E9F6E")
         self.tree.tag_configure("urgent", foreground="#D92D20")
+        self.tree.tag_configure("other", foreground="#98A2B3")
         self.tree.tag_configure("stale", foreground=CLR_WARN)
         self.tree.tag_configure("odd", background="#F7FAFD")
         self.tree.bind("<Double-1>", lambda e: self.show_detail())
@@ -1142,8 +1149,9 @@ class WorkflowTab(ttk.Frame):
         foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=(0, 10))
         self.lbl_hint = tk.Label(foot, text="", bg=CLR_BG, fg=CLR_MUTED,
-                                 font=(self.fam, 9))
-        self.lbl_hint.pack(side="left")
+                                 font=(self.fam, 9), anchor="w")
+        # expand+fill：提示文字再长也只占剩余空间，不会把右侧按钮挤出窗口
+        self.lbl_hint.pack(side="left", fill="x", expand=True)
         ttk.Button(foot, text="删除", style="Danger.TButton", width=6,
                    command=self.delete_selected).pack(side="right")
         self.btn_urgent = ttk.Button(foot, text="加急", style="Ghost.TButton",
@@ -1153,12 +1161,14 @@ class WorkflowTab(ttk.Frame):
                    command=self.cancel_selected).pack(side="right", padx=(0, 8))
         ttk.Button(foot, text="流转记录", style="Ghost.TButton", width=9,
                    command=self.show_detail).pack(side="right", padx=(0, 8))
-        ttk.Button(foot, text="◂ 退回", style="Ghost.TButton", width=7,
-                   command=lambda: self.move_selected(False)).pack(
-            side="right", padx=(0, 8))
-        ttk.Button(foot, text="推进 ▸", style="Accent.TButton", width=7,
-                   command=lambda: self.move_selected(True)).pack(
-            side="right", padx=(0, 8))
+        self.btn_back = ttk.Button(foot, text="◂ 退回", style="Ghost.TButton",
+                                   width=7,
+                                   command=lambda: self.move_selected(False))
+        self.btn_back.pack(side="right", padx=(0, 8))
+        self.btn_adv = ttk.Button(foot, text="推进 ▸", style="Accent.TButton",
+                                  width=7,
+                                  command=lambda: self.move_selected(True))
+        self.btn_adv.pack(side="right", padx=(0, 8))
 
     # ------------------------------------------------------------ 辅助
     def remember_name(self, name):
@@ -1372,7 +1382,9 @@ class WorkflowTab(ttk.Frame):
     def refresh_rows(self):
         try:
             status = self.var_status.get() or "active"
-            mine_st = self._my_station()          # 只列「给我的单」+ 本节点公共池
+            # v1.43.1：工位固定 ≠ 只看本站——默认列全部在办单，
+            # 哪一站走到哪一步都看得见，只是别站的单不能推进
+            mine_st = self._my_station() if self.var_only_mine.get() else ""
             if self.flow.sel >= 0 and status == "active":
                 rows = [r for r in self.app.store.wf_list(
                             "active", self.var_kw.get(), station=mine_st)
@@ -1404,6 +1416,8 @@ class WorkflowTab(ttk.Frame):
                 tags.append("done")
             elif int(r.get("urgent") or 0):
                 tags.append("urgent")
+            elif not self._can_move(r):
+                tags.append("other")      # 停在别的工位：只读
             elif int(r.get("days") or 0) >= 3:
                 tags.append("stale")
             if i % 2 == 0:
@@ -1419,16 +1433,18 @@ class WorkflowTab(ttk.Frame):
             self.tree.selection_set(prev)
             self.tree.focus(prev)
         n = len(rows)
-        hint = "共 %d 张制作单（双击查看流转记录）" % n
+        doable = sum(1 for r in rows if self._can_move(r))
         mine = self._my_stage()
-        stamp = ("已固定 · 更换需主机同意" if self._stage_locked()
+        stamp = ("已固定" if self._stage_locked()
                  else "首次选择后固定")
-        hint = "本机工位：%s（%s） · %s" % (
-            (self._my_station() + " · " + self._stage_name(mine))
+        hint = "本机工位：%s（%s） · 共 %d 张 · 本站可推进 %d 张 · 双击看流转" % (
+            (self._my_station() + "·" + self._stage_name(mine))
             if mine >= 0
             else ("未选（请先选择你的工位）" if self._is_client() else "不限"),
-            stamp, hint)
-        self.lbl_hint.configure(text=hint)
+            stamp, n, doable if mine >= 0 else n)
+        if self.var_only_mine.get():
+            hint += " · 只看本站"
+        self._hint_base = hint
         self._sync_urgent_btn()
 
     def _sync_urgent_btn(self):
@@ -1439,6 +1455,62 @@ class WorkflowTab(ttk.Frame):
             urgent = rec is not None and int(rec.get("urgent") or 0)
             self.btn_urgent.configure(text="取消加急" if urgent else "加急",
                                       width=9 if urgent else 5)
+        except Exception:
+            pass
+        self._sync_action_btns()
+
+    def _can_move(self, rec, forward=True):
+        """这张单能不能由本机推进/退回（看不到 ≠ 能推，看得到 ≠ 能推）。
+
+        工位固定后：单据停在别的站，或者已经指定交给同站的另一个人，
+        都只能查看流转记录，不能替别人推进。
+        """
+        if rec is None:
+            return False
+        if forward and rec.get("status") != "active":
+            return False
+        mine = self._my_stage()
+        if mine < 0:
+            return True                    # 主机「不限」：哪一站的单都能推
+        if int(rec.get("stage") or 0) != mine:
+            return False
+        owner = str(rec.get("station") or "")
+        return (not owner) or owner == (self._my_station() or "")
+
+    def _sync_action_btns(self):
+        """推进/退回只对「停在本机这一站」的单可用，别站的单只读。
+
+        同时把「为什么不能推」写在提示行里，避免用户点了没反应。
+        """
+        try:
+            iid = self.tree.focus()
+            rec = self._by_id.get(int(iid)) if iid else None
+            ok_adv = self._can_move(rec)
+            ok_back = self._can_move(rec, forward=False)
+            for btn, on in ((self.btn_adv, ok_adv), (self.btn_back, ok_back)):
+                try:
+                    if on:
+                        btn.state(["!disabled"])
+                    else:
+                        btn.state(["disabled"])
+                except Exception:
+                    pass
+            base = getattr(self, "_hint_base", "")
+            note = ""
+            if rec is not None and not ok_adv:
+                owner = str(rec.get("station") or "")
+                if rec.get("status") != "active":
+                    note = " · 选中单已%s，只能查看" % (
+                        "完成" if rec.get("status") == "done" else "取消")
+                elif self._my_stage() < 0:
+                    note = " · 选中单在「%s」（本机不限，可直接推进）" % (
+                        rec.get("stage_name") or "?")
+                elif owner and owner != (self._my_station() or ""):
+                    note = " · 选中单指定交给「%s」，只能查看" % owner
+                else:
+                    note = " · 选中单在「%s」，本机只读" % (
+                        rec.get("stage_name") or "?")
+            self.lbl_hint.configure(text=base + note)
         except Exception:
             pass
 
@@ -1534,8 +1606,17 @@ class WorkflowTab(ttk.Frame):
         if mine >= 0 and int(rec.get("stage") or 0) != mine:
             messagebox.showinfo(
                 "制作流程",
-                "该单现在在「%s」，本机负责「%s」，只能在本站操作。"
+                "该单现在在「%s」，本机负责「%s」，只能在本站操作。\n\n"
+                "整条流程都能看：双击这张单选「流转记录」即可查看走到哪一步。"
                 % (rec.get("stage_name") or "?", self._stage_name(mine)),
+                parent=self)
+            return
+        owner = str(rec.get("station") or "")
+        if owner and mine >= 0 and owner != (self._my_station() or ""):
+            messagebox.showinfo(
+                "制作流程",
+                "这张单指定交给「%s」，本机工位是「%s」，不能替别人接。"
+                % (owner, self._my_station() or self._stage_name(mine)),
                 parent=self)
             return
         dlg = FlowDialog(self, self, rec, forward)

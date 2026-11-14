@@ -1079,6 +1079,26 @@ def _wf_by(payload):
     return str((payload or {}).get("by") or "").strip()[:20]
 
 
+def _truthy(v):
+    """查询参数里的布尔（"0"/"false"/空 都算假）。"""
+    if v is None:
+        return False
+    return str(v).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _wf_can_do(rec, st, my_station=""):
+    """这张单能不能由本机（这个工位）推进——看得到 ≠ 能推。
+
+    条件：在办 + 停在我负责的节点 + 没有指定交给同节点的另一个人。
+    """
+    if not rec or str(rec.get("status") or "active") != "active":
+        return False
+    if st < 0 or int(rec.get("stage") or 0) != st:
+        return False
+    owner = str(rec.get("station") or "")
+    return (not owner) or owner == (my_station or "")
+
+
 def _wf_stage_guard(store, rec, st, my_station=""):
     """校验：手机工位是不是单据当前所在节点；指定给别人的单不能接。"""
     try:
@@ -1166,22 +1186,31 @@ def handle_wf(srv, ip, token, query, payload=None):
         if status not in ("active", "done", "cancelled"):
             status = "active"
         kw = str(q.get("kw") or "").strip()
-        st = _wf_stage_of(None, q)
+        st = _wf_stage_of(None, q)                 # 视图筛选（胶囊）
         my_station = str(q.get("station") or "").strip()[:20]
+        my_st = _wf_stage_of(None, {"stage": q.get("mine_stage")})
+        if my_st < 0:
+            my_st = st                             # 没单独报我的节点：沿用筛选
+        only = _truthy(q.get("only"))
         try:
-            # 带上我的工位：只回「指定给我」+「该节点没人指定」的单
-            rows = store.wf_list(status, kw, station=my_station)
+            # v1.43.1：工位固定也要看得见整条流程——默认回全部单，
+            # 每张带 mine 标记（能不能由我推进），前端灰显别站的单
+            rows = store.wf_list(status, kw)
         except Exception as e:
             return 500, {"ok": False, "error": "读取制作单失败：%s" % e}, NO_STORE
-        mine = ([r for r in rows if int(r.get("stage") or 0) == st]
-                if st >= 0 else [])
-        out = []
+        if st >= 0:
+            rows = [r for r in rows if int(r.get("stage") or 0) == st]
+        out, mine_n = [], 0
         for r in rows[:PAGE_LIMIT]:
             d = _wf_out(r)
-            d["mine"] = int(r.get("stage") or 0) == st if st >= 0 else False
+            d["mine"] = _wf_can_do(r, my_st, my_station)
+            if d["mine"]:
+                mine_n += 1
             out.append(d)
+        if only:
+            out = [d for d in out if d["mine"]]
         return 200, {"ok": True, "rows": out, "stages": stages,
-                     "stage": st, "mine_count": len(mine)}, NO_STORE
+                     "stage": st, "mine_count": mine_n}, NO_STORE
 
     # ---------------------------------------------------------- 写
     p = payload or {}
@@ -1361,6 +1390,8 @@ main { padding:12px 12px 104px; }
 .row { display:flex; align-items:center; gap:10px; background:var(--card);
        border:1px solid var(--line); border-radius:12px; padding:11px 12px; margin-bottom:9px; }
 .row:active { background:#eef4ff; }
+.row.dim .rowt { color:#8a94a6; font-weight:500; }
+.row.dim { background:#fafbfd; }
 .rowmain { flex:1; min-width:0; }
 .rowt { font-size:14px; font-weight:600; }
 .rows { font-size:12px; color:var(--mut); margin-top:2px; overflow:hidden;
@@ -1795,7 +1826,7 @@ function entrySheet(r){
 }
 /* ---- 制作流程（与电脑端同一个库，实时互通） ---- */
 var WF = {stages:[], kinds:[], stations:[], counts:[], rows:[], status:"active", stage:-1,
-          last:0, showAll:false};
+          last:0, showAll:true, onlyMine:false};
 var MYWF = {name:"", station:"", stage:-1};
 try { MYWF = Object.assign(MYWF, JSON.parse(localStorage.getItem("cgm_wf_my") || "{}")); } catch(e) {}
 function saveMyWf(){ try { localStorage.setItem("cgm_wf_my", JSON.stringify(MYWF)); } catch(e) {} }
@@ -1826,20 +1857,21 @@ function paintWfMe(){
 }
 function paintWfChips(){
   var st = WF.showAll ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
-  var h = '<button class="chip' + (st === MYWF.stage ? " on" : "") + '" data-st="mine">我的工位'
+  var h = '<button class="chip' + (WF.onlyMine ? " on" : "") + '" data-st="mine">我的工位'
         + (MYWF.stage >= 0 ? "(" + (WF.counts[MYWF.stage] || 0) + ")" : "!" ) + "</button>"
-        + '<button class="chip' + (WF.showAll ? " on" : "") + '" data-st="all">全部</button>';
+        + '<button class="chip' + (WF.showAll ? " on" : "") + '" data-st="all">全部流程</button>';
   for (var i = 0; i < WF.stages.length; i++) {
-    h += '<button class="chip' + (st === i ? " on" : "") + '" data-st="' + i + '">'
+    h += '<button class="chip' + (!WF.onlyMine && !WF.showAll && st === i ? " on" : "")
+       + '" data-st="' + i + '">'
        + esc(WF.stages[i]) + "(" + (WF.counts[i] || 0) + ")</button>";
   }
   $("wfChips").innerHTML = h;
   var bs = document.querySelectorAll("#wfChips .chip");
   for (var j = 0; j < bs.length; j++) bs[j].onclick = function(){
     var v = this.getAttribute("data-st");
-    if (v === "mine") { WF.showAll = false; WF.stage = MYWF.stage; }
-    else if (v === "all") { WF.showAll = true; WF.stage = -1; }
-    else { WF.showAll = false; WF.stage = Number(v); }
+    if (v === "mine") { WF.onlyMine = true; WF.showAll = false; WF.stage = MYWF.stage; }
+    else if (v === "all") { WF.onlyMine = false; WF.showAll = true; WF.stage = -1; }
+    else { WF.onlyMine = false; WF.showAll = false; WF.stage = Number(v); }
     paintWfChips(); loadWFRows();
   };
 }
@@ -1847,7 +1879,9 @@ function loadWFRows(silent){
   var st = WF.showAll ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
   if (!silent) $("listWf").innerHTML = '<div class="empty">加载中…</div>';
   api("/m/api/wf?q=list&status=" + WF.status + "&stage=" + st
-      + "&station=" + encodeURIComponent(MYWF.station || ""), {}, function(b){
+      + "&station=" + encodeURIComponent(MYWF.station || "")
+      + "&mine_stage=" + MYWF.stage
+      + (WF.onlyMine ? "&only=1" : ""), {}, function(b){
     if (!b.ok) { toast(b.error || "读取失败", 2600); return; }
     WF.rows = b.rows || [];
     paintWFRows();
@@ -1860,13 +1894,16 @@ function paintWFRows(){
     $("wfHint").textContent = "";
     return;
   }
-  var h = "";
+  var h = "", mineN = 0;
   for (var i = 0; i < WF.rows.length; i++) {
     var r = WF.rows[i], tags = "";
     if (r.urgent) tags += '<span class="tag bad">加急</span>';
     if (r.status === "done") tags += '<span class="tag">已完成</span>';
     if (r.status === "cancelled") tags += '<span class="tag bad">已取消</span>';
-    h += '<div class="row" data-i="' + i + '"><div class="rowmain">'
+    if (r.status === "active" && !r.mine) tags += '<span class="tag">别站·只看</span>';
+    if (r.mine) mineN += 1;
+    h += '<div class="row' + (r.mine || r.status !== "active" ? "" : " dim")
+      + '" data-i="' + i + '"><div class="rowmain">'
       + '<div class="rowt">' + esc(r.no) + " " + esc(r.title)
       + '<span class="tag">' + esc(r.stage_name) + "</span>" + tags + "</div>"
       + '<div class="rows">' + esc([r.kind, r.target].filter(Boolean).join(" · ") || "—")
@@ -1882,7 +1919,8 @@ function paintWFRows(){
   for (var j = 0; j < rows.length; j++) rows[j].onclick = function(){
     wfDetail(WF.rows[Number(this.getAttribute("data-i"))]);
   };
-  $("wfHint").textContent = "共 " + WF.rows.length + " 张 · 点单据可推进 / 退回 / 加急";
+  $("wfHint").textContent = "共 " + WF.rows.length + " 张 · 可推进 " + mineN
+    + " 张 · 灰色=别的工位（点开只看流程，不能推）";
 }
 /* 我的工位：工位名可自定义（如「制作标签A」「制作标签B」），绑定到某个节点，
    同一节点可以有多个人各用各的工位名，经手人按各自姓名留痕。 */
@@ -1917,7 +1955,9 @@ function wfDetail(r){
     if (!b.ok) { toast(b.error || "读取失败", 2600); return; }
     var w = b.wf, logs = b.logs || [], stages = b.stages || WF.stages;
     var last = stages.length - 1;
-    var mine = w.status === "active" && MYWF.stage >= 0 && w.stage === MYWF.stage;
+    var owner = w.station || "";
+    var mine = w.status === "active" && MYWF.stage >= 0 && w.stage === MYWF.stage
+      && (!owner || owner === MYWF.station);
     var h = '<div class="sum"><div class="sumt">' + esc(w.no) + " " + esc(w.title) + "</div>"
       + '<div class="rows">' + esc(w.kind || "—") + " · 关联 " + esc(w.target || "—") + "</div>"
       + '<div class="rows">当前：' + esc(w.stage_name) + "（第 " + (w.stage + 1) + " / "
@@ -1928,8 +1968,11 @@ function wfDetail(r){
       + "</div>";
     if (w.status === "active") {
       if (!mine) {
-        h += '<div class="hintline">这张单在「' + esc(w.stage_name) + '」，你的工位是「'
-          + esc(wfMyLabel()) + "」" + (MYWF.stage < 0 ? "（请先设置我的工位）" : "") + "</div>";
+        h += '<div class="hintline">这张单在「' + esc(w.stage_name) + "」"
+          + (owner && owner !== MYWF.station ? "，指定交给「" + esc(owner) + "」" : "")
+          + "，你的工位是「" + esc(wfMyLabel()) + "」"
+          + (MYWF.stage < 0 ? "（请先设置我的工位）" : "：只能查看流程，不能推进")
+          + "</div>";
       } else if (w.stage >= last) {
         h += '<div class="btns"><button class="btn primary" id="wfStock">入库</button>'
           + '<button class="btn" id="wfFinish">结单</button></div>';
