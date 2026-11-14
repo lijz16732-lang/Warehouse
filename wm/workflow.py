@@ -961,7 +961,9 @@ class WorkflowTab(ttk.Frame):
                            style="Vertical.TScrollbar", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vs.set)
         for key, title, w, anchor in COLS:
-            self.tree.heading(key, text=title)
+            # 表头锚点跟随列锚点：左对齐列表头也靠左，避免「表头飘中间、
+            # 内容贴左边」的错位感（事项/备注这类宽列尤其明显）
+            self.tree.heading(key, text=title, anchor=anchor)
             self.tree.column(key, width=int(w * self.app.ui_scale),
                              anchor=anchor,
                              stretch=(key in ("title", "note")))
