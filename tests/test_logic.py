@@ -860,6 +860,53 @@ check("入库回写关联编号并留痕",
       [r for r in ss.wf_list("active") if r["id"] == _wid][0]["target"] == "WL-NEW1"
       and any(g["action"] == "stock" for g in ss.wf_logs(_wid)))
 check("删除制作单连带日志", ss.wf_delete(_wid) is True and ss.wf_logs(_wid) == [])
+# ---- 工位（一个节点可多人）+ 定向推送（v1.43.0）----
+check("默认每个节点一个同名工位",
+      ss.wf_stations() == [{"name": s, "stage": i}
+                           for i, s in enumerate(ss.wf_stages())],
+      ss.wf_stations())
+check("一个节点可配多个工位", ss.wf_set_stations(
+    [{"name": "发起制作A", "stage": 0}, {"name": "发起制作B", "stage": 0},
+     {"name": "制作标签A", "stage": 1}, {"name": "制作标签B", "stage": 1},
+     {"name": "贴标签A", "stage": 2}, {"name": "贴标签B", "stage": 2}])[0]
+    is True and ss.wf_station_names(1) == ["制作标签A", "制作标签B"],
+    ss.wf_station_names(1))
+check("没配的节点自动补同名工位（不漏站）",
+      ss.wf_station_names(4) == ["入库"] and len(ss.wf_stations()) == 8,
+      ss.wf_stations())
+check("工位名能反查节点序号",
+      ss.wf_station_stage("制作标签B") == 1
+      and ss.wf_station_stage("查无此位") == -1)
+_sw, _ = ss.wf_create("定向推送", by="张三", station="发起制作A")
+check("发起时可直接指定第一站工位",
+      [r for r in ss.wf_list("active") if r["id"] == _sw][0]["station"]
+      == "发起制作A")
+check("指定给别人的单不出现在我的列表",
+      all(r["id"] != _sw for r in ss.wf_list("active", station="发起制作B")))
+check("推给下一站的具体工位",
+      ss.wf_advance(_sw, "张三", "", station="制作标签B")[0] is True
+      and [r for r in ss.wf_list("active") if r["id"] == _sw][0]["station"]
+      == "制作标签B")
+check("同节点另一个工位看不到（不是我接）",
+      all(r["id"] != _sw for r in ss.wf_list("active", station="制作标签A")))
+check("指定给我的单出现在我的列表",
+      any(r["id"] == _sw for r in ss.wf_list("active", station="制作标签B")))
+check("不能推给别站的工位",
+      ss.wf_advance(_sw, "李四", station="发起制作A")[0] is False)
+check("不指定工位＝该站公共池，同站所有人都能看到",
+      ss.wf_advance(_sw, "李四")[0] is True
+      and all(any(r["id"] == _sw for r in ss.wf_list("active", station=n))
+              for n in ss.wf_station_names(2)))
+check("退回也能指定工位",
+      ss.wf_back(_sw, "王五", "标签重印", target=1, station="制作标签A")[0]
+      is True
+      and [r for r in ss.wf_list("active") if r["id"] == _sw][0]["station"]
+      == "制作标签A")
+check("工位名不能绑到不存在的节点", ss.wf_set_stations(
+    [{"name": "幽灵工位", "stage": 99}])[0] is False)
+ss.wf_delete(_sw)
+ss.wf_set_stations([{"name": s, "stage": i}
+                    for i, s in enumerate(ss.wf_stages())])
 # ---- 制作类型与附加字段（v1.42.4）----
 _kd = {k["name"]: k for k in ss.wf_kinds()}
 check("默认类型含制作标签", "制作标签" in _kd, list(_kd))

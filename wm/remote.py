@@ -48,7 +48,8 @@ class RemoteStore(object):
         self.path = "%s:%d（局域网主机）" % (self.host, self.port)
         self.last_ping = {}
         self.can_write = False        # 由 ping() 更新
-        self.wf_stage = -1            # 本机在制作流程页选的工位（-1 = 不限）
+        self.wf_stage = -1            # 本机在制作流程页选的工位节点（-1 = 不限）
+        self.wf_station = ""          # 本机工位名（同节点多人时区分谁）
         self.warehouse = ""
         self.rev = 0
 
@@ -60,7 +61,7 @@ class RemoteStore(object):
         if name.startswith("_") or name in ("host", "port", "code", "client_id",
                                             "client_name", "timeout", "base", "path",
                                             "last_ping", "can_write", "warehouse", "rev",
-                                            "wf_stage"):
+                                            "wf_stage", "wf_station"):
             raise AttributeError(name)
         if name not in RPC_METHODS:
             raise AttributeError(name)
@@ -78,6 +79,7 @@ class RemoteStore(object):
         payload = {"code": self.code, "id": self.client_id,
                    "name": self.client_name, "method": method,
                    "wf_stage": stage,
+                   "wf_station": str(getattr(self, "wf_station", "") or ""),
                    "args": list(args),
                    "kwargs": {k: v for k, v in (kwargs or {}).items()
                               if not callable(v)}}

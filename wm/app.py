@@ -307,6 +307,7 @@ class App(object):
                                  cfg.get("code") or "", cfg.get("client_id") or "",
                                  cfg.get("client_name") or "")
                 rs.wf_stage = self._wf_my_stage()
+                rs.wf_station = str(self.settings.get("wf_my_station") or "")
                 info = rs.ping()
             except Exception as e:
                 cfg["mode"] = "off"
@@ -5569,6 +5570,7 @@ class App(object):
                                  self.lan_cfg.get("client_id") or "",
                                  self.lan_cfg.get("client_name") or "")
                 rs.wf_stage = self._wf_my_stage()
+                rs.wf_station = str(self.settings.get("wf_my_station") or "")
                 info = rs.ping()
         except Exception as e:
             return False, str(e)

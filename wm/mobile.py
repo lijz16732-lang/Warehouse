@@ -1053,6 +1053,270 @@ def handle_photo_del(srv, ip, token, payload):
     return 200, {"ok": True, "message": "已删除"}, NO_STORE
 
 
+# ================================================================ 制作流程
+# 手机端与电脑端共用同一个库：手机上发起的单，电脑端刷新即见；电脑推进后，
+# 手机下一页轮询也能看到。权限与电脑端制作流程一致——不需要「允许录入」授权，
+# 但必须登录；能推哪一站由手机自己上报的工位节点（stage）决定。
+_WF_MAX_NOTE = 120
+_WF_STOCK_LEN = {"brand": 40, "category": 40, "model": 120, "shelf": 120,
+                 "remark": 200}
+
+
+def _wf_stage_of(payload, query=None):
+    """手机上报的工位节点序号（-1 = 未设置工位）。"""
+    v = None
+    if query is not None and query.get("stage") is not None:
+        v = query.get("stage")
+    if v is None and isinstance(payload, dict):
+        v = payload.get("stage")
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _wf_by(payload):
+    return str((payload or {}).get("by") or "").strip()[:20]
+
+
+def _wf_stage_guard(store, rec, st, my_station=""):
+    """校验：手机工位是不是单据当前所在节点；指定给别人的单不能接。"""
+    try:
+        stages = store.wf_stages()
+    except Exception:
+        stages = []
+    if st < 0:
+        return "请先在「我的工位」里选择你负责的节点"
+    if st >= len(stages):
+        return "工位设置已失效（节点被调整过），请重新选择工位"
+    cur = int(rec.get("stage") or 0)
+    if cur != st:
+        return ("这张单现在在「%s」，不是你负责的「%s」"
+                % (stages[cur] if 0 <= cur < len(stages) else ("节点%d" % (cur + 1)),
+                   stages[st]))
+    owner = str(rec.get("station") or "")
+    if owner and owner != (my_station or ""):
+        return ("这张单指定交给「%s」，你是「%s」，不能接"
+                % (owner, my_station or stages[st]))
+    return ""
+
+
+def handle_wf(srv, ip, token, query, payload=None):
+    """GET/POST /m/api/wf —— 手机端制作流程。
+
+    GET  q=stages  → 节点 / 类型定义 / 各站在办数
+    GET  q=list&status=active&stage=0&kw=  → 制作单列表
+    GET  q=detail&id=3  → 单据 + 流转记录 + 照片
+    POST op=create|move|back|stock|finish|urgent
+    """
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate[0], gate[1], NO_STORE
+    store = srv.get_store()
+    q = query or {}
+    try:
+        stages = store.wf_stages()
+    except Exception as e:
+        return 500, {"ok": False, "error": "读取流程节点失败：%s" % e}, NO_STORE
+
+    # ---------------------------------------------------------- 读
+    if not payload:
+        what = str(q.get("q") or "list")
+        if what == "stages":
+            try:
+                kinds = store.wf_kinds()
+                counts = store.wf_counts()
+            except Exception:
+                kinds, counts = [], {}
+            try:
+                sts = store.wf_stations()
+            except Exception:
+                sts = []
+            return 200, {"ok": True, "stages": stages, "kinds": kinds,
+                         "stations": sts,
+                         "counts": counts.get("counts") or [],
+                         "done": counts.get("done") or 0,
+                         "cancelled": counts.get("cancelled") or 0,
+                         "last": max(0, len(stages) - 1)}, NO_STORE
+        if what == "detail":
+            try:
+                wf_id = int(q.get("id") or 0)
+            except (TypeError, ValueError):
+                wf_id = 0
+            rec = store.wf_one(wf_id) if wf_id else None
+            if not rec:
+                return 404, {"ok": False, "error": "制作单不存在"}, NO_STORE
+            logs = store.wf_logs(wf_id)
+            try:
+                photos = store.photos_list("wf", rec.get("no") or "")
+            except Exception:
+                photos = []
+            d = _wf_out(rec)
+            d["stage_name"] = (stages[int(rec.get("stage") or 0)]
+                               if 0 <= int(rec.get("stage") or 0) < len(stages)
+                               else "")
+            return 200, {"ok": True, "wf": d,
+                         "logs": [{"at": str(g.get("at") or "")[:19],
+                                   "action": g.get("action_name") or "",
+                                   "by": g.get("by") or "",
+                                   "note": g.get("note") or ""} for g in logs],
+                         "photos": photos, "stages": stages}, NO_STORE
+        # list
+        status = str(q.get("status") or "active")
+        if status not in ("active", "done", "cancelled"):
+            status = "active"
+        kw = str(q.get("kw") or "").strip()
+        st = _wf_stage_of(None, q)
+        my_station = str(q.get("station") or "").strip()[:20]
+        try:
+            # 带上我的工位：只回「指定给我」+「该节点没人指定」的单
+            rows = store.wf_list(status, kw, station=my_station)
+        except Exception as e:
+            return 500, {"ok": False, "error": "读取制作单失败：%s" % e}, NO_STORE
+        mine = ([r for r in rows if int(r.get("stage") or 0) == st]
+                if st >= 0 else [])
+        out = []
+        for r in rows[:PAGE_LIMIT]:
+            d = _wf_out(r)
+            d["mine"] = int(r.get("stage") or 0) == st if st >= 0 else False
+            out.append(d)
+        return 200, {"ok": True, "rows": out, "stages": stages,
+                     "stage": st, "mine_count": len(mine)}, NO_STORE
+
+    # ---------------------------------------------------------- 写
+    p = payload or {}
+    op = str(p.get("op") or "")
+    by = _wf_by(p)
+    if not by:
+        return 400, {"ok": False, "error": "请先填写你的名字（经手人）"}, NO_STORE
+    st = _wf_stage_of(p)
+    note = str(p.get("note") or "").strip()[:_WF_MAX_NOTE]
+
+    if op == "create":
+        if st != 0:
+            return 403, {"ok": False,
+                         "error": "发起制作请用节点「%s」对应的工位"
+                                  % (stages[0] if stages else "第一站")}, NO_STORE
+        title = str(p.get("title") or "").strip()[:60]
+        if not title:
+            return 400, {"ok": False, "error": "请填写事项（做什么）"}, NO_STORE
+        kind = str(p.get("kind") or "").strip()[:20]
+        target = str(p.get("target") or "").strip()[:40]
+        extra = p.get("extra") if isinstance(p.get("extra"), dict) else None
+        if extra:
+            extra = {str(k)[:20]: str(v)[:120] for k, v in extra.items()
+                     if str(k).strip() and str(v).strip()}
+            extra = extra or None
+        to_station = str(p.get("to_station") or "").strip()[:20]
+        try:
+            wf_id, no = store.wf_create(title, kind=kind, target=target,
+                                        note=note, by=by, extra=extra,
+                                        station=to_station)
+        except Exception as e:
+            return 500, {"ok": False, "error": "发起失败：%s" % e}, NO_STORE
+        if not wf_id:
+            return 400, {"ok": False, "error": str(no or "发起失败")}, NO_STORE
+        return 200, {"ok": True, "id": wf_id, "no": no,
+                     "message": "已发起 %s，已推送到「%s」"
+                                % (no, stages[0] if stages else "第一站")}, NO_STORE
+
+    # 其余操作都要先确认单据停在自己的工位上
+    try:
+        wf_id = int(p.get("id") or 0)
+    except (TypeError, ValueError):
+        wf_id = 0
+    rec = store.wf_one(wf_id) if wf_id else None
+    if not rec:
+        return 404, {"ok": False, "error": "制作单不存在"}, NO_STORE
+
+    if op == "urgent":
+        ok, msg = store.wf_set_urgent(wf_id, 1 if p.get("flag") else 0, by)
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": "" if ok else msg}, NO_STORE
+
+    last = max(0, len(stages) - 1)
+    my_station = str(p.get("station") or "").strip()[:20]
+    to_station = str(p.get("to_station") or "").strip()[:20]
+    if op == "move":
+        bad = _wf_stage_guard(store, rec, st, my_station)
+        if bad:
+            return 403, {"ok": False, "error": bad}, NO_STORE
+        if int(rec.get("stage") or 0) == last:
+            return 400, {"ok": False,
+                         "error": "这张单已经在最后一站「%s」，请用「入库」或「结单」收尾"
+                                  % stages[last]}, NO_STORE
+        ok, msg = store.wf_advance(wf_id, by, note, station=to_station)
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": "" if ok else msg}, NO_STORE
+
+    if op == "back":
+        bad = _wf_stage_guard(store, rec, st, my_station)
+        if bad:
+            return 403, {"ok": False, "error": bad}, NO_STORE
+        target = p.get("target")
+        try:
+            target = int(target) if target not in (None, "") else None
+        except (TypeError, ValueError):
+            target = None
+        ok, msg = store.wf_back(wf_id, by, note, target=target,
+                                station=to_station)
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": "" if ok else msg}, NO_STORE
+
+    if op == "stock":
+        bad = _wf_stage_guard(store, rec, st, my_station)
+        if bad:
+            return 403, {"ok": False, "error": bad}, NO_STORE
+        fields = p.get("fields") if isinstance(p.get("fields"), dict) else {}
+        clean = {}
+        for k, n in _WF_STOCK_LEN.items():
+            v = str(fields.get(k) or "").strip()[:n]
+            if v:
+                clean[k] = v
+        try:
+            clean["qty"] = int(float(fields.get("qty") or 1))
+        except (TypeError, ValueError):
+            clean["qty"] = 1
+        try:
+            clean["price"] = float(fields.get("price") or 0)
+        except (TypeError, ValueError):
+            clean["price"] = 0.0
+        ok, msg = store.wf_stock_in(wf_id, clean, by=by)
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": "" if ok else msg}, NO_STORE
+
+    if op == "finish":
+        bad = _wf_stage_guard(store, rec, st, my_station)
+        if bad:
+            return 403, {"ok": False, "error": bad}, NO_STORE
+        ok, msg = store.wf_finish(wf_id, by, note)
+        return (200 if ok else 400), {"ok": ok, "message": msg,
+                                      "error": "" if ok else msg}, NO_STORE
+
+    return 400, {"ok": False, "error": "不支持的操作：%s" % op}, NO_STORE
+
+
+def _wf_out(r):
+    """把 store 的行转成手机端用的精简结构。"""
+    return {
+        "id": int(r.get("id") or 0),
+        "no": r.get("no") or "",
+        "title": r.get("title") or "",
+        "kind": r.get("kind") or "",
+        "target": r.get("target") or "",
+        "stage": int(r.get("stage") or 0),
+        "stage_name": r.get("stage_name") or "",
+        "status": r.get("status") or "active",
+        "urgent": int(r.get("urgent") or 0),
+        "station": str(r.get("station") or ""),
+        "note": r.get("note") or "",
+        "handler": r.get("handler") or "",
+        "days": int(r.get("days") or 0),
+        "updated_at": str(r.get("updated_at") or "")[:16],
+        "extra": r.get("extra") if isinstance(r.get("extra"), dict) else {},
+    }
+
+
 # ================================================================ 手机页面
 # 单文件、无外部依赖（局域网里未必有互联网）：原生 JS + 内联 CSS。
 # 注意：本字符串里不允许出现反斜杠（tests 有断言）——Python 会把 JS 的转义吃掉。
@@ -1208,6 +1472,7 @@ main { padding:12px 12px 104px; }
 <nav>
   <button data-p="items" class="on"><i>▦</i><span>库存</span></button>
   <button data-p="rec"><i>☰</i><span>记录</span></button>
+  <button data-p="wf"><i>⇄</i><span>流程</span></button>
   <button data-p="stat"><i>◔</i><span>统计</span></button>
   <button data-p="me"><i>⚙</i><span>我的</span></button>
 </nav>
@@ -1235,6 +1500,18 @@ main { padding:12px 12px 104px; }
 
   <div id="p_stat" style="display:none">
     <div id="statWrap"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div id="p_wf" style="display:none">
+    <div class="card" id="wfMe"></div>
+    <div class="seg" id="wfSeg">
+      <button class="on" data-s="active">进行中</button>
+      <button data-s="done">已完成</button>
+      <button data-s="cancelled">已取消</button>
+    </div>
+    <div class="chips" id="wfChips"></div>
+    <div class="hintline" id="wfHint"></div>
+    <div id="listWf"><div class="empty">加载中…</div></div>
   </div>
 
   <div id="p_me" style="display:none">
@@ -1351,16 +1628,19 @@ function logout(){
   api("/m/logout", {method:"POST"}, function(){ showLogin(); });
 }
 /* ---- 页签 ---- */
-var pages = ["items", "rec", "stat", "me"];
+var pages = ["items", "rec", "wf", "stat", "me"];
+var PAGE = "items";
 function goPage(p){
+  PAGE = p;
   pages.forEach(function(x){ $("p_" + x).style.display = (x === p) ? "" : "none"; });
   var bs = document.querySelectorAll("nav button");
   for (var i = 0; i < bs.length; i++) {
     bs[i].className = (bs[i].getAttribute("data-p") === p) ? "on" : "";
   }
-  $("fab").style.display = (p === "items") ? "" : "none";
+  $("fab").style.display = (p === "items" || p === "wf") ? "" : "none";
   if (p === "items") loadItems();
   if (p === "rec") { loadRec(); }
+  if (p === "wf") loadWF();
   if (p === "stat") loadStats();
   if (p === "me") { renderPerm(); refreshTrashCount(); }
 }
@@ -1513,7 +1793,403 @@ function entrySheet(r){
     };
   });
 }
+/* ---- 制作流程（与电脑端同一个库，实时互通） ---- */
+var WF = {stages:[], kinds:[], stations:[], counts:[], rows:[], status:"active", stage:-1,
+          last:0, showAll:false};
+var MYWF = {name:"", station:"", stage:-1};
+try { MYWF = Object.assign(MYWF, JSON.parse(localStorage.getItem("cgm_wf_my") || "{}")); } catch(e) {}
+function saveMyWf(){ try { localStorage.setItem("cgm_wf_my", JSON.stringify(MYWF)); } catch(e) {} }
+function wfStageName(i){ return WF.stages[i] == null ? "节点" + (i + 1) : WF.stages[i]; }
+function wfMyLabel(){ return MYWF.station || (MYWF.stage >= 0 ? wfStageName(MYWF.stage) : "未设置"); }
+function wfExtraText(ex){
+  var out = [];
+  for (var k in ex) { if (ex[k]) out.push(k + "：" + ex[k]); }
+  return out.join("，");
+}
+function loadWF(silent){
+  if (!silent) $("listWf").innerHTML = '<div class="empty">加载中…</div>';
+  api("/m/api/wf?q=stages", {}, function(b){
+    if (!b.ok) { toast(b.error || "读取失败", 2600); return; }
+    WF.stages = b.stages || []; WF.kinds = b.kinds || [];
+    WF.stations = b.stations || [];
+    WF.counts = b.counts || []; WF.last = b.last || 0;
+    paintWfMe(); paintWfChips(); loadWFRows(silent);
+  });
+}
+function paintWfMe(){
+  var mine = MYWF.stage >= 0 ? wfStageName(MYWF.stage) : "未选择";
+  $("wfMe").innerHTML = '<div class="line tap" id="wfMeTap"><div><div class="sumt">'
+    + esc(wfMyLabel()) + '</div><div class="rows">负责节点：' + esc(mine)
+    + " · 经手人：" + esc(MYWF.name || "未填") + "</div></div>"
+    + '<div class="mut">修改 ›</div></div>';
+  $("wfMeTap").onclick = wfMeSheet;
+}
+function paintWfChips(){
+  var st = WF.showAll ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
+  var h = '<button class="chip' + (st === MYWF.stage ? " on" : "") + '" data-st="mine">我的工位'
+        + (MYWF.stage >= 0 ? "(" + (WF.counts[MYWF.stage] || 0) + ")" : "!" ) + "</button>"
+        + '<button class="chip' + (WF.showAll ? " on" : "") + '" data-st="all">全部</button>';
+  for (var i = 0; i < WF.stages.length; i++) {
+    h += '<button class="chip' + (st === i ? " on" : "") + '" data-st="' + i + '">'
+       + esc(WF.stages[i]) + "(" + (WF.counts[i] || 0) + ")</button>";
+  }
+  $("wfChips").innerHTML = h;
+  var bs = document.querySelectorAll("#wfChips .chip");
+  for (var j = 0; j < bs.length; j++) bs[j].onclick = function(){
+    var v = this.getAttribute("data-st");
+    if (v === "mine") { WF.showAll = false; WF.stage = MYWF.stage; }
+    else if (v === "all") { WF.showAll = true; WF.stage = -1; }
+    else { WF.showAll = false; WF.stage = Number(v); }
+    paintWfChips(); loadWFRows();
+  };
+}
+function loadWFRows(silent){
+  var st = WF.showAll ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
+  if (!silent) $("listWf").innerHTML = '<div class="empty">加载中…</div>';
+  api("/m/api/wf?q=list&status=" + WF.status + "&stage=" + st
+      + "&station=" + encodeURIComponent(MYWF.station || ""), {}, function(b){
+    if (!b.ok) { toast(b.error || "读取失败", 2600); return; }
+    WF.rows = b.rows || [];
+    paintWFRows();
+  });
+}
+function paintWFRows(){
+  if (!WF.rows.length) {
+    $("listWf").innerHTML = '<div class="empty">'
+      + (WF.status === "active" ? "这一站暂时没有制作单" : "没有记录") + "</div>";
+    $("wfHint").textContent = "";
+    return;
+  }
+  var h = "";
+  for (var i = 0; i < WF.rows.length; i++) {
+    var r = WF.rows[i], tags = "";
+    if (r.urgent) tags += '<span class="tag bad">加急</span>';
+    if (r.status === "done") tags += '<span class="tag">已完成</span>';
+    if (r.status === "cancelled") tags += '<span class="tag bad">已取消</span>';
+    h += '<div class="row" data-i="' + i + '"><div class="rowmain">'
+      + '<div class="rowt">' + esc(r.no) + " " + esc(r.title)
+      + '<span class="tag">' + esc(r.stage_name) + "</span>" + tags + "</div>"
+      + '<div class="rows">' + esc([r.kind, r.target].filter(Boolean).join(" · ") || "—")
+      + (r.extra && Object.keys(r.extra).length ? " · " + esc(wfExtraText(r.extra)) : "")
+      + "</div>"
+      + (r.note ? '<div class="rows">备注：' + esc(r.note) + "</div>" : "")
+      + '<div class="rows">经手人 ' + esc(r.handler || "—")
+      + (r.station ? " · 交给 " + esc(r.station) : "") + " · 停留 " + r.days + " 天</div>"
+      + '</div><div class="rowright"><div class="mut">' + esc(r.updated_at || "") + "</div></div></div>";
+  }
+  $("listWf").innerHTML = h;
+  var rows = document.querySelectorAll("#listWf .row");
+  for (var j = 0; j < rows.length; j++) rows[j].onclick = function(){
+    wfDetail(WF.rows[Number(this.getAttribute("data-i"))]);
+  };
+  $("wfHint").textContent = "共 " + WF.rows.length + " 张 · 点单据可推进 / 退回 / 加急";
+}
+/* 我的工位：工位名可自定义（如「制作标签A」「制作标签B」），绑定到某个节点，
+   同一节点可以有多个人各用各的工位名，经手人按各自姓名留痕。 */
+function wfMeSheet(){
+  var h = '<div class="hintline">一个节点可以有多个人：把工位名写成「制作标签A」「制作标签B」，'
+    + '分别绑定到同一个节点即可，推进时按各自姓名留痕。</div>'
+    + '<label class="lbl">我的工位（名称由电脑端「工位设置」维护）</label>'
+    + '<select class="inp" id="wfStPick">';
+  for (var i = 0; i < WF.stations.length; i++) {
+    h += '<option value="' + esc(WF.stations[i].name) + '"'
+       + (MYWF.station === WF.stations[i].name ? " selected" : "") + ">"
+       + esc(WF.stations[i].name) + "（" + esc(wfStageName(WF.stations[i].stage))
+       + "）</option>";
+  }
+  h += '</select><label class="lbl">我的姓名（经手人）</label>'
+    + '<input class="inp" id="wfStBy" value="' + esc(MYWF.name) + '" placeholder="如：张三">'
+    + '<button class="go" id="wfStGo">保存工位</button>';
+  sheet("我的工位", function(box){
+    box.innerHTML = h;
+    $("wfStGo").onclick = function(){
+      MYWF.station = $("wfStPick").value;
+      for (var i = 0; i < WF.stations.length; i++) {
+        if (WF.stations[i].name === MYWF.station) MYWF.stage = WF.stations[i].stage;
+      }
+      MYWF.name = $("wfStBy").value.trim();
+      saveMyWf(); sheetClose(); toast("工位已保存"); loadWF(true);
+    };
+  });
+}
+function wfDetail(r){
+  api("/m/api/wf?q=detail&id=" + r.id, {}, function(b){
+    if (!b.ok) { toast(b.error || "读取失败", 2600); return; }
+    var w = b.wf, logs = b.logs || [], stages = b.stages || WF.stages;
+    var last = stages.length - 1;
+    var mine = w.status === "active" && MYWF.stage >= 0 && w.stage === MYWF.stage;
+    var h = '<div class="sum"><div class="sumt">' + esc(w.no) + " " + esc(w.title) + "</div>"
+      + '<div class="rows">' + esc(w.kind || "—") + " · 关联 " + esc(w.target || "—") + "</div>"
+      + '<div class="rows">当前：' + esc(w.stage_name) + "（第 " + (w.stage + 1) + " / "
+      + stages.length + " 站）· 交给 " + esc(w.station || "该节点任意人")
+      + " · 经手人 " + esc(w.handler || "—") + "</div>"
+      + (w.note ? '<div class="rows">备注：' + esc(w.note) + "</div>" : "")
+      + (Object.keys(w.extra || {}).length ? '<div class="rows">' + esc(wfExtraText(w.extra)) + "</div>" : "")
+      + "</div>";
+    if (w.status === "active") {
+      if (!mine) {
+        h += '<div class="hintline">这张单在「' + esc(w.stage_name) + '」，你的工位是「'
+          + esc(wfMyLabel()) + "」" + (MYWF.stage < 0 ? "（请先设置我的工位）" : "") + "</div>";
+      } else if (w.stage >= last) {
+        h += '<div class="btns"><button class="btn primary" id="wfStock">入库</button>'
+          + '<button class="btn" id="wfFinish">结单</button></div>';
+      } else {
+        h += '<div class="btns"><button class="btn primary" id="wfNext">推进到「'
+          + esc(stages[w.stage + 1]) + '」</button>'
+          + '<button class="btn" id="wfBack">退回</button></div>';
+      }
+      h += '<div class="btns"><button class="btn" id="wfUrg">'
+        + (w.urgent ? "取消加急" : "标记加急") + "</button></div>";
+    }
+    h += '<div class="cardh" style="margin-top:14px">流转记录</div><div class="card" style="margin:0">';
+    if (!logs.length) h += '<div class="empty small">暂无记录</div>';
+    for (var i = logs.length - 1; i >= 0; i--) {
+      h += '<div class="line"><div><div>' + esc(logs[i].action) + "：" + esc(logs[i].by || "—")
+        + '</div><div class="rows">' + esc(logs[i].note || "") + '</div></div>'
+        + '<div class="mut">' + esc(logs[i].at.slice(5, 16)) + "</div></div>";
+    }
+    h += "</div>";
+    sheet("制作单 " + w.no, function(box){
+      box.innerHTML = h;
+      if ($("wfNext")) $("wfNext").onclick = function(){ wfMoveSheet(w, stages); };
+      if ($("wfBack")) $("wfBack").onclick = function(){ wfBackSheet(w, stages); };
+      if ($("wfStock")) $("wfStock").onclick = function(){ wfStockSheet(w); };
+      if ($("wfFinish")) $("wfFinish").onclick = function(){ wfFinishSheet(w); };
+      if ($("wfUrg")) $("wfUrg").onclick = function(){
+        if (!MYWF.name) { toast("请先设置我的姓名"); return; }
+        post("/m/api/wf", {op:"urgent", id:w.id, flag: w.urgent ? 0 : 1,
+          by: MYWF.name, stage: MYWF.stage, station: MYWF.station}, function(b2){
+          if (!b2.ok) { toast(b2.error || "操作失败", 2600); return; }
+          toast(b2.message || "已更新"); sheetClose(); loadWF(true);
+        });
+      };
+    });
+  });
+}
+function wfStationOptions(stage, cur){
+  var h = '<option value="">该节点任意人</option>';
+  for (var i = 0; i < WF.stations.length; i++) {
+    if (WF.stations[i].stage !== stage) continue;
+    h += '<option value="' + esc(WF.stations[i].name) + '"'
+       + (WF.stations[i].name === cur ? " selected" : "") + ">"
+       + esc(WF.stations[i].name) + "</option>";
+  }
+  return h;
+}
+function wfMoveSheet(w, stages){
+  var h = '<div class="sum"><div class="sumt">' + esc(w.no) + "</div>"
+    + '<div class="rows">推进到：' + esc(stages[w.stage + 1]) + "</div></div>"
+    + '<label class="lbl">交给谁（同一节点有多人时选具体工位）</label>'
+    + '<select class="inp" id="wfTo">' + wfStationOptions(w.stage + 1, "") + "</select>"
+    + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfBy" value="'
+    + esc(MYWF.name) + '">'
+    + '<label class="lbl">备注（会带给下一站）</label><input class="inp" id="wfNote" value="">'
+    + '<button class="go" id="wfGo">确认推进</button>';
+  sheet("推进", function(box){
+    box.innerHTML = h;
+    $("wfGo").onclick = function(){
+      var by = $("wfBy").value.trim();
+      if (!by) { toast("请填写经手人"); return; }
+      MYWF.name = by; saveMyWf();
+      $("wfGo").disabled = true;
+      post("/m/api/wf", {op:"move", id:w.id, by:by, stage: MYWF.stage, station: MYWF.station,
+        to_station: $("wfTo").value,
+        note: $("wfNote").value.trim()}, function(b2){
+        $("wfGo").disabled = false;
+        if (!b2.ok) { toast(b2.error || "推进失败", 3000); return; }
+        toast(b2.message || "已推进", 2800); sheetClose(); loadWF(true);
+      });
+    };
+  });
+}
+function wfBackSheet(w, stages){
+  var h = '<div class="sum"><div class="sumt">' + esc(w.no) + "</div>"
+    + '<div class="rows">退回到（可跨站，如质检退回制作标签）</div></div>'
+    + '<label class="lbl">目标节点</label><select class="inp" id="wfTgt">';
+  for (var i = 0; i < w.stage; i++) {
+    h += '<option value="' + i + '"' + (i === w.stage - 1 ? " selected" : "") + ">"
+       + esc(stages[i]) + "</option>";
+  }
+  h += '</select><label class="lbl">交给谁</label>'
+    + '<select class="inp" id="wfTo2">' + wfStationOptions(w.stage - 1, "") + "</select>"
+    + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfBy2" value="'
+    + esc(MYWF.name) + '">'
+    + '<label class="lbl">退回原因</label><input class="inp" id="wfNote2" value="">'
+    + '<button class="go" id="wfGo2" style="background:#d4380d">确认退回</button>';
+  sheet("退回", function(box){
+    box.innerHTML = h;
+    $("wfGo2").onclick = function(){
+      var by = $("wfBy2").value.trim();
+      if (!by) { toast("请填写经手人"); return; }
+      MYWF.name = by; saveMyWf();
+      $("wfGo2").disabled = true;
+      post("/m/api/wf", {op:"back", id:w.id, by:by, stage: MYWF.stage, station: MYWF.station,
+        to_station: $("wfTo2").value,
+        target: $("wfTgt").value, note: $("wfNote2").value.trim()}, function(b2){
+        $("wfGo2").disabled = false;
+        if (!b2.ok) { toast(b2.error || "退回失败", 3000); return; }
+        toast(b2.message || "已退回", 2800); sheetClose(); loadWF(true);
+      });
+    };
+  });
+}
+function wfStockSheet(w){
+  var h = '<div class="sum"><div class="sumt">' + esc(w.no) + "</div>"
+    + '<div class="rows">入库后单据完成，照片会一起带到库存记录</div></div>'
+    + '<label class="lbl">品牌</label><input class="inp" id="wsBrand">'
+    + '<label class="lbl">品类</label><input class="inp" id="wsCat">'
+    + '<label class="lbl">型号（必填）</label><input class="inp" id="wsModel" value="'
+    + esc(wfModelHint(w)) + '">'
+    + '<div class="grid2"><div><label class="lbl">数量</label><input class="inp" id="wsQty" type="number" inputmode="numeric" value="1"></div>'
+    + '<div><label class="lbl">单价（元）</label><input class="inp" id="wsPrice" type="number" inputmode="decimal" value="0"></div></div>'
+    + '<label class="lbl">货架</label><input class="inp" id="wsShelf">'
+    + '<label class="lbl">经手人（必填）</label><input class="inp" id="wsBy" value="'
+    + esc(MYWF.name) + '">'
+    + '<button class="go" id="wsGo">确认入库</button>';
+  sheet("入库", function(box){
+    box.innerHTML = h;
+    $("wsGo").onclick = function(){
+      var by = $("wsBy").value.trim(), model = $("wsModel").value.trim();
+      if (!by) { toast("请填写经手人"); return; }
+      if (!model) { toast("请填写型号"); return; }
+      MYWF.name = by; saveMyWf();
+      $("wsGo").disabled = true;
+      post("/m/api/wf", {op:"stock", id:w.id, by:by, stage: MYWF.stage, station: MYWF.station,
+        fields:{brand:$("wsBrand").value.trim(), category:$("wsCat").value.trim(),
+                model:model, qty:$("wsQty").value, price:$("wsPrice").value,
+                shelf:$("wsShelf").value.trim()}}, function(b2){
+        $("wsGo").disabled = false;
+        if (!b2.ok) { toast(b2.error || "入库失败", 3000); return; }
+        toast(b2.message || "已入库", 3000); sheetClose(); loadWF(true);
+      });
+    };
+  });
+}
+function wfModelHint(w){
+  var ex = w.extra || {};
+  for (var k in ex) { if (k.indexOf("型号") >= 0 && k.indexOf("原") < 0) return ex[k]; }
+  return "";
+}
+function wfFinishSheet(w){
+  var h = '<div class="sum"><div class="sumt">' + esc(w.no) + "</div>"
+    + '<div class="rows">不新增库存，直接把单据结单（如报废）</div></div>'
+    + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfFBy" value="'
+    + esc(MYWF.name) + '">'
+    + '<label class="lbl">备注</label><input class="inp" id="wfFNote">'
+    + '<button class="go" id="wfFGo">确认结单</button>';
+  sheet("结单", function(box){
+    box.innerHTML = h;
+    $("wfFGo").onclick = function(){
+      var by = $("wfFBy").value.trim();
+      if (!by) { toast("请填写经手人"); return; }
+      MYWF.name = by; saveMyWf();
+      $("wfFGo").disabled = true;
+      post("/m/api/wf", {op:"finish", id:w.id, by:by, stage: MYWF.stage, station: MYWF.station,
+        note: $("wfFNote").value.trim()}, function(b2){
+        $("wfFGo").disabled = false;
+        if (!b2.ok) { toast(b2.error || "结单失败", 3000); return; }
+        toast(b2.message || "已结单", 2800); sheetClose(); loadWF(true);
+      });
+    };
+  });
+}
+/* 发起制作（手机发起 → 电脑端刷新即见 → 电脑推进后手机自动刷） */
+function wfCreateSheet(){
+  if (MYWF.stage < 0) { toast("请先设置我的工位"); wfMeSheet(); return; }
+  if (MYWF.stage !== 0) { toast("发起制作要用第一站（" + wfStageName(0) + "）对应的工位"); return; }
+  var h = '<label class="lbl">事项（做什么，必填）</label><input class="inp" id="crTitle" placeholder="如：保德型号更换">'
+    + '<label class="lbl">类型</label><select class="inp" id="crKind"><option value="">不选</option>';
+  for (var i = 0; i < WF.kinds.length; i++) {
+    h += '<option value="' + esc(WF.kinds[i].name) + '">' + esc(WF.kinds[i].name) + "</option>";
+  }
+  h += '</select><div id="crExtra"></div>'
+    + '<label class="lbl">发给谁（第一站有多人时选）</label>'
+    + '<select class="inp" id="crTo">' + wfStationOptions(0, MYWF.station) + "</select>"
+    + '<label class="lbl">关联编号（可选）</label><input class="inp" id="crTarget">'
+    + '<label class="lbl">备注（会带给下一站）</label><input class="inp" id="crNote">'
+    + '<label class="lbl">经手人（必填）</label><input class="inp" id="crBy" value="'
+    + esc(MYWF.name) + '">'
+    + '<button class="go" id="crGo">发起并推送到「' + esc(wfStageName(0)) + '」</button>';
+  sheet("发起制作", function(box){
+    box.innerHTML = h;
+    var paintExtra = function(){
+      var name = $("crKind").value, box2 = $("crExtra"), out = "";
+      for (var i = 0; i < WF.kinds.length; i++) {
+        if (WF.kinds[i].name !== name) continue;
+        var fs = WF.kinds[i].fields || [];
+        for (var j = 0; j < fs.length; j++) {
+          var f = fs[j], id = "crF" + j;
+          out += '<label class="lbl">' + esc(f.label) + "</label>";
+          if (f.options && f.options.length && f.multi) {
+            out += '<div class="chips" id="' + id + '">';
+            for (var k = 0; k < f.options.length; k++) {
+              out += '<button class="chip" data-v="' + esc(f.options[k]) + '">'
+                 + esc(f.options[k]) + "</button>";
+            }
+            out += "</div>";
+          } else if (f.options && f.options.length) {
+            out += '<select class="inp" id="' + id + '"><option value="">不选</option>';
+            for (var m = 0; m < f.options.length; m++) {
+              out += '<option value="' + esc(f.options[m]) + '">' + esc(f.options[m]) + "</option>";
+            }
+            out += "</select>";
+          } else {
+            out += '<input class="inp" id="' + id + '">';
+          }
+        }
+      }
+      box2.innerHTML = out;
+      var chips = box2.querySelectorAll(".chip");
+      for (var n = 0; n < chips.length; n++) chips[n].onclick = function(){
+        this.className = this.className.indexOf("on") >= 0 ? "chip" : "chip on";
+      };
+    };
+    $("crKind").onchange = paintExtra;
+    $("crGo").onclick = function(){
+      var title = $("crTitle").value.trim(), by = $("crBy").value.trim();
+      if (!title) { toast("请填写事项"); return; }
+      if (!by) { toast("请填写经手人"); return; }
+      MYWF.name = by; saveMyWf();
+      var extra = {}, kind = $("crKind").value;
+      for (var i = 0; i < WF.kinds.length; i++) {
+        if (WF.kinds[i].name !== kind) continue;
+        var fs = WF.kinds[i].fields || [];
+        for (var j = 0; j < fs.length; j++) {
+          var f = fs[j], el = $("crF" + j);
+          if (!el) continue;
+          if (f.options && f.options.length && f.multi) {
+            var vals = [], cs = el.querySelectorAll(".chip.on");
+            for (var k = 0; k < cs.length; k++) vals.push(cs[k].getAttribute("data-v"));
+            if (vals.length) extra[f.label] = vals.join("、");
+          } else if (el.value) {
+            extra[f.label] = el.value;
+          }
+        }
+      }
+      $("crGo").disabled = true;
+      post("/m/api/wf", {op:"create", by:by, stage: MYWF.stage, station: MYWF.station, title:title,
+        station: MYWF.station, to_station: $("crTo").value,
+        kind:kind, target:$("crTarget").value.trim(), note:$("crNote").value.trim(),
+        extra: extra}, function(b2){
+        $("crGo").disabled = false;
+        if (!b2.ok) { toast(b2.error || "发起失败", 3000); return; }
+        toast(b2.message || "已发起", 3000); sheetClose(); WF.showAll = false;
+        loadWF(true);
+      });
+    };
+  });
+}
+setInterval(function(){ if (PAGE === "wf") loadWF(true); }, 5000);
+(function(){
+  var bs = document.querySelectorAll("#wfSeg button");
+  for (var i = 0; i < bs.length; i++) bs[i].onclick = function(){
+    WF.status = this.getAttribute("data-s");
+    for (var j = 0; j < bs.length; j++) bs[j].className = (bs[j] === this) ? "on" : "";
+    loadWFRows();
+  };
+})();
 $("fab").onclick = function(){
+  if (PAGE === "wf") { wfCreateSheet(); return; }
   if (!CAN_WRITE) { toast("只读模式：请先到「我的」申请录入权限"); return; }
   entrySheet(null);
 };

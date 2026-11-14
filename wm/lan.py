@@ -30,7 +30,8 @@ from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
                      handle_photo_del, handle_return_sale, handle_sale_undo,
                      handle_stats, handle_customers, handle_trash,
                      handle_del_item, handle_restore, handle_purge,
-                     handle_stocktake, handle_returns, handle_settle)
+                     handle_stocktake, handle_returns, handle_settle,
+                     handle_wf)
 from .store import Store
 
 DEFAULT_PORT = 8765
@@ -381,7 +382,8 @@ class LanServer(object):
                 c = self.clients.get(ip)
                 if c is not None:
                     c["stage"] = claimed      # 让主机列表能看到各电脑选的工位
-            err = self._wf_stage_error(claimed, method, args, kwargs)
+            err = self._wf_stage_error(claimed, method, args, kwargs,
+                                       station=str(payload.get("wf_station") or ""))
             if err:
                 return 403, {"ok": False, "stage_denied": True, "error": err}
         elif method in WRITE_METHODS and not self.can_write(ip):
@@ -401,7 +403,7 @@ class LanServer(object):
             return 500, {"ok": False, "error": "%s: %s" % (type(e).__name__, e)}
         return 200, {"ok": True, "result": result}
 
-    def _wf_stage_error(self, st, method, args, kwargs):
+    def _wf_stage_error(self, st, method, args, kwargs, station=""):
         """工位校验：电脑只能推进停在自己这一站的单。
 
         st 由客户端在每次请求里上报（制作流程页顶部的「本机工位」）。
@@ -478,6 +480,10 @@ class LanServer(object):
         if cur != st:
             return ("该单现在在「%s」，本机负责「%s」，只能在本站操作"
                     % (sname(cur), sname(st)))
+        owner = str(rec.get("station") or "")
+        if owner and owner != (station or ""):
+            return ("这张单指定交给「%s」工位，本机工位是「%s」，不能接"
+                    % (owner, station or sname(st)))
         return ""
 
     def _code_ok(self, code):
@@ -576,6 +582,8 @@ def _make_handler(srv):
                     return self._send_full(*handle_stocktake(srv, ip, token, q))
                 if path.startswith("/m/api/coltitles"):
                     return self._send_full(*handle_coltitles(srv, ip, token))
+                if path.startswith("/m/api/wf"):
+                    return self._send_full(*handle_wf(srv, ip, token, q))
                 if path.startswith("/m/api/photos"):
                     return self._send_full(*handle_photos(srv, ip, token, q))
                 if path.startswith("/m/api/photo_get"):
@@ -662,6 +670,9 @@ def _make_handler(srv):
                         return self._send_full(*handle_m_sale(srv, ip, token, payload))
                     if path.startswith("/m/api/coltitles"):
                         return self._send_full(*handle_coltitles(srv, ip, token, payload))
+                    if path.startswith("/m/api/wf"):
+                        return self._send_full(*handle_wf(srv, ip, token, None,
+                                                          payload))
                     if path.startswith("/m/api/photo_add"):
                         return self._send_full(*handle_photo_add(srv, ip, token, payload))
                     if path.startswith("/m/api/photo_del"):

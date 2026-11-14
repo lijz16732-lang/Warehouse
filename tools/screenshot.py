@@ -210,16 +210,27 @@ def capture_hwnd(hwnd, path):
     if w <= 0 or h <= 0:
         raise RuntimeError("bad rect %s" % (r))
     gdi32.CreateCompatibleDC.restype = wintypes.HDC
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
     gdi32.CreateCompatibleBitmap.restype = wintypes.HBITMAP
+    gdi32.CreateCompatibleBitmap.argtypes = [wintypes.HDC,
+                                             ctypes.c_int, ctypes.c_int]
+    gdi32.SelectObject.argtypes = [wintypes.HGDIOBJ, wintypes.HGDIOBJ]
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    user32.GetDC.restype = wintypes.HDC
+    user32.GetDC.argtypes = [wintypes.HWND]
     hdc = user32.GetDC(hwnd)
     mem = gdi32.CreateCompatibleDC(hdc)
     bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
     gdi32.SelectObject(mem, bmp)
     # PW_RENDERFULLCONTENT = 2（Win8.1+，可抓 DirectComposition 内容）
     user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, ctypes.c_uint]
+    user32.PrintWindow.restype = wintypes.BOOL
     user32.PrintWindow(hwnd, mem, 2)
     bmi = (ctypes.c_int32 * 5)(40, w, -h, 1, 32)
     buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits.argtypes = [wintypes.HDC, wintypes.HBITMAP, ctypes.c_uint,
+                                ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p,
+                                ctypes.c_uint]
     gdi32.GetDIBits(mem, bmp, 0, h, buf, bmi, 0)
     data = bytes(buf)
     raw = bytearray()
@@ -242,6 +253,9 @@ def capture_hwnd(hwnd, path):
     out += chunk(b"IEND", b"")
     with open(path, "wb") as f:
         f.write(out)
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
     gdi32.DeleteObject(bmp)
     gdi32.DeleteDC(mem)
     user32.ReleaseDC(hwnd, hdc)

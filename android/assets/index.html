@@ -447,6 +447,19 @@ body.dark .fab2 { box-shadow:0 6px 16px rgba(0,0,0,.5); }
     </div>
   </div>
   <!-- 统计（电脑端数据：经营指标 / 客户应收 / 低库存） -->
+  <div id="pWf" class="hide">
+    <div class="card tight" id="wfMeCard"></div>
+    <div class="btnrow" style="margin:0 0 10px"><button id="wfNew">＋ 发起制作</button></div>
+    <div class="seg" id="wfSeg" style="margin-bottom:10px">
+      <div data-s="active" class="on">进行中</div>
+      <div data-s="done">已完成</div>
+      <div data-s="cancelled">已取消</div>
+    </div>
+    <div class="chips" id="wfChips"></div>
+    <div class="hint" id="wfHint"></div>
+    <div id="wfList"></div>
+  </div>
+
   <div id="pStat" class="hide">
     <div class="chips" id="statDays">
       <span data-d="1">今日</span><span data-d="7">近 7 天</span><span data-d="30">近 30 天</span>
@@ -574,6 +587,7 @@ body.dark .fab2 { box-shadow:0 6px 16px rgba(0,0,0,.5); }
 <nav>
   <div data-t="inv" class="on"><i>▦</i><span>库存</span></div>
   <div data-t="rec"><i>☰</i><span>记录</span></div>
+  <div data-t="wf"><i>⇄</i><span>流程</span></div>
   <div data-t="stat"><i>◔</i><span>统计</span></div>
   <div data-t="set"><i>⚙</i><span>设置</span></div>
 </nav>
@@ -2552,14 +2566,15 @@ function tab2(name) {
   var tabs = document.querySelectorAll('nav div');
   for (var i = 0; i < tabs.length; i += 1)
     tabs[i].className = (tabs[i].getAttribute('data-t') === name) ? 'on' : '';
-  var map = { inv: 'Inv', rec: 'Rec', stat: 'Stat', set: 'Set' };
-  ['Inv', 'Rec', 'Stat', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
+  var map = { inv: 'Inv', rec: 'Rec', wf: 'Wf', stat: 'Stat', set: 'Set' };
+  ['Inv', 'Rec', 'Wf', 'Stat', 'Set'].forEach(function (p) { $('p' + p).classList.add('hide'); });
   $('p' + map[name]).classList.remove('hide');
   if (name === 'inv') (invView === 'loc' ? loadLoc : loadPc)($('inKw').value);
   if (name === 'rec') {
     renderSyncLine();
     (recView === 'loc' ? loadRec : function () { loadRecPc($('inRecKw').value); })();
   }
+  if (name === 'wf') wfLoad();
   if (name === 'stat') loadStats();
   if (name === 'set') { renderShare(); renderSync(); renderData(); renderColList(); }
   if (name === 'inv' || name === 'rec') setTimeout(fitTbls, 0);   // 显示后重算限高
@@ -2569,6 +2584,361 @@ function tab2(name) {
   for (var i = 0; i < tabs.length; i += 1)
     tabs[i].onclick = function () { tab2(this.getAttribute('data-t')); };
 })();
+
+/* ================= 制作流程（v1.43.0：与电脑端同一套接口，实时互通） =================
+   手机发起 → 电脑端下一站立即可见；电脑推进 → 手机 5 秒内自动刷新。
+   一个节点可以有多个人：工位名可写「制作标签A」「制作标签B」，绑定到同一个节点，
+   各自用自己姓名留痕。 */
+var WF = { stages: [], kinds: [], stations: [], counts: [], rows: [],
+           status: 'active', stage: -1, last: 0, all: false };
+var MYWF = { name: '', station: '', stage: -1 };
+try { MYWF = Object.assign(MYWF, JSON.parse(LS.getItem('cgm_wf_my') || '{}')); } catch (e) {}
+function wfSaveMy() { try { LS.setItem('cgm_wf_my', JSON.stringify(MYWF)); } catch (e) {} }
+function escWf(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+function wfSName(i) { return WF.stages[i] == null ? ('节点' + (i + 1)) : WF.stages[i]; }
+function wfMyLabel() { return MYWF.station || (MYWF.stage >= 0 ? wfSName(MYWF.stage) : '未设置'); }
+function wfExtraText(ex) {
+  var o = [];
+  for (var k in ex) { if (ex[k]) o.push(k + '：' + ex[k]); }
+  return o.join('，');
+}
+function wfSheet(title, html) {
+  $('shTitle').textContent = title;
+  $('shBody').innerHTML = html;
+  $('mask').classList.remove('hide');
+}
+function wfLoad() {
+  if (!DB.share.token) {
+    $('wfList').innerHTML = '<div class="hint">先在「设置」里连接电脑，才能用制作流程</div>';
+    $('wfChips').innerHTML = '';
+    return;
+  }
+  $('wfMeCard').innerHTML = '<div class="row-t">' + escWf(wfMyLabel()) + '</div><div class="row-sub">'
+    + (MYWF.stage >= 0 ? ('负责节点：' + escWf(wfSName(MYWF.stage))) : '还没设置工位（点这里设置）')
+    + ' · 经手人：' + escWf(MYWF.name || '未填') + '</div>';
+  $('wfMeCard').onclick = wfMeSheet;
+  api('GET', '/m/api/wf?q=stages').then(function (j) {
+    WF.stages = j.stages || []; WF.kinds = j.kinds || [];
+    WF.stations = j.stations || [];
+    WF.counts = j.counts || []; WF.last = j.last || 0;
+    renderWfChips();
+    wfLoadRows();
+  }).catch(function (e) { $('wfList').innerHTML = '<div class="hint">' + escWf(e.message) + '</div>'; });
+}
+function renderWfChips() {
+  var st = WF.all ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
+  var h = '<span data-st="mine" class="' + (st === MYWF.stage ? 'on' : '') + '">我的工位'
+        + (MYWF.stage >= 0 ? ('(' + (WF.counts[MYWF.stage] || 0) + ')') : '!') + '</span>'
+        + '<span data-st="all" class="' + (WF.all ? 'on' : '') + '">全部</span>';
+  for (var i = 0; i < WF.stages.length; i += 1)
+    h += '<span data-st="' + i + '" class="' + (st === i ? 'on' : '') + '">'
+      + escWf(WF.stages[i]) + '(' + (WF.counts[i] || 0) + ')</span>';
+  $('wfChips').innerHTML = h;
+  var sp = $('wfChips').querySelectorAll('span');
+  for (var j = 0; j < sp.length; j += 1) sp[j].onclick = function () {
+    var v = this.getAttribute('data-st');
+    if (v === 'mine') { WF.all = false; WF.stage = MYWF.stage; }
+    else if (v === 'all') { WF.all = true; WF.stage = -1; }
+    else { WF.all = false; WF.stage = Number(v); }
+    renderWfChips(); wfLoadRows();
+  };
+}
+function wfLoadRows() {
+  var st = WF.all ? -1 : (WF.stage >= 0 ? WF.stage : MYWF.stage);
+  api('GET', '/m/api/wf?q=list&status=' + WF.status + '&stage=' + st
+    + '&station=' + encodeURIComponent(MYWF.station || '')).then(function (j) {
+    WF.rows = j.rows || [];
+    if (!WF.rows.length) {
+      $('wfList').innerHTML = '<div class="hint">'
+        + (WF.status === 'active' ? '这一站暂时没有制作单' : '没有记录') + '</div>';
+      $('wfHint').textContent = '';
+      return;
+    }
+    var h = '';
+    for (var i = 0; i < WF.rows.length; i += 1) {
+      var r = WF.rows[i], tags = '';
+      if (r.urgent) tags += '<span class="tag wait">加急</span> ';
+      if (r.status === 'done') tags += '<span class="tag ok">已完成</span> ';
+      if (r.status === 'cancelled') tags += '<span class="tag wait">已取消</span> ';
+      h += '<div class="card tight" data-i="' + i + '" style="margin-bottom:10px">'
+        + '<div class="row-t">' + escWf(r.no) + ' ' + escWf(r.title) + ' ' + tags + '</div>'
+        + '<div class="row-sub">' + escWf(r.stage_name) + ' · '
+        + escWf([r.kind, r.target].filter(Boolean).join(' · ') || '—')
+        + (r.extra && Object.keys(r.extra).length ? ' · ' + escWf(wfExtraText(r.extra)) : '')
+        + '</div>'
+        + (r.note ? '<div class="row-sub">备注：' + escWf(r.note) + '</div>' : '')
+        + '<div class="row-sub">经手人 ' + escWf(r.handler || '—')
+        + (r.station ? ' · 交给 ' + escWf(r.station) : '') + ' · 停留 ' + r.days
+        + ' 天 · ' + escWf(r.updated_at || '') + '</div></div>';
+    }
+    $('wfList').innerHTML = h;
+    var cs = $('wfList').querySelectorAll('.card');
+    for (var k = 0; k < cs.length; k += 1) cs[k].onclick = function () {
+      wfDetail(WF.rows[Number(this.getAttribute('data-i'))]);
+    };
+    $('wfHint').textContent = '共 ' + WF.rows.length + ' 张 · 点单据可推进 / 退回 / 加急'
+      + (MYWF.stage < 0 ? '（先点上方设置我的工位）' : '');
+  }).catch(function (e) { $('wfList').innerHTML = '<div class="hint">' + escWf(e.message) + '</div>'; });
+}
+function wfMeSheet() {
+  var h = '<div class="hint" style="margin:0 0 10px">工位名（如「制作标签A」「制作标签B」）'
+    + '由电脑端「工位设置」维护；同节点多个人各选自己的工位。</div>'
+    + '<div class="row"><label>我的工位</label><select id="wfStPick" style="flex:1">';
+  for (var i = 0; i < WF.stations.length; i += 1)
+    h += '<option value="' + escWf(WF.stations[i].name) + '"'
+      + (MYWF.station === WF.stations[i].name ? ' selected' : '') + '>'
+      + escWf(WF.stations[i].name) + '（' + escWf(wfSName(WF.stations[i].stage))
+      + '）</option>';
+  h += '</select></div>'
+    + '<div class="row"><label>我的姓名</label><input id="wfStBy" value="' + escWf(MYWF.name)
+    + '" placeholder="如：张三"></div>'
+    + '<div class="btnrow"><button id="wfStGo">保存工位</button></div>';
+  wfSheet('我的工位', h);
+  $('wfStGo').onclick = function () {
+    MYWF.station = $('wfStPick').value;
+    for (var i = 0; i < WF.stations.length; i += 1) {
+      if (WF.stations[i].name === MYWF.station) MYWF.stage = WF.stations[i].stage;
+    }
+    MYWF.name = $('wfStBy').value.trim();
+    wfSaveMy(); $('mask').classList.add('hide'); toast('工位已保存'); wfLoad();
+  };
+}
+function wfDetail(r) {
+  api('GET', '/m/api/wf?q=detail&id=' + r.id).then(function (j) {
+    var w = j.wf, logs = j.logs || [], stages = j.stages || WF.stages;
+    var last = stages.length - 1;
+    var mine = w.status === 'active' && MYWF.stage >= 0 && w.stage === MYWF.stage;
+    var h = '<div class="row-t">' + escWf(w.no) + ' ' + escWf(w.title) + '</div>'
+      + '<div class="row-sub">' + escWf(w.stage_name) + '（第 ' + (w.stage + 1) + ' / '
+      + stages.length + ' 站）· 交给 ' + escWf(w.station || '该节点任意人')
+      + ' · 经手人 ' + escWf(w.handler || '—') + '</div>'
+      + (w.note ? '<div class="row-sub">备注：' + escWf(w.note) + '</div>' : '')
+      + (Object.keys(w.extra || {}).length ? '<div class="row-sub">' + escWf(wfExtraText(w.extra)) + '</div>' : '');
+    if (w.status === 'active') {
+      if (!mine) {
+        h += '<div class="hint">这张单在「' + escWf(w.stage_name) + '」，你的工位是「'
+          + escWf(wfMyLabel()) + '」' + (MYWF.stage < 0 ? '（先设置我的工位）' : '') + '</div>';
+      } else if (w.stage >= last) {
+        h += '<div class="btnrow"><button id="wfStock">入库</button>'
+          + '<button id="wfFinish" class="gray">结单</button></div>';
+      } else {
+        h += '<div class="btnrow"><button id="wfNext">推进到「' + escWf(stages[w.stage + 1])
+          + '」</button><button id="wfBack" class="gray">退回</button></div>';
+      }
+      h += '<div class="btnrow"><button id="wfUrg" class="gray">'
+        + (w.urgent ? '取消加急' : '标记加急') + '</button></div>';
+    }
+    h += '<div class="row-t" style="margin:14px 0 6px;font-size:15px">流转记录</div>';
+    for (var i = logs.length - 1; i >= 0; i -= 1)
+      h += '<div class="row-sub">' + escWf(logs[i].at.slice(5, 16)) + ' · '
+        + escWf(logs[i].action) + ' · ' + escWf(logs[i].by || '—')
+        + (logs[i].note ? ' · ' + escWf(logs[i].note) : '') + '</div>';
+    wfSheet('制作单 ' + w.no, h);
+    if ($('wfNext')) $('wfNext').onclick = function () { wfMoveSheet(w, stages); };
+    if ($('wfBack')) $('wfBack').onclick = function () { wfBackSheet(w, stages); };
+    if ($('wfStock')) $('wfStock').onclick = function () { wfStockSheet(w); };
+    if ($('wfFinish')) $('wfFinish').onclick = function () { wfFinishSheet(w); };
+    if ($('wfUrg')) $('wfUrg').onclick = function () {
+      if (!MYWF.name) { toast('请先设置我的姓名'); return; }
+      api('POST', '/m/api/wf', { op: 'urgent', id: w.id, flag: w.urgent ? 0 : 1,
+        by: MYWF.name, stage: MYWF.stage, station: MYWF.station }).then(function (j2) {
+        toast(j2.message || '已更新'); $('mask').classList.add('hide'); wfLoad();
+      }).catch(function (e) { toast(e.message); });
+    };
+  }).catch(function (e) { toast(e.message); });
+}
+function wfStationOptions(stage, cur) {
+  var h = '<option value="">该节点任意人</option>';
+  for (var i = 0; i < WF.stations.length; i += 1) {
+    if (WF.stations[i].stage !== stage) continue;
+    h += '<option value="' + escWf(WF.stations[i].name) + '"'
+      + (WF.stations[i].name === cur ? ' selected' : '') + '>'
+      + escWf(WF.stations[i].name) + '</option>';
+  }
+  return h;
+}
+function wfMoveSheet(w, stages) {
+  wfSheet('推进', '<div class="row-sub">推进到：' + escWf(stages[w.stage + 1]) + '</div>'
+    + '<div class="row"><label>交给谁</label><select id="wfTo" style="flex:1">'
+    + wfStationOptions(w.stage + 1, '') + '</select></div>'
+    + '<div class="row"><label>经手人</label><input id="wfBy" value="' + escWf(MYWF.name) + '"></div>'
+    + '<div class="row"><label>备注</label><input id="wfNote" placeholder="会带给下一站"></div>'
+    + '<div class="btnrow"><button id="wfGo">确认推进</button></div>');
+  $('wfGo').onclick = function () {
+    var by = $('wfBy').value.trim();
+    if (!by) { toast('请填写经手人'); return; }
+    MYWF.name = by; wfSaveMy();
+    $('wfGo').disabled = true;
+    api('POST', '/m/api/wf', { op: 'move', id: w.id, by: by, stage: MYWF.stage,
+      station: MYWF.station, to_station: $('wfTo').value,
+      note: $('wfNote').value.trim() }).then(function (j) {
+      toast(j.message || '已推进'); $('mask').classList.add('hide'); wfLoad();
+    }).catch(function (e) { $('wfGo').disabled = false; toast(e.message); });
+  };
+}
+function wfBackSheet(w, stages) {
+  var h = '<div class="row"><label>目标节点</label><select id="wfTgt" style="flex:1">';
+  for (var i = 0; i < w.stage; i += 1)
+    h += '<option value="' + i + '"' + (i === w.stage - 1 ? ' selected' : '') + '>'
+      + escWf(stages[i]) + '</option>';
+  h += '</select></div>'
+    + '<div class="row"><label>交给谁</label><select id="wfTo2" style="flex:1">'
+    + wfStationOptions(w.stage - 1, '') + '</select></div>'
+    + '<div class="row"><label>经手人</label><input id="wfBy2" value="' + escWf(MYWF.name) + '"></div>'
+    + '<div class="row"><label>退回原因</label><input id="wfNote2"></div>'
+    + '<div class="btnrow"><button id="wfGo2">确认退回</button></div>';
+  wfSheet('退回（可跨站）', h);
+  $('wfGo2').onclick = function () {
+    var by = $('wfBy2').value.trim();
+    if (!by) { toast('请填写经手人'); return; }
+    MYWF.name = by; wfSaveMy();
+    $('wfGo2').disabled = true;
+    api('POST', '/m/api/wf', { op: 'back', id: w.id, by: by, stage: MYWF.stage,
+      station: MYWF.station, to_station: $('wfTo2').value,
+      target: $('wfTgt').value, note: $('wfNote2').value.trim() }).then(function (j) {
+      toast(j.message || '已退回'); $('mask').classList.add('hide'); wfLoad();
+    }).catch(function (e) { $('wfGo2').disabled = false; toast(e.message); });
+  };
+}
+function wfModelHint(w) {
+  var ex = w.extra || {};
+  for (var k in ex) { if (k.indexOf('型号') >= 0 && k.indexOf('原') < 0) return ex[k]; }
+  return '';
+}
+function wfStockSheet(w) {
+  wfSheet('入库', '<div class="row-sub">入库后单据完成，照片一起带到库存</div>'
+    + '<div class="row"><label>品牌</label><input id="wsBrand"></div>'
+    + '<div class="row"><label>品类</label><input id="wsCat"></div>'
+    + '<div class="row"><label>型号</label><input id="wsModel" value="' + escWf(wfModelHint(w)) + '"></div>'
+    + '<div class="row"><label>数量</label><input id="wsQty" type="number" value="1"></div>'
+    + '<div class="row"><label>单价</label><input id="wsPrice" type="number" value="0"></div>'
+    + '<div class="row"><label>货架</label><input id="wsShelf"></div>'
+    + '<div class="row"><label>经手人</label><input id="wsBy" value="' + escWf(MYWF.name) + '"></div>'
+    + '<div class="btnrow"><button id="wsGo">确认入库</button></div>');
+  $('wsGo').onclick = function () {
+    var by = $('wsBy').value.trim(), model = $('wsModel').value.trim();
+    if (!by) { toast('请填写经手人'); return; }
+    if (!model) { toast('请填写型号'); return; }
+    MYWF.name = by; wfSaveMy();
+    $('wsGo').disabled = true;
+    api('POST', '/m/api/wf', { op: 'stock', id: w.id, by: by, stage: MYWF.stage, station: MYWF.station,
+      fields: { brand: $('wsBrand').value.trim(), category: $('wsCat').value.trim(),
+                model: model, qty: $('wsQty').value, price: $('wsPrice').value,
+                shelf: $('wsShelf').value.trim() } }).then(function (j) {
+      toast(j.message || '已入库'); $('mask').classList.add('hide'); wfLoad();
+    }).catch(function (e) { $('wsGo').disabled = false; toast(e.message); });
+  };
+}
+function wfFinishSheet(w) {
+  wfSheet('结单', '<div class="row-sub">不新增库存，直接完成（如报废）</div>'
+    + '<div class="row"><label>经手人</label><input id="wfFBy" value="' + escWf(MYWF.name) + '"></div>'
+    + '<div class="row"><label>备注</label><input id="wfFNote"></div>'
+    + '<div class="btnrow"><button id="wfFGo">确认结单</button></div>');
+  $('wfFGo').onclick = function () {
+    var by = $('wfFBy').value.trim();
+    if (!by) { toast('请填写经手人'); return; }
+    MYWF.name = by; wfSaveMy();
+    $('wfFGo').disabled = true;
+    api('POST', '/m/api/wf', { op: 'finish', id: w.id, by: by, stage: MYWF.stage, station: MYWF.station,
+      note: $('wfFNote').value.trim() }).then(function (j) {
+      toast(j.message || '已结单'); $('mask').classList.add('hide'); wfLoad();
+    }).catch(function (e) { $('wfFGo').disabled = false; toast(e.message); });
+  };
+}
+function wfCreateSheet() {
+  if (MYWF.stage < 0) { toast('请先设置我的工位'); wfMeSheet(); return; }
+  if (MYWF.stage !== 0) { toast('发起制作要用第一站（' + wfSName(0) + '）对应的工位'); return; }
+  var h = '<div class="row"><label>事项</label><input id="crTitle" placeholder="做什么"></div>'
+    + '<div class="row"><label>类型</label><select id="crKind" style="flex:1"><option value="">不选</option>';
+  for (var i = 0; i < WF.kinds.length; i += 1)
+    h += '<option value="' + escWf(WF.kinds[i].name) + '">' + escWf(WF.kinds[i].name) + '</option>';
+  h += '</select></div><div id="crExtra"></div>'
+    + '<div class="row"><label>发给谁</label><select id="crTo" style="flex:1">'
+    + wfStationOptions(0, MYWF.station) + '</select></div>'
+    + '<div class="row"><label>关联编号</label><input id="crTarget"></div>'
+    + '<div class="row"><label>备注</label><input id="crNote" placeholder="会带给下一站"></div>'
+    + '<div class="row"><label>经手人</label><input id="crBy" value="' + escWf(MYWF.name) + '"></div>'
+    + '<div class="btnrow"><button id="crGo">发起并推送</button></div>';
+  wfSheet('发起制作', h);
+  var paintExtra = function () {
+    var name = $('crKind').value, out = '';
+    for (var i = 0; i < WF.kinds.length; i += 1) {
+      if (WF.kinds[i].name !== name) continue;
+      var fs = WF.kinds[i].fields || [];
+      for (var j = 0; j < fs.length; j += 1) {
+        var f = fs[j], id = 'crF' + j;
+        out += '<div class="row"><label>' + escWf(f.label) + '</label>';
+        if (f.options && f.options.length && f.multi) {
+          out += '<div class="chips" id="' + id + '" style="flex:1;margin:0">';
+          for (var k = 0; k < f.options.length; k += 1)
+            out += '<span data-v="' + escWf(f.options[k]) + '">' + escWf(f.options[k]) + '</span>';
+          out += '</div>';
+        } else if (f.options && f.options.length) {
+          out += '<select id="' + id + '" style="flex:1"><option value="">不选</option>';
+          for (var m = 0; m < f.options.length; m += 1)
+            out += '<option value="' + escWf(f.options[m]) + '">' + escWf(f.options[m]) + '</option>';
+          out += '</select>';
+        } else {
+          out += '<input id="' + id + '">';
+        }
+        out += '</div>';
+      }
+    }
+    $('crExtra').innerHTML = out;
+    var sp = $('crExtra').querySelectorAll('.chips span');
+    for (var n = 0; n < sp.length; n += 1) sp[n].onclick = function () {
+      this.className = this.className.indexOf('on') >= 0 ? '' : 'on';
+    };
+  };
+  $('crKind').onchange = paintExtra;
+  $('crGo').onclick = function () {
+    var title = $('crTitle').value.trim(), by = $('crBy').value.trim();
+    if (!title) { toast('请填写事项'); return; }
+    if (!by) { toast('请填写经手人'); return; }
+    MYWF.name = by; wfSaveMy();
+    var extra = {}, kind = $('crKind').value;
+    for (var i = 0; i < WF.kinds.length; i += 1) {
+      if (WF.kinds[i].name !== kind) continue;
+      var fs = WF.kinds[i].fields || [];
+      for (var j = 0; j < fs.length; j += 1) {
+        var f = fs[j], el = $('crF' + j);
+        if (!el) continue;
+        if (f.options && f.options.length && f.multi) {
+          var vals = [], cs = el.querySelectorAll('span.on');
+          for (var k = 0; k < cs.length; k += 1) vals.push(cs[k].getAttribute('data-v'));
+          if (vals.length) extra[f.label] = vals.join('、');
+        } else if (el.value) {
+          extra[f.label] = el.value;
+        }
+      }
+    }
+    $('crGo').disabled = true;
+    api('POST', '/m/api/wf', { op: 'create', by: by, stage: MYWF.stage, title: title,
+      station: MYWF.station, to_station: $('crTo').value,
+      kind: kind, target: $('crTarget').value.trim(), note: $('crNote').value.trim(),
+      extra: extra }).then(function (j) {
+      toast(j.message || '已发起'); $('mask').classList.add('hide'); WF.all = false; wfLoad();
+    }).catch(function (e) { $('crGo').disabled = false; toast(e.message); });
+  };
+}
+$('wfSeg').onclick = function (ev) {
+  var t = ev.target;
+  if (!t || !t.getAttribute('data-s')) return;
+  WF.status = t.getAttribute('data-s');
+  var ds = this.querySelectorAll('div');
+  for (var i = 0; i < ds.length; i += 1)
+    ds[i].className = (ds[i] === t) ? 'on' : '';
+  wfLoadRows();
+};
+$('wfMeCard').onclick = wfMeSheet;
+$('wfNew').onclick = wfCreateSheet;
+setInterval(function () {
+  if (DB.share.token && !$('pWf').classList.contains('hide')) wfLoadRows();
+}, 5000);
 
 /* ================= 列题（电脑端共享设置，用于电脑库存表头） ================= */
 var CT_DEFS = { code: '编号', brand: '品牌', category: '品类', model: '型号',

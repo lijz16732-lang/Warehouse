@@ -344,7 +344,30 @@ class FlowDialog(tk.Toplevel):
             cb.grid(row=row, column=1, sticky="w", pady=6)
             if st == 0:
                 cb.configure(state="disabled")
+            cb.bind("<<ComboboxSelected>>",
+                    lambda e: self._fill_stations(
+                        self.tab.app.store.wf_stages().index(
+                            self.var_target.get())))
         row += 1
+
+        # 交给谁：同一节点有多人时（如「制作标签A」「制作标签B」）可指定工位，
+        # 不指定就是该节点的公共池，谁都能接
+        self.var_station = tk.StringVar()
+        self.cb_station = None
+        if not self.at_last:
+            tk.Label(body, text="交给谁", bg=CLR_BG, fg="#41506B",
+                     font=(self.fam, 10), anchor="w").grid(
+                row=row, column=0, sticky="w", padx=(0, 10), pady=6)
+            self.cb_station = ttk.Combobox(
+                body, textvariable=self.var_station, width=18,
+                state="readonly", font=(self.fam, 10))
+            self.cb_station.grid(row=row, column=1, sticky="w", pady=6)
+            self._fill_stations(new_stage)
+            tk.Label(body, text="该节点有多个人时，选具体工位就只推给他/她",
+                     bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 8),
+                     anchor="w").grid(row=row + 1, column=0,
+                                      columnspan=2, sticky="w")
+            row += 2
 
         tk.Label(body, text="你的名字 *", bg=CLR_BG, fg="#41506B",
                  font=(self.fam, 10), anchor="w").grid(
@@ -447,6 +470,19 @@ class FlowDialog(tk.Toplevel):
             except Exception:
                 pass
 
+    def _fill_stations(self, stage):
+        """目标节点的工位下拉：任意人 + 该节点的各个具名工位。"""
+        try:
+            names = [x["name"] for x in self.tab.app.store.wf_stations()
+                     if x["stage"] == int(stage)]
+        except Exception:
+            names = []
+        try:
+            self.cb_station.configure(values=["该节点任意人"] + names)
+            self.var_station.set("该节点任意人")
+        except Exception:
+            pass
+
     def _ok(self):
         by = self.var_by.get().strip()
         if not by:
@@ -471,7 +507,15 @@ class FlowDialog(tk.Toplevel):
                     self.var_target.get())
             except (ValueError, AttributeError):
                 target = None
-        self.result = (by, self.var_note.get().strip(), stock_rec, target)
+        station = ""
+        try:
+            choice = self.var_station.get()
+            if choice and choice != "该节点任意人":
+                station = choice
+        except Exception:
+            station = ""
+        self.result = (by, self.var_note.get().strip(), stock_rec, target,
+                       station)
         self.tab.remember_name(by)
         self.destroy()
 
@@ -573,6 +617,119 @@ class StagesDialog(tk.Toplevel):
             return
         self.destroy()
         messagebox.showinfo("制作流程", msg, parent=self.tab)
+
+
+class StationsDialog(tk.Toplevel):
+    """工位设置：一个节点可以有多个人（如「制作标签A」「制作标签B」）。
+
+    推送时可以指定交给哪个工位；同名工位才算「同一个人/同一张桌子」。
+    """
+
+    def __init__(self, master, tab):
+        super().__init__(master)
+        self.tab = tab
+        self.fam = tab.fam
+        self.title("工位设置")
+        self.configure(bg=CLR_BG)
+        self.resizable(False, False)
+        self.transient(master)
+        apply_window_icon(self)
+
+        foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                        highlightthickness=1)
+        foot.pack(fill="x", side="bottom")
+        ttk.Button(foot, text="保存", style="Accent.TButton", width=10,
+                   command=self._ok).pack(side="right", padx=(8, 16), pady=12)
+        ttk.Button(foot, text="取消", width=10,
+                   command=self.destroy).pack(side="right", pady=12)
+
+        tk.Label(self, text="一个节点可以有多个人：比如节点「制作标签」，"
+                            "可以配置「制作标签A」「制作标签B」两个工位，"
+                            "推送时选择交给谁。",
+                 bg=CLR_BG, fg=CLR_MUTED, font=(self.fam, 9), anchor="w",
+                 wraplength=460, justify="left"
+                 ).pack(fill="x", padx=18, pady=(14, 6))
+
+        self.stages = list(tab.app.store.wf_stages())
+        self.rows = tk.Frame(self, bg=CLR_BG)
+        self.rows.pack(fill="x", padx=18)
+        self._entries = []
+        for st in tab.app.store.wf_stations():
+            self._add_row(st["name"], st["stage"])
+
+        btns = tk.Frame(self, bg=CLR_BG)
+        btns.pack(fill="x", padx=18, pady=8)
+        ttk.Button(btns, text="＋ 添加工位", style="Ghost.TButton", width=11,
+                   command=lambda: self._add_row("", 0)).pack(side="left")
+
+        self.msg = tk.Label(self, text="", bg=CLR_BG, fg=CLR_WARN,
+                            font=(self.fam, 9), anchor="w")
+        self.msg.pack(fill="x", padx=18)
+
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        center_window(self, master, force=True)
+        self.grab_set()
+        self.focus_force()
+
+    def _add_row(self, name, stage):
+        if len(self._entries) >= 60:
+            return
+        r = tk.Frame(self.rows, bg=CLR_BG)
+        r.pack(fill="x", pady=3)
+        tk.Label(r, text="工位名", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        e = tk.Entry(r, font=(self.fam, 10), relief="solid", bd=1, width=18)
+        e.pack(side="left", padx=(6, 10), ipady=2)
+        e.insert(0, str(name))
+        tk.Label(r, text="节点", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        var = tk.StringVar(value=self.stages[int(stage)]
+                           if 0 <= int(stage) < len(self.stages) else
+                           (self.stages[0] if self.stages else ""))
+        cb = ttk.Combobox(r, textvariable=var, values=self.stages,
+                          state="readonly", width=14, font=(self.fam, 10))
+        cb.pack(side="left", padx=(6, 10))
+        ttk.Button(r, text="✕", width=3, style="Ghost.TButton",
+                   command=lambda: self._del_row(r)).pack(side="left")
+        self._entries.append((r, e, var))
+        self._refit()
+
+    def _del_row(self, row):
+        if len(self._entries) <= 1:
+            self.msg.configure(text="⚠ 至少保留 1 个工位")
+            return
+        self._entries = [x for x in self._entries if x[0] is not row]
+        row.destroy()
+        self._refit()
+
+    def _refit(self):
+        try:
+            if not self.winfo_ismapped():
+                return
+            self.update_idletasks()
+            center_window(self, self.tab, force=True)
+        except Exception:
+            pass
+
+    def _ok(self):
+        items = []
+        for _r, e, var in self._entries:
+            name = e.get().strip()
+            if not name:
+                continue
+            try:
+                stage = self.stages.index(var.get())
+            except ValueError:
+                stage = 0
+            items.append({"name": name, "stage": stage})
+        ok, msg = self.tab.app.store.wf_set_stations(items)
+        if not ok:
+            self.msg.configure(text="⚠ " + msg)
+            return
+        self.destroy()
+        messagebox.showinfo("制作流程", msg, parent=self.tab)
+        self.tab.refresh_tab()
 
 
 class KindsDialog(tk.Toplevel):
@@ -841,10 +998,11 @@ class DetailDialog(tk.Toplevel):
                         highlightthickness=1)
         head.pack(fill="x")
         info = ("事项：%s%s      类型：%s      关联：%s\n当前节点：%s（第 %d / %d 站）"
-                "      经手人：%s      状态：%s\n备注：%s%s"
+                "      交给：%s      经手人：%s      状态：%s\n备注：%s%s"
                 % (rec["title"], "  🔥加急" if int(rec.get("urgent") or 0) else "",
                    rec.get("kind") or "—", rec.get("target") or "—",
                    rec["stage_name"], int(rec.get("stage") or 0) + 1, len(stages),
+                   rec.get("station") or "该节点任意人",
                    rec.get("handler") or "—",
                    {"active": "进行中", "done": "已完成",
                     "cancelled": "已取消"}.get(rec.get("status"), rec.get("status")),
@@ -924,6 +1082,8 @@ class WorkflowTab(ttk.Frame):
                    command=self.new_wf).pack(side="right", padx=(8, 16), pady=8)
         ttk.Button(bar, text="节点设置", style="Ghost.TButton",
                    command=self.edit_stages).pack(side="right", pady=8)
+        ttk.Button(bar, text="工位设置", style="Ghost.TButton",
+                   command=self.edit_stations).pack(side="right", pady=8)
         ttk.Button(bar, text="类型设置", style="Ghost.TButton",
                    command=self.edit_kinds).pack(side="right", pady=8)
         ttk.Button(bar, text="刷新", command=self.refresh_tab).pack(
@@ -1040,31 +1200,54 @@ class WorkflowTab(ttk.Frame):
         return getattr(self.app, "lan_mode", "") == "client"
 
     def _sync_stage_picker(self):
-        """下拉里列出当前节点名，并选中本机上次选的工位。
+        """下拉列出全部工位（工位名，可同节点多人如「制作标签A/B」）。
 
-        「不限」只留给主机（统筹用）；客户机只能选具体节点，
+        「不限」只留给主机（统筹用）；客户机只能选具体工位，
         避免任何一台工位电脑都能替别人推进。
         """
         try:
-            stages = list(self.app.store.wf_stages())
+            stations = self.app.store.wf_stations()
         except Exception:
-            stages = []
+            stations = []
+        names = [s["name"] for s in stations]
         try:
             self.cb_stage.configure(
-                values=(list(stages) if self._is_client()
-                        else ["不限"] + list(stages)))
+                values=(list(names) if self._is_client()
+                        else ["不限"] + list(names)))
         except Exception:
             pass
-        idx = self._my_stage()
         try:
-            if 0 <= idx < len(stages):
-                self.var_stage.set(stages[idx])
+            if self.app.settings.get("wf_my_station") in names:
+                self.var_stage.set(self.app.settings.get("wf_my_station"))
             elif self._is_client():
                 self.var_stage.set("请选择…")     # 客户机还没绑定工位
             else:
                 self.var_stage.set("不限")
         except Exception:
             pass
+
+    def _my_station(self):
+        """本机工位名（空 = 不限）。"""
+        name = str(self.app.settings.get("wf_my_station") or "").strip()
+        try:
+            names = [s["name"] for s in self.app.store.wf_stations()]
+        except Exception:
+            names = []
+        if name and name in names:
+            return name
+        # 老版本只存了节点序号：映射到该节点的第一个工位
+        try:
+            idx = int(self.app.settings.get("wf_my_stage", -1))
+        except (TypeError, ValueError):
+            idx = -1
+        if idx >= 0:
+            try:
+                for s in self.app.store.wf_stations():
+                    if s["stage"] == idx:
+                        return s["name"]
+            except Exception:
+                pass
+        return ""
 
     def _stage_ready(self):
         """客户机必须先绑定工位才能动流程（「不限」只给主机）。"""
@@ -1081,17 +1264,18 @@ class WorkflowTab(ttk.Frame):
 
     def _pick_stage(self, _e=None):
         """选工位：第一次直接定下来并锁定，之后要改必须主机同意。"""
-        try:
-            stages = list(self.app.store.wf_stages())
-        except Exception:
-            stages = []
         choice = self.var_stage.get()
-        idx = stages.index(choice) if choice in stages else -1
-        if idx == self._my_stage():
+        try:
+            names = [x["name"] for x in self.app.store.wf_stations()]
+        except Exception:
+            names = []
+        idx = self.app.store.wf_station_stage(choice) if choice in names else -1
+        label = choice if choice in names else "不限"
+        if label == (self._my_station() or "不限"):
             return
-        label = self._stage_name(idx) if idx >= 0 else "不限"
+        st_name = choice if choice in names else ""
         if not self._stage_locked():
-            self._apply_stage(idx)
+            self._apply_stage(idx, st_name)
             messagebox.showinfo(
                 "本机工位",
                 "本机工位已定为「%s」，之后固定不变，只能推进停在这一站的单。\n\n"
@@ -1104,13 +1288,15 @@ class WorkflowTab(ttk.Frame):
                     % label, parent=self):
                 self._sync_stage_picker()
                 return
-            self._apply_stage(idx)
+            self._apply_stage(idx, st_name)
             return
         self._ask_host_stage(idx)
 
-    def _apply_stage(self, idx):
+    def _apply_stage(self, idx, station=None):
         """写入本机工位并锁定；客户端模式下随请求上报主机做校验。"""
         idx = int(idx)
+        if station is not None:
+            self.app.settings["wf_my_station"] = str(station)
         self.app.settings["wf_my_stage"] = idx
         self.app.settings["wf_stage_locked"] = True
         try:
@@ -1120,6 +1306,9 @@ class WorkflowTab(ttk.Frame):
         try:
             if getattr(self.app, "lan_mode", "") == "client":
                 self.app.store.wf_stage = idx
+                # 工位名一并上报：主机按「指定交给谁」校验能不能接
+                self.app.store.wf_station = str(
+                    self.app.settings.get("wf_my_station") or "")
         except Exception:
             pass
         self._sync_stage_picker()
@@ -1183,13 +1372,15 @@ class WorkflowTab(ttk.Frame):
     def refresh_rows(self):
         try:
             status = self.var_status.get() or "active"
+            mine_st = self._my_station()          # 只列「给我的单」+ 本节点公共池
             if self.flow.sel >= 0 and status == "active":
-                rows = [r for r in self.app.store.wf_list("active",
-                                                          self.var_kw.get())
+                rows = [r for r in self.app.store.wf_list(
+                            "active", self.var_kw.get(), station=mine_st)
                         if int(r.get("stage") or 0) == self.flow.sel]
                 counts = self.app.store.wf_counts()
             else:
-                rows = self.app.store.wf_list(status, self.var_kw.get())
+                rows = self.app.store.wf_list(status, self.var_kw.get(),
+                                              station=mine_st)
                 counts = self.app.store.wf_counts()
         except Exception as e:
             self.rows = []
@@ -1233,7 +1424,8 @@ class WorkflowTab(ttk.Frame):
         stamp = ("已固定 · 更换需主机同意" if self._stage_locked()
                  else "首次选择后固定")
         hint = "本机工位：%s（%s） · %s" % (
-            self._stage_name(mine) if mine >= 0
+            (self._my_station() + " · " + self._stage_name(mine))
+            if mine >= 0
             else ("未选（请先选择你的工位）" if self._is_client() else "不限"),
             stamp, hint)
         self.lbl_hint.configure(text=hint)
@@ -1280,10 +1472,13 @@ class WorkflowTab(ttk.Frame):
 
     # ------------------------------------------------------------ 动作
     def _my_stage(self):
-        """本机工位下标（-1 = 不限）：在页面顶部下拉里自己选，存在本机设置里。"""
+        """本机工位对应的节点下标（-1 = 没选/不限）。"""
+        st = self._my_station()
+        if not st:
+            return -1
         try:
-            return int(self.app.settings.get("wf_my_stage", -1))
-        except (TypeError, ValueError):
+            return int(self.app.store.wf_station_stage(st))
+        except Exception:
             return -1
 
     def _stage_name(self, idx):
@@ -1347,7 +1542,7 @@ class WorkflowTab(ttk.Frame):
         self.wait_window(dlg)
         if not dlg.result:
             return
-        by, note, stock_rec, target = dlg.result
+        by, note, stock_rec, target, station = dlg.result
         if forward and getattr(dlg, "at_last", False):
             # 单据已停在最后一站：这一步是「执行入库 / 结单」，不再是推进
             if stock_rec is not None:
@@ -1356,10 +1551,11 @@ class WorkflowTab(ttk.Frame):
             else:
                 ok, msg = self.app.store.wf_finish(int(rec["id"]), by, note)
         elif forward:
-            ok, msg = self.app.store.wf_advance(int(rec["id"]), by, note)
+            ok, msg = self.app.store.wf_advance(int(rec["id"]), by, note,
+                                                station=station)
         else:
             ok, msg = self.app.store.wf_back(int(rec["id"]), by, note,
-                                             target=target)
+                                             target=target, station=station)
         if not ok:
             messagebox.showwarning("制作流程", msg, parent=self)
             return
@@ -1448,3 +1644,9 @@ class WorkflowTab(ttk.Frame):
         if self.app._guard_write():
             return
         KindsDialog(self, self)
+
+    def edit_stations(self):
+        """工位设置：一个节点可配多个工位（多人共站）。"""
+        if self.app._guard_write():
+            return
+        StationsDialog(self, self)

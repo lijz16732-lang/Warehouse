@@ -435,6 +435,12 @@ class Store(object):
                         "ALTER TABLE workflows ADD COLUMN"
                         " \"urgent\" INTEGER DEFAULT 0")
                     changed = True
+                # v1.43.0 目标工位（同节点多人的情况下，推给具体哪个工位）
+                if "station" not in wcols:
+                    self.conn.execute(
+                        "ALTER TABLE workflows ADD COLUMN"
+                        " \"station\" TEXT DEFAULT ''")
+                    changed = True
                 # v1.24.0 操作日志（独立表，不参与同步触发器）
                 self.conn.execute(
                     "CREATE TABLE IF NOT EXISTS oplog ("
@@ -2381,6 +2387,7 @@ class Store(object):
     WF_STAGES_KEY = "workflow_stages"
     WF_DEFAULT_STAGES = ["发起制作", "制作标签", "贴标签", "质检", "入库"]
     WF_KINDS_KEY = "workflow_kinds"
+    WF_STATIONS_KEY = "workflow_stations"
     # 类型可自定义；每个类型可带若干「附加字段」，
     # field = {"label": 名称, "options": [选项,...], "multi": 是否多选}
     # （有 options 渲染成下拉/勾选，multi=True 是勾选框可同时选多项；
@@ -2431,6 +2438,87 @@ class Store(object):
             self.conn.commit()
         self.log_op("修改", "制作流程", "节点：%s" % " → ".join(clean))
         return True, "节点已保存：%s" % " → ".join(clean)
+
+    # ---------------------------------------------------- 工位（一个节点可多人）
+    def wf_stations(self):
+        """工位列表 [{"name": 工位名, "stage": 节点序号}]。
+
+        一个节点可以有多个人：工位名可写成「制作标签A」「制作标签B」，
+        都绑定同一个节点；推送时可以指定发给哪个工位（不指定 = 该节点任意人）。
+        没有自定义工位时，默认每个节点一个同名工位。
+        """
+        stages = self.wf_stages()
+        raw = self.get_meta(self.WF_STATIONS_KEY, "")
+        out = []
+        if raw:
+            try:
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    for it in data[:60]:
+                        if not isinstance(it, dict):
+                            continue
+                        name = str(it.get("name") or "").strip()[:20]
+                        try:
+                            stg = int(it.get("stage"))
+                        except (TypeError, ValueError):
+                            continue
+                        if 0 <= stg < len(stages) and name \
+                                and not any(o["name"] == name for o in out):
+                            out.append({"name": name, "stage": stg})
+            except Exception:
+                out = []
+        # 每个节点至少有一个工位（没配的用节点名兜底，避免推给空气）
+        have = {o["stage"] for o in out}
+        for i, s in enumerate(stages):
+            if i not in have and s not in [o["name"] for o in out]:
+                out.append({"name": s, "stage": i})
+        out.sort(key=lambda o: (o["stage"], o["name"]))
+        return out
+
+    def wf_set_stations(self, items):
+        """保存工位定义（名称去重、必须绑定有效节点；每节点至少一个）。"""
+        stages = self.wf_stages()
+        clean, seen = [], set()
+        for it in (items or [])[:60]:
+            if not isinstance(it, dict):
+                continue
+            name = str(it.get("name") or "").strip()[:20]
+            try:
+                stg = int(it.get("stage"))
+            except (TypeError, ValueError):
+                continue
+            if not name or name in seen or not (0 <= stg < len(stages)):
+                continue
+            seen.add(name)
+            clean.append({"name": name, "stage": stg})
+        if not clean:
+            return False, "至少要有一个工位"
+        # 每个节点至少留一个工位（没配的用节点名兜底，避免「推给空气」）
+        for i, st in enumerate(stages):
+            if i in {c["stage"] for c in clean}:
+                continue
+            name, k = st, 2
+            while name in seen:           # 节点名已被别的工位占用 → 加序号
+                name, k = "%s-%d" % (st, k), k + 1
+            seen.add(name)
+            clean.append({"name": name, "stage": i})
+        clean.sort(key=lambda c: (c["stage"], c["name"]))
+        self.set_meta(self.WF_STATIONS_KEY,
+                      json.dumps(clean, ensure_ascii=False))
+        return True, "已保存 %d 个工位" % len(clean)
+
+    def wf_station_names(self, stage=None):
+        """某节点下的工位名列表；stage=None 返回全部。"""
+        out = [s["name"] for s in self.wf_stations()
+               if stage is None or s["stage"] == stage]
+        return out
+
+    def wf_station_stage(self, name):
+        """工位名 → 节点序号（找不到返回 -1）。"""
+        for s in self.wf_stations():
+            if s["name"] == name:
+                return s["stage"]
+        return -1
 
     def wf_kinds(self):
         """制作类型列表（含各自的附加字段定义；meta 可自定义）。"""
@@ -2483,14 +2571,18 @@ class Store(object):
         self.log_op("修改", "制作流程", "类型：%s" % names)
         return True, "类型已保存：%s" % names
 
-    def wf_create(self, title, kind="", target="", note="", by="", extra=None):
-        """发起一张制作单。返回 (wf_id, no 或错误提示)。"""
+    def wf_create(self, title, kind="", target="", note="", by="", extra=None,
+                  station=""):
+        """发起一张制作单。station = 发给第一站的哪个工位（空 = 任意人）。"""
         title = (title or "").strip()
         by = (by or "").strip()
         if not title:
             return 0, "事项内容不能为空"
         if not by:
             return 0, "请填写你的名字（发起人）"
+        station = (station or "").strip()[:20]
+        if station and self.wf_station_stage(station) != 0:
+            return 0, "工位「%s」不在第一站" % station
         ts = now_str()
         with self._lock:
             row = self.conn.execute(
@@ -2503,22 +2595,29 @@ class Store(object):
                 "ON CONFLICT(k) DO UPDATE SET v = excluded.v", (str(seq),))
             cur = self.conn.execute(
                 "INSERT INTO workflows (no, title, kind, target, stage, status,"
-                " created_at, updated_at, note, extra) VALUES (?,?,?,?,0,'active',?,?,?,?)",
+                " created_at, updated_at, note, extra, station)"
+                " VALUES (?,?,?,?,0,'active',?,?,?,?,?)",
                 (no, title, (kind or "").strip(), (target or "").strip(),
                  ts, ts, (note or "").strip(),
                  json.dumps(extra or {}, ensure_ascii=False)
-                 if isinstance(extra, dict) and extra else None))
+                 if isinstance(extra, dict) and extra else None, station))
             wf_id = int(cur.lastrowid)
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
-                (wf_id, 0, "create", by, ts, "发起制作：%s" % title))
+                (wf_id, 0, "create", by, ts,
+                 "发起制作：%s%s" % (title, ("（交给 %s）" % station)
+                                     if station else "")))
             self.conn.commit()
         self.log_op("制作流程", no, "%s（发起人：%s）" % (title, by))
         return wf_id, no
 
-    def wf_list(self, status="active", kw=""):
-        """按状态列出制作单（附节点名、经手人、停留天数）。"""
+    def wf_list(self, status="active", kw="", station=""):
+        """按状态列出制作单（附节点名、经手人、停留天数）。
+
+        station 给了工位名时：只返回「指定给这个工位」的单，
+        以及「没指定人、停在同一个节点」的单（= 该节点的公共池）。
+        """
         stages = self.wf_stages()
         where, args = [], []
         if status in ("active", "done", "cancelled"):
@@ -2547,6 +2646,8 @@ class Store(object):
                     if k not in bys:
                         bys[k] = str(r["by"] or "")
         out = []
+        want = (station or "").strip()
+        want_stage = self.wf_station_stage(want) if want else -1
         for r in rows:
             st = int(r.get("stage") or 0)
             r["stage_name"] = stages[st] if 0 <= st < len(stages) else ("节点%d" % st)
@@ -2559,6 +2660,14 @@ class Store(object):
                 r["days"] = max(0, (datetime.now() - d0).days)
             except Exception:
                 r["days"] = 0
+            r["station"] = str(r.get("station") or "")
+            if want and r.get("status") == "active":
+                # 明确指定给别人 → 我不该看到；没指定且同节点 → 公共池，都能看到
+                if r["station"]:
+                    if r["station"] != want:
+                        continue
+                elif st != want_stage:
+                    continue
             out.append(r)
         return out
 
@@ -2610,8 +2719,9 @@ class Store(object):
             ).fetchone()
         return [int(a["n"]), str(a["u"]), int(b["n"]), int(b["m"])]
 
-    def _wf_move(self, wf_id, by, note, forward=True, target=None):
-        """推进 / 退回。退回默认到相邻上一站，target 可指定更早的站
+    def _wf_move(self, wf_id, by, note, forward=True, target=None, station=""):
+        """推进 / 退回。station 指定交给目标节点的哪个工位（空=任意人）。
+        退回默认到相邻上一站，target 可指定更早的站
         （如质检发现问题直接退回到「制作标签」，不必一站一站退）。返回 (ok, msg)。"""
         by = (by or "").strip()
         if not by:
@@ -2644,6 +2754,10 @@ class Store(object):
                 return False, "已在第一个节点（%s）" % stages[0]
             if new > len(stages) - 1:
                 return False, "已在最后节点（%s）" % stages[-1]
+            station = (station or "").strip()[:20]
+            if station and self.wf_station_stage(station) != new:
+                return False, ("工位「%s」不在「%s」站，不能推给它"
+                               % (station, stages[new]))
             ts = now_str()
             # v1.42.8：推进到最后一站（入库）不再立即结束——单据停在入库站，
             # 由入库员执行入库（wf_stock_in）或直接结单（wf_finish）才算走完
@@ -2653,18 +2767,20 @@ class Store(object):
             if log_note:
                 self.conn.execute(
                     "UPDATE workflows SET stage = ?, status = 'active',"
-                    " updated_at = ?, done_at = NULL, note = ? WHERE id = ?",
-                    (new, ts, log_note, int(wf_id)))
+                    " updated_at = ?, done_at = NULL, note = ?, station = ?"
+                    " WHERE id = ?",
+                    (new, ts, log_note, station, int(wf_id)))
             else:
                 self.conn.execute(
                     "UPDATE workflows SET stage = ?, status = 'active',"
-                    " updated_at = ?, done_at = NULL WHERE id = ?",
-                    (new, ts, int(wf_id)))
+                    " updated_at = ?, done_at = NULL, station = ? WHERE id = ?",
+                    (new, ts, station, int(wf_id)))
             act = "advance" if forward else "back"
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
-                (int(wf_id), new, act, by, ts, log_note))
+                (int(wf_id), new, act, by, ts,
+                 log_note + (("（交给 %s）" % station) if station else "")))
             self.conn.commit()
         head = dict(head)
         if forward:
@@ -2679,11 +2795,12 @@ class Store(object):
         return True, "已%s到「%s」（%s）" % ("推进" if forward else "退回",
                                             stages[new], by)
 
-    def wf_advance(self, wf_id, by, note=""):
-        return self._wf_move(wf_id, by, note, forward=True)
+    def wf_advance(self, wf_id, by, note="", station=""):
+        return self._wf_move(wf_id, by, note, forward=True, station=station)
 
-    def wf_back(self, wf_id, by, note="", target=None):
-        return self._wf_move(wf_id, by, note, forward=False, target=target)
+    def wf_back(self, wf_id, by, note="", target=None, station=""):
+        return self._wf_move(wf_id, by, note, forward=False, target=target,
+                             station=station)
 
     def wf_cancel(self, wf_id, by, note=""):
         by = (by or "").strip()
