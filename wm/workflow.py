@@ -12,7 +12,7 @@
 
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, simpledialog
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
                         CLR_TEXT, CLR_WARN, apply_window_icon, center_window,
@@ -28,6 +28,7 @@ def fmt_extra(extra, limit=48):
 
 
 COLS = [("no", "单号", 84, "center"),
+        ("urgent", "加急", 52, "center"),
         ("title", "事项", 180, "w"),
         ("kind", "类型", 92, "center"),
         ("target", "关联编号", 96, "center"),
@@ -839,9 +840,10 @@ class DetailDialog(tk.Toplevel):
         head = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)
         head.pack(fill="x")
-        info = ("事项：%s      类型：%s      关联：%s\n当前节点：%s（第 %d / %d 站）"
+        info = ("事项：%s%s      类型：%s      关联：%s\n当前节点：%s（第 %d / %d 站）"
                 "      经手人：%s      状态：%s\n备注：%s%s"
-                % (rec["title"], rec.get("kind") or "—", rec.get("target") or "—",
+                % (rec["title"], "  🔥加急" if int(rec.get("urgent") or 0) else "",
+                   rec.get("kind") or "—", rec.get("target") or "—",
                    rec["stage_name"], int(rec.get("stage") or 0) + 1, len(stages),
                    rec.get("handler") or "—",
                    {"active": "进行中", "done": "已完成",
@@ -965,12 +967,15 @@ class WorkflowTab(ttk.Frame):
                              stretch=(key in ("title", "note")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        # tag 优先级 = 创建先后（先创建优先）：已取消 > 已完成 > 临近超时 > 斑马纹
+        # tag 优先级 = 创建先后（先创建优先）：已取消 > 已完成 > 加急 > 临近超时 > 斑马纹
         self.tree.tag_configure("cancelled", foreground="#98A2B3")
         self.tree.tag_configure("done", foreground="#0E9F6E")
+        self.tree.tag_configure("urgent", foreground="#D92D20")
         self.tree.tag_configure("stale", foreground=CLR_WARN)
         self.tree.tag_configure("odd", background="#F7FAFD")
         self.tree.bind("<Double-1>", lambda e: self.show_detail())
+        self.tree.bind("<<TreeviewSelect>>",
+                       lambda e: self._sync_urgent_btn())
 
         foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=(0, 10))
@@ -979,6 +984,9 @@ class WorkflowTab(ttk.Frame):
         self.lbl_hint.pack(side="left")
         ttk.Button(foot, text="删除", style="Danger.TButton", width=6,
                    command=self.delete_selected).pack(side="right")
+        self.btn_urgent = ttk.Button(foot, text="加急", style="Ghost.TButton",
+                                     width=5, command=self.toggle_urgent)
+        self.btn_urgent.pack(side="right", padx=(0, 8))
         ttk.Button(foot, text="取消制作", style="Ghost.TButton", width=9,
                    command=self.cancel_selected).pack(side="right", padx=(0, 8))
         ttk.Button(foot, text="流转记录", style="Ghost.TButton", width=9,
@@ -1191,6 +1199,7 @@ class WorkflowTab(ttk.Frame):
         except Exception:
             ph_codes = set()
         self.flow.render(counts)
+        prev = self.tree.focus()           # 刷新后恢复选中（加急按钮跟着变）
         self.tree.delete(*self.tree.get_children())
         self._by_id = {}
         for i, r in enumerate(self.rows):
@@ -1200,16 +1209,22 @@ class WorkflowTab(ttk.Frame):
                 tags.append("cancelled")
             elif r.get("status") == "done":
                 tags.append("done")
+            elif int(r.get("urgent") or 0):
+                tags.append("urgent")
             elif int(r.get("days") or 0) >= 3:
                 tags.append("stale")
             if i % 2 == 0:
                 tags.append("odd")
             self.tree.insert("", "end", iid=str(r["id"]), values=(
-                r["no"], r["title"], r.get("kind") or "", r.get("target") or "",
+                r["no"], "🔥" if int(r.get("urgent") or 0) else "",
+                r["title"], r.get("kind") or "", r.get("target") or "",
                 "📷" if (r.get("no") or "") in ph_codes else "",
                 fmt_extra(r.get("extra")), r["stage_name"],
                 r.get("handler") or "", r.get("days") or 0,
                 r.get("updated_at") or "", r.get("note") or ""), tags=tags)
+        if prev and int(prev) in self._by_id:
+            self.tree.selection_set(prev)
+            self.tree.focus(prev)
         n = len(rows)
         hint = "共 %d 张制作单（双击查看流转记录）" % n
         mine = self._my_stage()
@@ -1220,6 +1235,18 @@ class WorkflowTab(ttk.Frame):
             else ("未选（请先选择你的工位）" if self._is_client() else "不限"),
             stamp, hint)
         self.lbl_hint.configure(text=hint)
+        self._sync_urgent_btn()
+
+    def _sync_urgent_btn(self):
+        """加急按钮跟随选中行状态：加急单显示「取消加急」。"""
+        try:
+            iid = self.tree.focus()
+            rec = self._by_id.get(int(iid))
+            urgent = rec is not None and int(rec.get("urgent") or 0)
+            self.btn_urgent.configure(text="取消加急" if urgent else "加急",
+                                      width=9 if urgent else 5)
+        except Exception:
+            pass
 
     def _selected(self):
         iid = self.tree.focus()
@@ -1228,6 +1255,26 @@ class WorkflowTab(ttk.Frame):
                                 parent=self)
             return None
         return self._by_id.get(int(iid))
+
+    def toggle_urgent(self):
+        """把选中的单据标记 / 取消加急（各工位都可以标）。"""
+        rec = self._selected()
+        if not rec:
+            return
+        flag = not int(rec.get("urgent") or 0)
+        by = (self.app.settings.get("wf_name") or "").strip()
+        if not by:
+            by = simpledialog.askstring(
+                "加急", "请填写你的名字（操作人）：", parent=self) or ""
+            by = by.strip()
+            if not by:
+                return
+            self.remember_name(by)
+        ok, msg = self.app.store.wf_set_urgent(int(rec["id"]), flag, by)
+        if not ok:
+            messagebox.showerror("制作流程", msg, parent=self)
+            return
+        self.refresh_rows()
 
     # ------------------------------------------------------------ 动作
     def _my_stage(self):

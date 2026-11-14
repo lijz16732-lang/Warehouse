@@ -799,6 +799,13 @@ check("推进到下一节点", ss.wf_advance(_wid, "李四", "标签已印")[0] 
 _lg = ss.wf_logs(_wid)
 check("流转留痕带姓名", _lg[-1]["by"] == "李四" and _lg[-1]["action"] == "advance",
       _lg[-1])
+check("推进备注同步到单据（下一站可见）",
+      [r for r in ss.wf_list("active") if r["id"] == _wid][0]["note"]
+      == "标签已印")
+ss.wf_advance(_wid, "王五")          # 不填备注 → 保留上次留言
+check("不填新备注时保留上次留言",
+      [r for r in ss.wf_list("active") if r["id"] == _wid][0]["note"]
+      == "标签已印")
 for _ in range(3):
     ss.wf_advance(_wid, "王五")
 check("推进到最后一站仍为进行中（等人收尾）",
@@ -826,6 +833,17 @@ check("跨站退回：质检直接退到制作标签",
       == "制作标签")
 check("跨站退回留痕写明目标站",
       any(g["action"] == "back" and "制作标签" in (g["note"] or "")
+          for g in ss.wf_logs(_wid)))
+# v1.42.10 加急
+check("加急后单据排在最前",
+      ss.wf_set_urgent(_wid, 1, "张三")[0] is True
+      and ss.wf_list("active")[0]["id"] == _wid
+      and int(ss.wf_list("active")[0]["urgent"]) == 1)
+check("取消加急",
+      ss.wf_set_urgent(_wid, 0, "张三")[0] is True
+      and int(ss.wf_list("active")[0]["urgent"]) == 0)
+check("加急留痕",
+      any(g["action"] == "urgent" and g["by"] == "张三"
           for g in ss.wf_logs(_wid)))
 check("退回目标非法（不能往后跳）",
       ss.wf_back(_wid, "张三", target=99)[0] is False)

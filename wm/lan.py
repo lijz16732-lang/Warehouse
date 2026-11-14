@@ -65,7 +65,7 @@ BLOCKED_METHODS = {"backup_to", "photos_dir", "photo_path"}
 # 能推哪一站由各电脑在制作流程页自己选的「本机工位」决定（见 _wf_stage_error）。
 WF_METHODS = {"wf_create", "wf_advance", "wf_back", "wf_cancel",
               "wf_resume", "wf_delete", "wf_set_target", "wf_stock_in",
-              "wf_finish"}
+              "wf_finish", "wf_set_urgent"}
 # 入库照片：制作单（kind="wf"）的增删照片不受「允许录入」限制
 WF_PHOTO_METHODS = {"photo_add", "photo_del", "photos_list", "photo_data"}
 # 推进一步：必须与绑定的工位一致
@@ -460,6 +460,8 @@ class LanServer(object):
                 return ("本机是「%s」工位，结单请由「%s」操作"
                         % (sname(st), sname(last)))
             return ""
+        if method == "wf_set_urgent":
+            return ""              # 标加急 / 取消加急：任何工位都可以
         if method not in WF_MOVE_METHODS:
             return ("本机是「%s」工位，只能推进本站的单，"
                     "取消 / 删除请到主机上操作" % sname(st))

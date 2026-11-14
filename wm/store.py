@@ -429,6 +429,12 @@ class Store(object):
                     self.conn.execute(
                         "ALTER TABLE workflows ADD COLUMN \"extra\" TEXT")
                     changed = True
+                # v1.42.10 加急标记
+                if "urgent" not in wcols:
+                    self.conn.execute(
+                        "ALTER TABLE workflows ADD COLUMN"
+                        " \"urgent\" INTEGER DEFAULT 0")
+                    changed = True
                 # v1.24.0 操作日志（独立表，不参与同步触发器）
                 self.conn.execute(
                     "CREATE TABLE IF NOT EXISTS oplog ("
@@ -2391,7 +2397,7 @@ class Store(object):
     ]
     WF_ACTIONS = {"create": "发起", "advance": "推进", "back": "退回",
                   "cancel": "取消", "resume": "恢复", "stock": "入库",
-                  "finish": "结单"}
+                  "finish": "结单", "urgent": "标加急", "unurgent": "取消加急"}
 
     def wf_stages(self):
         """流程节点名称列表（meta 可自定义；无自定义用默认五节点）。"""
@@ -2528,7 +2534,7 @@ class Store(object):
             rows = [dict(r) for r in self.conn.execute(
                 "SELECT * FROM workflows"
                 + (" WHERE " + " AND ".join(where) if where else "")
-                + " ORDER BY id DESC", args).fetchall()]
+                + " ORDER BY urgent DESC, id DESC", args).fetchall()]
             # 经手人 = 最近一条流转记录的 by
             bys = {}
             if rows:
@@ -2641,16 +2647,24 @@ class Store(object):
             ts = now_str()
             # v1.42.8：推进到最后一站（入库）不再立即结束——单据停在入库站，
             # 由入库员执行入库（wf_stock_in）或直接结单（wf_finish）才算走完
-            self.conn.execute(
-                "UPDATE workflows SET stage = ?, status = 'active',"
-                " updated_at = ?, done_at = NULL WHERE id = ?",
-                (new, ts, int(wf_id)))
+            log_note = note or ("退回「%s」" % stages[new] if not forward else "")
+            # v1.42.10：备注同步写到单据上，下一站在列表/详情里直接可见；
+            # 没填新备注时保留上一次的留言
+            if log_note:
+                self.conn.execute(
+                    "UPDATE workflows SET stage = ?, status = 'active',"
+                    " updated_at = ?, done_at = NULL, note = ? WHERE id = ?",
+                    (new, ts, log_note, int(wf_id)))
+            else:
+                self.conn.execute(
+                    "UPDATE workflows SET stage = ?, status = 'active',"
+                    " updated_at = ?, done_at = NULL WHERE id = ?",
+                    (new, ts, int(wf_id)))
             act = "advance" if forward else "back"
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
-                (int(wf_id), new, act, by, ts,
-                 note or ("退回「%s」" % stages[new] if not forward else "")))
+                (int(wf_id), new, act, by, ts, log_note))
             self.conn.commit()
         head = dict(head)
         if forward:
@@ -2684,8 +2698,9 @@ class Store(object):
                 return False, "只有进行中的单据才能取消"
             ts = now_str()
             self.conn.execute(
-                "UPDATE workflows SET status = 'cancelled', updated_at = ?"
-                " WHERE id = ?", (ts, int(wf_id)))
+                "UPDATE workflows SET status = 'cancelled', updated_at = ?,"
+                " note = ? WHERE id = ?",
+                (ts, (note or "").strip(), int(wf_id)))
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
@@ -2716,6 +2731,29 @@ class Store(object):
             self.conn.commit()
         self.log_op("制作流程", "", "恢复单据 #%d（%s）" % (int(wf_id), by))
         return True, "已恢复为进行中"
+
+    def wf_set_urgent(self, wf_id, urgent, by=""):
+        """标记 / 取消加急。加急单在列表里排最前并红色高亮。返回 (ok, msg)。"""
+        flag = 1 if (urgent in (1, True, "1", "是")) else 0
+        with self._lock:
+            head = self.conn.execute("SELECT no, title FROM workflows"
+                                     " WHERE id = ?", (int(wf_id),)).fetchone()
+            if head is None:
+                return False, "制作单不存在"
+            ts = now_str()
+            self.conn.execute(
+                "UPDATE workflows SET urgent = ?, updated_at = ? WHERE id = ?",
+                (flag, ts, int(wf_id)))
+            self.conn.execute(
+                "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
+                " VALUES (?,?,?,?,?,?)",
+                (int(wf_id), 0, "urgent" if flag else "unurgent",
+                 (by or "").strip(), ts, ""))
+            self.conn.commit()
+        self.log_op("制作流程", head["no"] or "",
+                    "%s单据 #%d（%s）" % ("加急" if flag else "取消加急",
+                                          int(wf_id), by))
+        return True, "已标记加急" if flag else "已取消加急"
 
     def wf_delete(self, wf_id):
         with self._lock:
@@ -2816,7 +2854,8 @@ class Store(object):
             ts = now_str()
             self.conn.execute(
                 "UPDATE workflows SET status = 'done', updated_at = ?,"
-                " done_at = ? WHERE id = ?", (ts, ts, int(wf_id)))
+                " done_at = ?, note = ? WHERE id = ?",
+                (ts, ts, note, int(wf_id)))
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
@@ -2829,9 +2868,10 @@ class Store(object):
         """入库后把生成的库存编号回写到单据（target），并留痕。"""
         ts = now_str()
         with self._lock:
-            self.conn.execute("UPDATE workflows SET target = ?, updated_at = ?"
-                              " WHERE id = ?",
-                              (str(target).strip(), ts, int(wf_id)))
+            self.conn.execute("UPDATE workflows SET target = ?, updated_at = ?,"
+                              " note = ? WHERE id = ?",
+                              (str(target).strip(), ts, (note or "").strip(),
+                               int(wf_id)))
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
