@@ -1132,6 +1132,7 @@ def handle_wf(srv, ip, token, query, payload=None):
     gate = _need_login(srv, ip, token)
     if gate:
         return gate[0], gate[1], NO_STORE
+    from .store import wf_photo_code
     store = srv.get_store()
     q = query or {}
     try:
@@ -1168,9 +1169,18 @@ def handle_wf(srv, ip, token, query, payload=None):
                 return 404, {"ok": False, "error": "制作单不存在"}, NO_STORE
             logs = store.wf_logs(wf_id)
             try:
-                photos = store.photos_list("wf", rec.get("no") or "")
+                store.wf_photo_migrate(rec.get("no") or "")
             except Exception:
-                photos = []
+                pass
+            by_stage = {}
+            for si in range(len(stages)):
+                try:
+                    by_stage[str(si)] = store.photos_list(
+                        "wf", wf_photo_code(rec.get("no") or "", si))
+                except Exception:
+                    by_stage[str(si)] = []
+            photos = [n for si in sorted(by_stage, key=int)
+                      for n in by_stage[si]]
             d = _wf_out(rec)
             d["stage_name"] = (stages[int(rec.get("stage") or 0)]
                                if 0 <= int(rec.get("stage") or 0) < len(stages)
@@ -1180,7 +1190,8 @@ def handle_wf(srv, ip, token, query, payload=None):
                                    "action": g.get("action_name") or "",
                                    "by": g.get("by") or "",
                                    "note": g.get("note") or ""} for g in logs],
-                         "photos": photos, "stages": stages}, NO_STORE
+                         "photos": photos, "photos_by_stage": by_stage,
+                         "stages": stages}, NO_STORE
         # list
         status = str(q.get("status") or "active")
         if status not in ("active", "done", "cancelled"):

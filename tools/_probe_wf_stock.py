@@ -12,7 +12,7 @@ import tkinter as tk
 
 from wm import app as wapp
 from wm import workflow as wfmod
-from wm.store import Store
+from wm.store import Store, wf_photo_code
 
 TMP = tempfile.mkdtemp(prefix="wf_stock_")
 wapp.resolve_data_dir = lambda: TMP
@@ -54,7 +54,9 @@ png = base64.b64decode(
 dlg = wfmod.FlowDialog(tab, tab, rec, True)
 root.update()
 chk("入库段有照片区", getattr(dlg, "photo_strip", None) is not None)
-chk("照片区绑在本单号上", dlg.photo_strip.code == no, dlg.photo_strip.code)
+chk("照片区绑在最后一站节点上",
+    dlg.photo_strip.code == wf_photo_code(no, len(stages) - 1),
+    dlg.photo_strip.code)
 chk("新增库存默认勾选（货架等可直接填）", dlg.var_stock.get() is True)
 shelf_ent = None
 for w in dlg._stock_widgets:
@@ -68,13 +70,16 @@ chk("型号已预填「更换后型号」", dlg.stock_vars["model"].get() == "S1
 # 通过 PhotoStrip 的接口加一张照片（走 store.photo_add，和界面同一条路）
 ok, err = 0, ""
 try:
-    store.photo_add("wf", no, base64.b64encode(png).decode("ascii"), "入库.png")
+    store.photo_add("wf", wf_photo_code(no, len(stages) - 1),
+                    base64.b64encode(png).decode("ascii"), "入库.png")
     ok = 1
 except Exception as e:
     err = str(e)
 chk("制作单能存照片", ok == 1, err)
-chk("照片列表读得到", len(store.photos_list("wf", no)) == 1)
-dlg.photo_strip.set_code(no)
+chk("照片列表读得到（最后一站）",
+    len(store.photos_list("wf", wf_photo_code(no, len(stages) - 1))) == 1
+    and store.photos_list("wf", wf_photo_code(no, 0)) == [])
+dlg.photo_strip.set_code(wf_photo_code(no, len(stages) - 1))
 root.update()
 chk("弹窗照片区显示 1 张", dlg.photo_strip.lbl_cap.cget("text").startswith("照片 1/"),
     dlg.photo_strip.lbl_cap.cget("text"))
@@ -132,8 +137,10 @@ chk("结单后单据完成", store.wf_one(wid2).get("status") == "done",
 
 # 删除单连带清照片
 store.wf_delete(wf_id)
-chk("删除制作单连带清照片", store.photos_list("wf", no) == [],
-    store.photos_list("wf", no))
+chk("删除制作单连带清照片（各节点）",
+    all(store.photos_list("wf", wf_photo_code(no, i)) == []
+        for i in range(len(stages))) and store.photos_list("wf", no) == [],
+    [store.photos_list("wf", wf_photo_code(no, i)) for i in range(len(stages))])
 chk("库存照片不受影响（已复制到 item）",
     len(store.photos_list("item", it["code"])) == 1)
 

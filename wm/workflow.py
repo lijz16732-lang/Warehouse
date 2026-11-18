@@ -18,6 +18,7 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
                         CLR_TEXT, CLR_WARN, apply_window_icon, center_window,
                         guard_combobox)
 from .photos import PhotoStrip
+from .store import wf_photo_code
 
 def fmt_extra(extra, limit=48):
     """把附加字段 dict 拼成一句短文本（列表列 / 弹窗摘要用）。"""
@@ -440,7 +441,9 @@ class FlowDialog(tk.Toplevel):
             self.photo_strip = PhotoStrip(box, tab.app, kind="wf",
                                           on_change=self._refit)
             self.photo_strip.pack(fill="x", pady=(0, 6))
-            self.photo_strip.set_code(rec.get("no") or "")
+            # 照片归节点：入库站传的照片只属于最后一个节点
+            self.photo_strip.set_code(wf_photo_code(
+                rec.get("no") or "", len(stages) - 1))
             try:                  # 照片条 + 双列字段需要更宽的空间
                 self.minsize(480, 1)
             except Exception:
@@ -978,6 +981,7 @@ class DetailDialog(tk.Toplevel):
         super().__init__(master)
         self.fam = tab.fam
         self.title("制作单 %s" % rec["no"])
+        self._ph_no = rec.get("no") or ""
         self.configure(bg=CLR_BG)
         self.transient(master)
         apply_window_icon(self)
@@ -1011,14 +1015,29 @@ class DetailDialog(tk.Toplevel):
                  font=(self.fam, 10), justify="left", anchor="w"
                  ).pack(fill="x", padx=16, pady=12)
 
-        # 入库照片（这里也能补拍 / 看大图；入库时上传的就是这一组）
+        # 照片按节点归属：选哪个节点就看 / 传哪个节点的照片
         ph = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                       highlightthickness=1)
         ph.pack(fill="x")
+        phrow = tk.Frame(ph, bg=CLR_CARD)
+        phrow.pack(fill="x", padx=12, pady=(8, 0))
+        tk.Label(phrow, text="照片（按节点存放，各节点只看自己的）",
+                 bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9)).pack(side="left")
+        self.var_ph_node = tk.StringVar()
+        try:
+            cur = min(max(int(rec.get("stage") or 0), 0), len(stages) - 1)
+        except Exception:
+            cur = 0
+        self.var_ph_node.set(stages[cur])
+        self.cb_ph_node = ttk.Combobox(phrow, textvariable=self.var_ph_node,
+                                       values=stages, state="readonly", width=12,
+                                       font=(self.fam, 9))
+        self.cb_ph_node.pack(side="right")
         self.photo_strip = PhotoStrip(ph, tab.app, kind="wf",
                                       on_change=self._refit)
         self.photo_strip.pack(fill="x", pady=(0, 6))
-        self.photo_strip.set_code(rec.get("no") or "")
+        self._set_ph_node()
+        self.cb_ph_node.bind("<<ComboboxSelected>>", lambda e: self._set_ph_node())
 
         body = tk.Frame(self, bg=CLR_BG)
         body.pack(fill="both", expand=True)
@@ -1041,6 +1060,16 @@ class DetailDialog(tk.Toplevel):
         center_window(self, master, force=True)
         self.grab_set()
         self.focus_force()
+
+    def _set_ph_node(self):
+        """切节点：照片条指向该节点的文件夹。"""
+        try:
+            idx = list(self.cb_ph_node.cget("values")).index(
+                self.var_ph_node.get())
+        except Exception:
+            idx = 0
+        self.photo_strip.set_code(wf_photo_code(self._ph_no, idx))
+        self._refit()
 
     def _refit(self):
         """照片增删后内容变高：窗口跟着长高并保持居中（按钮永远可见）。"""
@@ -1399,10 +1428,10 @@ class WorkflowTab(ttk.Frame):
             self.lbl_hint.configure(text="读取制作单失败：%s" % e)
             return
         self.rows = rows
-        try:                              # 有入库照片的单打个记号
-            ph_codes = self.app.store.photo_codes("wf")
+        try:                              # 有照片的单打个记号（照片按节点分文件夹）
+            ph_nos = {c.split("#")[0] for c in self.app.store.photo_codes("wf")}
         except Exception:
-            ph_codes = set()
+            ph_nos = set()
         self.flow.render(counts)
         prev = self.tree.focus()           # 刷新后恢复选中（加急按钮跟着变）
         self.tree.delete(*self.tree.get_children())
@@ -1425,7 +1454,7 @@ class WorkflowTab(ttk.Frame):
             self.tree.insert("", "end", iid=str(r["id"]), values=(
                 r["no"], "🔥" if int(r.get("urgent") or 0) else "",
                 r["title"], r.get("kind") or "", r.get("target") or "",
-                "📷" if (r.get("no") or "") in ph_codes else "",
+                "📷" if (r.get("no") or "") in ph_nos else "",
                 fmt_extra(r.get("extra")), r["stage_name"],
                 r.get("handler") or "", r.get("days") or 0,
                 r.get("updated_at") or "", r.get("note") or ""), tags=tags)

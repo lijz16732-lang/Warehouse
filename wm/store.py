@@ -269,6 +269,11 @@ PHOTO_KINDS = ("item", "phone", "wf")   # wf = 制作单（入库拍照留证）
 PHOTO_EXTS = (".jpg", ".jpeg", ".png")
 
 
+def wf_photo_code(no, stage):
+    """制作单照片按节点归属：编号#s节点序号（如 WO-00007#s0 = 发起制作的照片）。"""
+    return "%s#s%d" % (str(no or ""), int(stage))
+
+
 def _safe_code(code):
     """编号 → 安全目录名（保留中英文数字-_.，其余替换为下划线）。"""
     s = re.sub(r'[\\/:*?"<>|\r\n\t ]+', "_", str(code or "").strip())
@@ -1322,6 +1327,28 @@ class Store(object):
     def photos_wipe(self, kind, code):
         """清掉某条记录的全部照片（删记录时级联调用）。"""
         shutil.rmtree(self.photos_dir(kind, code), ignore_errors=True)
+
+    def wf_photo_migrate(self, no):
+        """旧版整单一个照片文件夹 → 搬进第 1 个节点（v1.43.2 分节点归属）。"""
+        no = str(no or "")
+        if not no:
+            return
+        legacy = self.photos_dir("wf", no)
+        if not os.path.isdir(legacy):
+            return
+        d0 = self.photos_dir("wf", wf_photo_code(no, 0))
+        os.makedirs(d0, exist_ok=True)
+        for f in os.listdir(legacy):
+            if f.lower().endswith(PHOTO_EXTS):
+                try:
+                    shutil.move(os.path.join(legacy, f),
+                                os.path.join(d0, f))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(legacy)
+        except OSError:
+            pass
 
     def photos_wipe_kind(self, kind):
         """清掉某类全部照片（清空数据 / 清空手机数据时级联调用）。"""
@@ -2883,8 +2910,11 @@ class Store(object):
             self.conn.execute("DELETE FROM workflows WHERE id = ?", (int(wf_id),))
             self.conn.commit()
         no = dict(head)["no"] or ""
-        try:                              # 连带清掉这张单的入库照片
-            self.photos_wipe("wf", no)
+        try:                              # 连带清掉这张单各节点的照片
+            self.wf_photo_migrate(no)
+            for i in range(len(self.wf_stages())):
+                self.photos_wipe("wf", wf_photo_code(no, i))
+            self.photos_wipe("wf", no)    # 旧版整单文件夹兜底
         except Exception:
             pass
         self.log_op("制作流程", no, "删除单据：%s" % (dict(head)["title"] or ""))
@@ -2939,7 +2969,11 @@ class Store(object):
                            note="入库：%s 型号 %s ×%d" % (code, model, qty))
         n = 0
         try:                              # 入库照片带到库存记录，之后在库存里也能看
-            n = self.photos_copy("wf", rec.get("no") or "", "item", code)
+            self.wf_photo_migrate(rec.get("no") or "")
+            src = wf_photo_code(rec.get("no") or "", len(stages) - 1)
+            n = self.photos_copy("wf", src, "item", code)
+            if n == 0:                    # 旧版整单文件夹兜底
+                n = self.photos_copy("wf", rec.get("no") or "", "item", code)
         except Exception:
             pass
         extra = ("，已带入 %d 张照片" % n) if n else ""
