@@ -180,6 +180,33 @@ chk("确定后按节点记名字",
       (tab.app.settings.get("wf_names") or {}).get("1") == "李四",
       tab.app.settings.get("wf_names"))
 
+# ---- 4b. 工位负责人：交给谁显示 + 名字优先带负责人 ----
+store.wf_set_stations([{"name": "制作标签A", "stage": 1},
+                       {"name": "制作标签B", "stage": 1, "owner": "李四"},
+                       {"name": "贴标签A", "stage": 2},
+                       {"name": "贴标签B", "stage": 2}])
+chk("工位负责人保存并可读",
+      store.wf_station_owner("制作标签B") == "李四"
+      and store.wf_station_owner("制作标签A") == "")
+w_own, _ = store.wf_create("给李四的单", by="张三")
+store.wf_advance(w_own, "张三", "印好", station="制作标签B")
+chk("流转记录写明交给谁（负责人）",
+      any("交给 制作标签B（李四）" in (g["note"] or "")
+          for g in store.wf_logs(w_own)),
+      [g["note"] for g in store.wf_logs(w_own)])
+rec_own = [r for r in store.wf_list("active") if int(r["id"]) == w_own][0]
+fd3 = wfmod.FlowDialog(root, tab, rec_own, True)
+root.update()
+chk("单据指定给李四的工位 → 名字带出负责人",
+      fd3.var_by.get() == "李四", fd3.var_by.get())
+chk("目标节点（贴标签）没人配负责人 → 显示纯工位名",
+      "贴标签A" in list(fd3.cb_station.cget("values"))
+      and not any("（" in v for v in list(fd3.cb_station.cget("values"))),
+      list(fd3.cb_station.cget("values")))
+chk("选中显示串能还原工位名",
+      fd3._station_name("制作标签B（李四）") == "制作标签B")
+fd3.destroy()
+
 # ---- 5. 走一遍 move_selected：弹窗返回值能落到单据上 ----
 # 真弹窗是模态的（wait_window），探针里用桩替代，只验 5 元组解包 + 传参
 _RealFlow = wfmod.FlowDialog
@@ -208,7 +235,7 @@ fd2.var_target.set(stages[1])
 fd2._fill_stations(1)
 root.update()
 chk("换成「制作标签」后工位下拉跟着换",
-      "制作标签B" in list(fd2.cb_station.cget("values"))
+      "制作标签B（李四）" in list(fd2.cb_station.cget("values"))
       and "贴标签A" not in list(fd2.cb_station.cget("values")),
       list(fd2.cb_station.cget("values")))
 fd2.destroy()

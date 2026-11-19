@@ -862,7 +862,7 @@ check("入库回写关联编号并留痕",
 check("删除制作单连带日志", ss.wf_delete(_wid) is True and ss.wf_logs(_wid) == [])
 # ---- 工位（一个节点可多人）+ 定向推送（v1.43.0）----
 check("默认每个节点一个同名工位",
-      ss.wf_stations() == [{"name": s, "stage": i}
+      ss.wf_stations() == [{"name": s, "stage": i, "owner": ""}
                            for i, s in enumerate(ss.wf_stages())],
       ss.wf_stations())
 check("一个节点可配多个工位", ss.wf_set_stations(

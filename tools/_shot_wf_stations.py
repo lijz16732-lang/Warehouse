@@ -49,10 +49,10 @@ root.geometry("1x1-3000-3000")
 store = app.store
 
 # 一个节点两个人：制作标签 / 制作标签B
-store.wf_set_stations([{"name": "制作标签", "stage": 1},
-                       {"name": "制作标签B", "stage": 1},
+store.wf_set_stations([{"name": "制作标签", "stage": 1, "owner": "李四"},
+                       {"name": "制作标签B", "stage": 1, "owner": "王五"},
                        {"name": "贴标签A", "stage": 2},
-                       {"name": "贴标签B", "stage": 2}])
+                       {"name": "贴标签B", "stage": 2, "owner": "赵六"}])
 w1, _ = store.wf_create("撤柜重做标签", kind="制作标签", by="张三",
                         target="WL-02054", note="客户催",
                         extra={"标签种类": "外箱标、机身标"})
@@ -81,7 +81,7 @@ rec = [r for r in store.wf_list("active") if int(r["id"]) == w1][0]
 fd = wfmod.FlowDialog(top, tab, rec, True)
 fd.title("探针-推进交给谁")
 fd.var_by.set("李四")
-fd.var_station.set("贴标签B")
+fd.var_station.set("贴标签B（赵六）")
 root.update()
 root.update_idletasks()
 fd.update_idletasks()

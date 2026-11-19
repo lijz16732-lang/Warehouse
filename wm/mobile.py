@@ -1846,7 +1846,7 @@ function wfRememberBy(w, by){   /* 每个节点各记各的经手人 */
   try { MYWF.names = MYWF.names || {}; MYWF.names[String(w.stage)] = by; } catch(e) {}
   saveMyWf();
 }
-function wfMyBy(w){ return (MYWF.names && MYWF.names[w.stage]) || MYWF.name || w.handler || ""; }
+function wfMyBy(w){ return wfStationOwner(MYWF.station) || (MYWF.names && MYWF.names[w.stage]) || MYWF.name || w.handler || ""; }
 function wfStageName(i){ return WF.stages[i] == null ? "节点" + (i + 1) : WF.stages[i]; }
 function wfMyLabel(){ return MYWF.station || (MYWF.stage >= 0 ? wfStageName(MYWF.stage) : "未设置"); }
 function wfExtraText(ex){
@@ -1928,7 +1928,7 @@ function paintWFRows(){
       + "</div>"
       + (r.note ? '<div class="rows">备注：' + esc(r.note) + "</div>" : "")
       + '<div class="rows">经手人 ' + esc(r.handler || "—")
-      + (r.station ? " · 交给 " + esc(r.station) : "") + " · 停留 " + r.days + " 天</div>"
+      + (r.station ? " · 交给 " + esc(wfStationLabel(r.station)) : "") + " · 停留 " + r.days + " 天</div>"
       + '</div><div class="rowright"><div class="mut">' + esc(r.updated_at || "") + "</div></div></div>";
   }
   $("listWf").innerHTML = h;
@@ -2026,13 +2026,22 @@ function wfDetail(r){
     });
   });
 }
+function wfStationOwner(n){
+  for (var i = 0; i < WF.stations.length; i++)
+    if (WF.stations[i].name === n) return WF.stations[i].owner || "";
+  return "";
+}
+function wfStationLabel(n){
+  var o = wfStationOwner(n);
+  return n ? n + (o ? "（" + o + "）" : "") : "";
+}
 function wfStationOptions(stage, cur){
   var h = '<option value="">该节点任意人</option>';
   for (var i = 0; i < WF.stations.length; i++) {
     if (WF.stations[i].stage !== stage) continue;
     h += '<option value="' + esc(WF.stations[i].name) + '"'
        + (WF.stations[i].name === cur ? " selected" : "") + ">"
-       + esc(WF.stations[i].name) + "</option>";
+       + esc(wfStationLabel(WF.stations[i].name)) + "</option>";
   }
   return h;
 }

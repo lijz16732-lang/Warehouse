@@ -370,22 +370,31 @@ class FlowDialog(tk.Toplevel):
                                       columnspan=2, sticky="w")
             row += 2
 
-        # 名字：每个节点各记各的经手人（不同站不同人），
-        # 优先「本站上次用的名字」→ 本机上次名字 → 这张单的经手人
+        # 名字：优先单据指定工位的负责人（单据就是推给他的），
+        # 再按节点各记各的名字，最后才是本机上次名字 / 这张单的经手人
         st_names = tab.app.settings.get("wf_names") or {}
         try:
             cur = int(rec.get("stage") or 0)
         except Exception:
             cur = 0
-        known = (str((st_names or {}).get(str(cur)) or "").strip()
+        try:
+            owner = tab.app.store.wf_station_owner(rec.get("station") or "")
+        except Exception:
+            owner = ""
+        known = (owner
+                 or str((st_names or {}).get(str(cur)) or "").strip()
                  or str(tab.app.settings.get("wf_name") or "").strip()
                  or str(rec.get("handler") or "").strip())
         self.var_by = tk.StringVar(value=known)
         rowf = tk.Frame(body, bg=CLR_BG)
         rowf.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
         if known:
-            tk.Label(rowf, text="经手人：%s（自动带出，「%s」用过的名字）"
-                     % (known, stages[cur]), bg=CLR_BG, fg="#41506B",
+            if owner:
+                src = "工位「%s」的负责人" % (rec.get("station") or "")
+            else:
+                src = "「%s」用过的名字" % stages[cur]
+            tk.Label(rowf, text="经手人：%s（自动带出，%s）"
+                     % (known, src), bg=CLR_BG, fg="#41506B",
                      font=(self.fam, 10)).pack(side="left")
 
             def _edit_name():
@@ -500,17 +509,28 @@ class FlowDialog(tk.Toplevel):
                 pass
 
     def _fill_stations(self, stage):
-        """目标节点的工位下拉：任意人 + 该节点的各个具名工位。"""
+        """目标节点的工位下拉：任意人 + 该节点的各个具名工位（带负责人）。"""
         try:
-            names = [x["name"] for x in self.tab.app.store.wf_stations()
-                     if x["stage"] == int(stage)]
+            sts = [x for x in self.tab.app.store.wf_stations()
+                   if x["stage"] == int(stage)]
         except Exception:
-            names = []
+            sts = []
+        disp = [("（%s）" % x["owner"]) if x.get("owner") else ""
+                for x in sts]
+        vals = ["该节点任意人"] + [x["name"] + d
+                                   for x, d in zip(sts, disp)]
         try:
-            self.cb_station.configure(values=["该节点任意人"] + names)
+            self.cb_station.configure(values=vals)
             self.var_station.set("该节点任意人")
         except Exception:
             pass
+
+    @staticmethod
+    def _station_name(choice):
+        """「制作标签B（李四）」→「制作标签B」（只取工位名）。"""
+        s = str(choice or "").strip()
+        i = s.find("（")
+        return s[:i] if i > 0 else s
 
     def _ok(self):
         by = self.var_by.get().strip()
@@ -540,7 +560,7 @@ class FlowDialog(tk.Toplevel):
         try:
             choice = self.var_station.get()
             if choice and choice != "该节点任意人":
-                station = choice
+                station = self._station_name(choice)
         except Exception:
             station = ""
         self.result = (by, self.var_note.get().strip(), stock_rec, target,
@@ -687,12 +707,12 @@ class StationsDialog(tk.Toplevel):
         self.rows.pack(fill="x", padx=18)
         self._entries = []
         for st in tab.app.store.wf_stations():
-            self._add_row(st["name"], st["stage"])
+            self._add_row(st["name"], st["stage"], st.get("owner") or "")
 
         btns = tk.Frame(self, bg=CLR_BG)
         btns.pack(fill="x", padx=18, pady=8)
         ttk.Button(btns, text="＋ 添加工位", style="Ghost.TButton", width=11,
-                   command=lambda: self._add_row("", 0)).pack(side="left")
+                   command=lambda: self._add_row("", 0, "")).pack(side="left")
 
         self.msg = tk.Label(self, text="", bg=CLR_BG, fg=CLR_WARN,
                             font=(self.fam, 9), anchor="w")
@@ -704,14 +724,14 @@ class StationsDialog(tk.Toplevel):
         self.grab_set()
         self.focus_force()
 
-    def _add_row(self, name, stage):
+    def _add_row(self, name, stage, owner=""):
         if len(self._entries) >= 60:
             return
         r = tk.Frame(self.rows, bg=CLR_BG)
         r.pack(fill="x", pady=3)
         tk.Label(r, text="工位名", bg=CLR_BG, fg=CLR_MUTED,
                  font=(self.fam, 9)).pack(side="left")
-        e = tk.Entry(r, font=(self.fam, 10), relief="solid", bd=1, width=18)
+        e = tk.Entry(r, font=(self.fam, 10), relief="solid", bd=1, width=16)
         e.pack(side="left", padx=(6, 10), ipady=2)
         e.insert(0, str(name))
         tk.Label(r, text="节点", bg=CLR_BG, fg=CLR_MUTED,
@@ -720,11 +740,16 @@ class StationsDialog(tk.Toplevel):
                            if 0 <= int(stage) < len(self.stages) else
                            (self.stages[0] if self.stages else ""))
         cb = ttk.Combobox(r, textvariable=var, values=self.stages,
-                          state="readonly", width=14, font=(self.fam, 10))
+                          state="readonly", width=12, font=(self.fam, 10))
         cb.pack(side="left", padx=(6, 10))
+        tk.Label(r, text="负责人", bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="left")
+        eo = tk.Entry(r, font=(self.fam, 10), relief="solid", bd=1, width=10)
+        eo.pack(side="left", padx=(6, 10), ipady=2)
+        eo.insert(0, str(owner or ""))
         ttk.Button(r, text="✕", width=3, style="Ghost.TButton",
                    command=lambda: self._del_row(r)).pack(side="left")
-        self._entries.append((r, e, var))
+        self._entries.append((r, e, var, eo))
         self._refit()
 
     def _del_row(self, row):
@@ -746,7 +771,7 @@ class StationsDialog(tk.Toplevel):
 
     def _ok(self):
         items = []
-        for _r, e, var in self._entries:
+        for _r, e, var, eo in self._entries:
             name = e.get().strip()
             if not name:
                 continue
@@ -754,7 +779,8 @@ class StationsDialog(tk.Toplevel):
                 stage = self.stages.index(var.get())
             except ValueError:
                 stage = 0
-            items.append({"name": name, "stage": stage})
+            items.append({"name": name, "stage": stage,
+                          "owner": eo.get().strip()[:20]})
         ok, msg = self.tab.app.store.wf_set_stations(items)
         if not ok:
             self.msg.configure(text="⚠ " + msg)
@@ -1030,12 +1056,18 @@ class DetailDialog(tk.Toplevel):
         head = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                         highlightthickness=1)
         head.pack(fill="x")
+        try:
+            st_owner = (tab.app.store.wf_station_owner(rec.get("station") or "")
+                        if rec.get("station") else "")
+        except Exception:
+            st_owner = ""
         info = ("事项：%s%s      类型：%s      关联：%s\n当前节点：%s（第 %d / %d 站）"
                 "      交给：%s      经手人：%s      状态：%s\n备注：%s%s"
                 % (rec["title"], "  🔥加急" if int(rec.get("urgent") or 0) else "",
                    rec.get("kind") or "—", rec.get("target") or "—",
                    rec["stage_name"], int(rec.get("stage") or 0) + 1, len(stages),
-                   rec.get("station") or "该节点任意人",
+                   (rec.get("station") + ("（" + st_owner + "）" if st_owner else ""))
+                   or "该节点任意人",
                    rec.get("handler") or "—",
                    {"active": "进行中", "done": "已完成",
                     "cancelled": "已取消"}.get(rec.get("status"), rec.get("status")),

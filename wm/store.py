@@ -2491,14 +2491,16 @@ class Store(object):
                             continue
                         if 0 <= stg < len(stages) and name \
                                 and not any(o["name"] == name for o in out):
-                            out.append({"name": name, "stage": stg})
+                            out.append({"name": name, "stage": stg,
+                                        "owner": str(it.get("owner")
+                                                   or "").strip()[:20]})
             except Exception:
                 out = []
         # 每个节点至少有一个工位（没配的用节点名兜底，避免推给空气）
         have = {o["stage"] for o in out}
         for i, s in enumerate(stages):
             if i not in have and s not in [o["name"] for o in out]:
-                out.append({"name": s, "stage": i})
+                out.append({"name": s, "stage": i, "owner": ""})
         out.sort(key=lambda o: (o["stage"], o["name"]))
         return out
 
@@ -2517,7 +2519,8 @@ class Store(object):
             if not name or name in seen or not (0 <= stg < len(stages)):
                 continue
             seen.add(name)
-            clean.append({"name": name, "stage": stg})
+            clean.append({"name": name, "stage": stg,
+                          "owner": str(it.get("owner") or "").strip()[:20]})
         if not clean:
             return False, "至少要有一个工位"
         # 每个节点至少留一个工位（没配的用节点名兜底，避免「推给空气」）
@@ -2528,7 +2531,7 @@ class Store(object):
             while name in seen:           # 节点名已被别的工位占用 → 加序号
                 name, k = "%s-%d" % (st, k), k + 1
             seen.add(name)
-            clean.append({"name": name, "stage": i})
+            clean.append({"name": name, "stage": i, "owner": ""})
         clean.sort(key=lambda c: (c["stage"], c["name"]))
         self.set_meta(self.WF_STATIONS_KEY,
                       json.dumps(clean, ensure_ascii=False))
@@ -2539,6 +2542,14 @@ class Store(object):
         out = [s["name"] for s in self.wf_stations()
                if stage is None or s["stage"] == stage]
         return out
+
+    def wf_station_owner(self, name):
+        """工位的负责人名字（没填返回空）。"""
+        name = str(name or "").strip()
+        for s in self.wf_stations():
+            if s["name"] == name:
+                return str(s.get("owner") or "")
+        return ""
 
     def wf_station_stage(self, name):
         """工位名 → 节点序号（找不到返回 -1）。"""
@@ -2629,12 +2640,16 @@ class Store(object):
                  json.dumps(extra or {}, ensure_ascii=False)
                  if isinstance(extra, dict) and extra else None, station))
             wf_id = int(cur.lastrowid)
+            if station:
+                owner = self.wf_station_owner(station)
+                tag = "（交给 %s%s）" % (station,
+                                        ("（%s）" % owner) if owner else "")
+            else:
+                tag = ""
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
-                (wf_id, 0, "create", by, ts,
-                 "发起制作：%s%s" % (title, ("（交给 %s）" % station)
-                                     if station else "")))
+                (wf_id, 0, "create", by, ts, "发起制作：%s%s" % (title, tag)))
             self.conn.commit()
         self.log_op("制作流程", no, "%s（发起人：%s）" % (title, by))
         return wf_id, no
@@ -2803,11 +2818,16 @@ class Store(object):
                     " updated_at = ?, done_at = NULL, station = ? WHERE id = ?",
                     (new, ts, station, int(wf_id)))
             act = "advance" if forward else "back"
+            if station:            # 交给 X（负责人 Y）：收到的人一眼看清是谁的单
+                owner = self.wf_station_owner(station)
+                tag = "交给 %s%s" % (station, ("（%s）" % owner) if owner else "")
+            else:
+                tag = ""
             self.conn.execute(
                 "INSERT INTO workflow_logs (wf_id, stage, action, by, at, note)"
                 " VALUES (?,?,?,?,?,?)",
-                (int(wf_id), new, act, by, ts,
-                 log_note + (("（交给 %s）" % station) if station else "")))
+                (int(wf_id), new, act, by, ts, log_note
+                 + (("（%s）" % tag) if tag else "")))
             self.conn.commit()
         head = dict(head)
         if forward:

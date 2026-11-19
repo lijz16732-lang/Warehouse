@@ -161,11 +161,16 @@ check("stages 带回工位定义",
       and b["stations"][0].get("stage") == 0, b.get("stations"))
 st.wf_set_stations(
     [{"name": "发起制作A", "stage": 0}, {"name": "发起制作B", "stage": 0},
-     {"name": "制作标签A", "stage": 1}, {"name": "制作标签B", "stage": 1}])
+     {"name": "制作标签A", "stage": 1},
+     {"name": "制作标签B", "stage": 1, "owner": "李四"}])
 c, b, _ = handle_wf(srv, ip, tok, {"q": "stages"})
 _names = [s["name"] for s in (b.get("stations") or [])]
 check("改完工位后 stages 立刻反映",
       "制作标签A" in _names and "制作标签B" in _names, _names)
+_owners = {s["name"]: s.get("owner") for s in (b.get("stations") or [])}
+check("工位负责人随 stages 下发",
+      _owners.get("制作标签B") == "李四"
+      and not _owners.get("制作标签A"), _owners)
 c, b, _ = handle_wf(srv, ip, tok, None, {
     "op": "create", "by": "小周", "stage": 0, "station": "发起制作A",
     "title": "A/B 工位单", "to_station": "发起制作A"})
