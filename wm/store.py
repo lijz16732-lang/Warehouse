@@ -2818,8 +2818,8 @@ class Store(object):
                     " updated_at = ?, done_at = NULL, station = ? WHERE id = ?",
                     (new, ts, station, int(wf_id)))
             act = "advance" if forward else "back"
+            owner = self.wf_station_owner(station) if station else ""
             if station:            # 交给 X（负责人 Y）：收到的人一眼看清是谁的单
-                owner = self.wf_station_owner(station)
                 tag = "交给 %s%s" % (station, ("（%s）" % owner) if owner else "")
             else:
                 tag = ""
@@ -2839,8 +2839,11 @@ class Store(object):
         if forward and new == len(stages) - 1:
             return True, ("已推进到「%s」——请在该站完成收尾（填库存信息或结单）"
                           % stages[-1])
+        # 提示里括号的名字：指定了工位时显示交给的负责人（赵六），
+        # 没指定工位才显示推送人自己
+        who = owner if (station and owner) else by
         return True, "已%s到「%s」（%s）" % ("推进" if forward else "退回",
-                                            stages[new], by)
+                                            stages[new], who)
 
     def wf_advance(self, wf_id, by, note="", station=""):
         return self._wf_move(wf_id, by, note, forward=True, station=station)
