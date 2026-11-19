@@ -246,7 +246,7 @@ class NewWfDialog(tk.Toplevel):
         if extra:
             d["_extra"] = extra
         self.result = d
-        self.tab.remember_name(d["by"])
+        self.tab.remember_name(d["by"], 0)   # 发起制作 = 第 1 站的名字
         self.destroy()
 
 
@@ -370,15 +370,22 @@ class FlowDialog(tk.Toplevel):
                                       columnspan=2, sticky="w")
             row += 2
 
-        # 名字：本机记过（或这张单已有经手人）就自动带出，不再要求重填
-        known = (str(tab.app.settings.get("wf_name") or "").strip()
+        # 名字：每个节点各记各的经手人（不同站不同人），
+        # 优先「本站上次用的名字」→ 本机上次名字 → 这张单的经手人
+        st_names = tab.app.settings.get("wf_names") or {}
+        try:
+            cur = int(rec.get("stage") or 0)
+        except Exception:
+            cur = 0
+        known = (str((st_names or {}).get(str(cur)) or "").strip()
+                 or str(tab.app.settings.get("wf_name") or "").strip()
                  or str(rec.get("handler") or "").strip())
         self.var_by = tk.StringVar(value=known)
         rowf = tk.Frame(body, bg=CLR_BG)
         rowf.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
         if known:
-            tk.Label(rowf, text="经手人：%s（自动带出，发起制作时填过的名字）"
-                     % known, bg=CLR_BG, fg="#41506B",
+            tk.Label(rowf, text="经手人：%s（自动带出，「%s」用过的名字）"
+                     % (known, stages[cur]), bg=CLR_BG, fg="#41506B",
                      font=(self.fam, 10)).pack(side="left")
 
             def _edit_name():
@@ -538,7 +545,10 @@ class FlowDialog(tk.Toplevel):
             station = ""
         self.result = (by, self.var_note.get().strip(), stock_rec, target,
                        station)
-        self.tab.remember_name(by)
+        try:                    # 按当前节点记名字（每站各记各的经手人）
+            self.tab.remember_name(by, int(self.rec.get("stage") or 0))
+        except Exception:
+            self.tab.remember_name(by)
         self.destroy()
 
 
@@ -1219,8 +1229,14 @@ class WorkflowTab(ttk.Frame):
         self.btn_adv.pack(side="right", padx=(0, 8))
 
     # ------------------------------------------------------------ 辅助
-    def remember_name(self, name):
-        self.app.settings["wf_name"] = str(name).strip()
+    def remember_name(self, name, stage=None):
+        """记名字：全局一份 + 按节点各记各的（不同站不同人）。"""
+        name = str(name).strip()
+        self.app.settings["wf_name"] = name
+        if stage is not None and int(stage) >= 0:
+            names = dict(self.app.settings.get("wf_names") or {})
+            names[str(int(stage))] = name
+            self.app.settings["wf_names"] = names
         try:
             self.app._save_settings()
         except Exception:

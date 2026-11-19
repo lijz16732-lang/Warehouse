@@ -15,8 +15,8 @@
         photos 给相机写临时照片，export 用于「导出全部数据」时把 JSON 交给分享面板。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.cangguanjia.app"
-    android:versionCode="57"
-    android:versionName="1.43.3">
+    android:versionCode="58"
+    android:versionName="1.43.4">
 
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
 

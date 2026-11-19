@@ -2594,9 +2594,15 @@ function tab2(name) {
    各自用自己姓名留痕。 */
 var WF = { stages: [], kinds: [], stations: [], counts: [], rows: [],
            status: 'active', stage: -1, last: 0, all: true, onlyMine: false };
-var MYWF = { name: '', station: '', stage: -1 };
+var MYWF = { name: '', station: '', stage: -1, names: {} };
 try { MYWF = Object.assign(MYWF, JSON.parse(LS.getItem('cgm_wf_my') || '{}')); } catch (e) {}
 function wfSaveMy() { try { LS.setItem('cgm_wf_my', JSON.stringify(MYWF)); } catch (e) {} }
+function wfRememberBy(w, by) { /* 每个节点各记各的经手人 */
+  MYWF.name = by;
+  try { MYWF.names = MYWF.names || {}; MYWF.names[String(w.stage)] = by; } catch (e) {}
+  wfSaveMy();
+}
+function wfMyBy(w) { return (MYWF.names && MYWF.names[w.stage]) || MYWF.name || w.handler || ''; }
 function escWf(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -2778,13 +2784,13 @@ function wfMoveSheet(w, stages) {
   wfSheet('推进', '<div class="row-sub">推进到：' + escWf(stages[w.stage + 1]) + '</div>'
     + '<div class="row"><label>交给谁</label><select id="wfTo" style="flex:1">'
     + wfStationOptions(w.stage + 1, '') + '</select></div>'
-    + '<div class="row"><label>经手人</label><input id="wfBy" value="' + escWf(MYWF.name || w.handler || "") + '"></div>'
+    + '<div class="row"><label>经手人</label><input id="wfBy" value="' + escWf(wfMyBy(w)) + '"></div>'
     + '<div class="row"><label>备注</label><input id="wfNote" placeholder="会带给下一站"></div>'
     + '<div class="btnrow"><button id="wfGo">确认推进</button></div>');
   $('wfGo').onclick = function () {
     var by = $('wfBy').value.trim();
     if (!by) { toast('请填写经手人'); return; }
-    MYWF.name = by; wfSaveMy();
+    wfRememberBy(w, by);
     $('wfGo').disabled = true;
     api('POST', '/m/api/wf', { op: 'move', id: w.id, by: by, stage: MYWF.stage,
       station: MYWF.station, to_station: $('wfTo').value,
@@ -2801,14 +2807,14 @@ function wfBackSheet(w, stages) {
   h += '</select></div>'
     + '<div class="row"><label>交给谁</label><select id="wfTo2" style="flex:1">'
     + wfStationOptions(w.stage - 1, '') + '</select></div>'
-    + '<div class="row"><label>经手人</label><input id="wfBy2" value="' + escWf(MYWF.name || w.handler || "") + '"></div>'
+    + '<div class="row"><label>经手人</label><input id="wfBy2" value="' + escWf(wfMyBy(w)) + '"></div>'
     + '<div class="row"><label>退回原因</label><input id="wfNote2"></div>'
     + '<div class="btnrow"><button id="wfGo2">确认退回</button></div>';
   wfSheet('退回（可跨站）', h);
   $('wfGo2').onclick = function () {
     var by = $('wfBy2').value.trim();
     if (!by) { toast('请填写经手人'); return; }
-    MYWF.name = by; wfSaveMy();
+    wfRememberBy(w, by);
     $('wfGo2').disabled = true;
     api('POST', '/m/api/wf', { op: 'back', id: w.id, by: by, stage: MYWF.stage,
       station: MYWF.station, to_station: $('wfTo2').value,
@@ -2830,13 +2836,13 @@ function wfStockSheet(w) {
     + '<div class="row"><label>数量</label><input id="wsQty" type="number" value="1"></div>'
     + '<div class="row"><label>单价</label><input id="wsPrice" type="number" value="0"></div>'
     + '<div class="row"><label>货架</label><input id="wsShelf"></div>'
-    + '<div class="row"><label>经手人</label><input id="wsBy" value="' + escWf(MYWF.name || w.handler || "") + '"></div>'
+    + '<div class="row"><label>经手人</label><input id="wsBy" value="' + escWf(wfMyBy(w)) + '"></div>'
     + '<div class="btnrow"><button id="wsGo">确认入库</button></div>');
   $('wsGo').onclick = function () {
     var by = $('wsBy').value.trim(), model = $('wsModel').value.trim();
     if (!by) { toast('请填写经手人'); return; }
     if (!model) { toast('请填写型号'); return; }
-    MYWF.name = by; wfSaveMy();
+    wfRememberBy(w, by);
     $('wsGo').disabled = true;
     api('POST', '/m/api/wf', { op: 'stock', id: w.id, by: by, stage: MYWF.stage, station: MYWF.station,
       fields: { brand: $('wsBrand').value.trim(), category: $('wsCat').value.trim(),
@@ -2848,13 +2854,13 @@ function wfStockSheet(w) {
 }
 function wfFinishSheet(w) {
   wfSheet('结单', '<div class="row-sub">不新增库存，直接完成（如报废）</div>'
-    + '<div class="row"><label>经手人</label><input id="wfFBy" value="' + escWf(MYWF.name || w.handler || "") + '"></div>'
+    + '<div class="row"><label>经手人</label><input id="wfFBy" value="' + escWf(wfMyBy(w)) + '"></div>'
     + '<div class="row"><label>备注</label><input id="wfFNote"></div>'
     + '<div class="btnrow"><button id="wfFGo">确认结单</button></div>');
   $('wfFGo').onclick = function () {
     var by = $('wfFBy').value.trim();
     if (!by) { toast('请填写经手人'); return; }
-    MYWF.name = by; wfSaveMy();
+    wfRememberBy(w, by);
     $('wfFGo').disabled = true;
     api('POST', '/m/api/wf', { op: 'finish', id: w.id, by: by, stage: MYWF.stage, station: MYWF.station,
       note: $('wfFNote').value.trim() }).then(function (j) {
@@ -2912,7 +2918,7 @@ function wfCreateSheet() {
     var title = $('crTitle').value.trim(), by = $('crBy').value.trim();
     if (!title) { toast('请填写事项'); return; }
     if (!by) { toast('请填写经手人'); return; }
-    MYWF.name = by; wfSaveMy();
+    wfRememberBy({ stage: 0 }, by);
     var extra = {}, kind = $('crKind').value;
     for (var i = 0; i < WF.kinds.length; i += 1) {
       if (WF.kinds[i].name !== kind) continue;

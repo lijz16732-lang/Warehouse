@@ -149,8 +149,11 @@ root.update()
 # ---- 4. 推进弹窗能选「交给谁」 ----
 rec = [r for r in store.wf_list("active", station="制作标签B")
        if int(r["id"]) == w_mine][0]
+tab.remember_name("王五", 1)          # 制作标签站（stage 1）记的名字
 fd = wfmod.FlowDialog(root, tab, rec, True)
 root.update()
+chk("推进弹窗自动带出本站的名字",
+      fd.var_by.get() == "王五", fd.var_by.get())
 svals = list(fd.cb_station.cget("values"))
 chk("「交给谁」列出目标节点工位",
       svals[0] == "该节点任意人" and stages[2] in svals, svals)
@@ -173,6 +176,9 @@ root.update()
 chk("确定后带回 5 元组（含交给谁）",
       isinstance(fd.result, tuple) and len(fd.result) == 5
       and fd.result[4] == "贴标签B", fd.result)
+chk("确定后按节点记名字",
+      (tab.app.settings.get("wf_names") or {}).get("1") == "李四",
+      tab.app.settings.get("wf_names"))
 
 # ---- 5. 走一遍 move_selected：弹窗返回值能落到单据上 ----
 # 真弹窗是模态的（wait_window），探针里用桩替代，只验 5 元组解包 + 传参
