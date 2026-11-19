@@ -370,15 +370,34 @@ class FlowDialog(tk.Toplevel):
                                       columnspan=2, sticky="w")
             row += 2
 
-        tk.Label(body, text="你的名字 *", bg=CLR_BG, fg="#41506B",
-                 font=(self.fam, 10), anchor="w").grid(
-            row=row, column=0, sticky="w", padx=(0, 10), pady=6)
-        self.var_by = tk.StringVar(
-            value=str(tab.app.settings.get("wf_name") or ""))
-        e = ttk.Entry(body, textvariable=self.var_by, width=26,
-                      font=(self.fam, 10))
-        e.grid(row=row, column=1, sticky="ew", pady=6)
-        if not self.var_by.get():
+        # 名字：本机记过（或这张单已有经手人）就自动带出，不再要求重填
+        known = (str(tab.app.settings.get("wf_name") or "").strip()
+                 or str(rec.get("handler") or "").strip())
+        self.var_by = tk.StringVar(value=known)
+        rowf = tk.Frame(body, bg=CLR_BG)
+        rowf.grid(row=row, column=0, columnspan=2, sticky="w", pady=6)
+        if known:
+            tk.Label(rowf, text="经手人：%s（自动带出，发起制作时填过的名字）"
+                     % known, bg=CLR_BG, fg="#41506B",
+                     font=(self.fam, 10)).pack(side="left")
+
+            def _edit_name():
+                for w in rowf.winfo_children():
+                    w.destroy()
+                tk.Label(rowf, text="你的名字 *", bg=CLR_BG, fg="#41506B",
+                         font=(self.fam, 10)).pack(side="left", padx=(0, 10))
+                e2 = ttk.Entry(rowf, textvariable=self.var_by, width=20,
+                               font=(self.fam, 10))
+                e2.pack(side="left")
+                e2.focus_set()
+            ttk.Button(rowf, text="更换", style="Ghost.TButton", width=4,
+                       command=_edit_name).pack(side="left", padx=(8, 0))
+        else:
+            tk.Label(rowf, text="你的名字 *", bg=CLR_BG, fg="#41506B",
+                     font=(self.fam, 10)).pack(side="left", padx=(0, 10))
+            e = ttk.Entry(rowf, textvariable=self.var_by, width=26,
+                          font=(self.fam, 10))
+            e.pack(side="left")
             e.focus_set()
         row += 1
 

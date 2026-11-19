@@ -2036,7 +2036,7 @@ function wfMoveSheet(w, stages){
     + '<label class="lbl">交给谁（同一节点有多人时选具体工位）</label>'
     + '<select class="inp" id="wfTo">' + wfStationOptions(w.stage + 1, "") + "</select>"
     + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfBy" value="'
-    + esc(MYWF.name) + '">'
+    + esc(MYWF.name || w.handler || "") + '">'
     + '<label class="lbl">备注（会带给下一站）</label><input class="inp" id="wfNote" value="">'
     + '<button class="go" id="wfGo">确认推进</button>';
   sheet("推进", function(box){
@@ -2067,7 +2067,7 @@ function wfBackSheet(w, stages){
   h += '</select><label class="lbl">交给谁</label>'
     + '<select class="inp" id="wfTo2">' + wfStationOptions(w.stage - 1, "") + "</select>"
     + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfBy2" value="'
-    + esc(MYWF.name) + '">'
+    + esc(MYWF.name || w.handler || "") + '">'
     + '<label class="lbl">退回原因</label><input class="inp" id="wfNote2" value="">'
     + '<button class="go" id="wfGo2" style="background:#d4380d">确认退回</button>';
   sheet("退回", function(box){
@@ -2098,7 +2098,7 @@ function wfStockSheet(w){
     + '<div><label class="lbl">单价（元）</label><input class="inp" id="wsPrice" type="number" inputmode="decimal" value="0"></div></div>'
     + '<label class="lbl">货架</label><input class="inp" id="wsShelf">'
     + '<label class="lbl">经手人（必填）</label><input class="inp" id="wsBy" value="'
-    + esc(MYWF.name) + '">'
+    + esc(MYWF.name || w.handler || "") + '">'
     + '<button class="go" id="wsGo">确认入库</button>';
   sheet("入库", function(box){
     box.innerHTML = h;
@@ -2128,7 +2128,7 @@ function wfFinishSheet(w){
   var h = '<div class="sum"><div class="sumt">' + esc(w.no) + "</div>"
     + '<div class="rows">不新增库存，直接把单据结单（如报废）</div></div>'
     + '<label class="lbl">经手人（必填）</label><input class="inp" id="wfFBy" value="'
-    + esc(MYWF.name) + '">'
+    + esc(MYWF.name || w.handler || "") + '">'
     + '<label class="lbl">备注</label><input class="inp" id="wfFNote">'
     + '<button class="go" id="wfFGo">确认结单</button>';
   sheet("结单", function(box){

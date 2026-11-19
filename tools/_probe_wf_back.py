@@ -73,11 +73,14 @@ def main():
     dlg = wf.FlowDialog(root, tab, rec, forward=False)
     chk("弹窗能构造", dlg.winfo_exists())
     combos = [w for w in walk(dlg) if w.winfo_class() == "TCombobox"]
-    chk("退回弹窗有目标节点下拉", len(combos) == 1, len(combos))
-    cb = combos[0]
-    chk("下拉列出质检之前的所有站",
-        list(cb["values"]) == ["发起制作", "制作标签", "贴标签"],
-        list(cb["values"]))
+    chk("退回弹窗有目标节点下拉", len(combos) == 2, len(combos))
+    tgts = [c for c in combos
+            if list(c["values"]) == ["发起制作", "制作标签", "贴标签"]]
+    chk("目标节点下拉列出质检之前的所有站",
+        len(tgts) == 1 and list(tgts[0]["values"])
+        == ["发起制作", "制作标签", "贴标签"],
+        [list(c["values"]) for c in combos])
+    cb = tgts[0]
     chk("默认退回上一站（贴标签）", dlg.var_target.get() == "贴标签",
         dlg.var_target.get())
 
@@ -85,7 +88,7 @@ def main():
     dlg.var_target.set("制作标签")
     dlg.var_by.set("质检员小王")
     dlg._ok()
-    by, note, stock_rec, target = dlg.result
+    by, note, stock_rec, target, _station = dlg.result
     chk("_ok 返回跨站 target=1", target == 1, (by, target))
     chk("不勾库存时 stock_rec 为 None", stock_rec is None)
 
@@ -99,11 +102,14 @@ def main():
         any(g["action"] == "back" and "制作标签" in (g["note"] or "")
             for g in logs), logs[-1])
 
-    # ④ 推进弹窗不受影响：没有目标下拉
+    # ④ 推进弹窗不受影响：只有「交给谁」下拉（v1.43.0），没有目标下拉
     rec3 = [r for r in store.wf_list("active") if r["id"] == wid][0]
     dlg2 = wf.FlowDialog(root, tab, rec3, forward=True)
     combos2 = [w for w in walk(dlg2) if w.winfo_class() == "TCombobox"]
-    chk("推进弹窗没有目标下拉（保持原样）", len(combos2) == 0, len(combos2))
+    chk("推进弹窗无目标下拉（只有交给谁）",
+        len(combos2) == 1
+        and list(combos2[0]["values"])[0] == "该节点任意人",
+        [list(c["values"])[:1] for c in combos2])
     dlg2.destroy()
 
     dlg.destroy()
