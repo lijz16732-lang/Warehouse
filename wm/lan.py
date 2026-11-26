@@ -27,6 +27,7 @@ from .mobile import (MobileService, _token_from, handle_add, handle_coltitles,
                      handle_request_write, handle_sales, handle_sell,
                      handle_update_all, handle_whoami, handle_items,
                      handle_photos, handle_photo_get, handle_photo_add,
+                     handle_photo_check,
                      handle_photo_del, handle_return_sale, handle_sale_undo,
                      handle_stats, handle_customers, handle_trash,
                      handle_del_item, handle_restore, handle_purge,
@@ -673,6 +674,9 @@ def _make_handler(srv):
                     if path.startswith("/m/api/wf"):
                         return self._send_full(*handle_wf(srv, ip, token, None,
                                                           payload))
+                    if path.startswith("/m/api/photo_check"):
+                        return self._send_full(*handle_photo_check(
+                            srv, ip, token, payload))
                     if path.startswith("/m/api/photo_add"):
                         return self._send_full(*handle_photo_add(srv, ip, token, payload))
                     if path.startswith("/m/api/photo_del"):

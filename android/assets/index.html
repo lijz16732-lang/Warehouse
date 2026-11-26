@@ -1153,7 +1153,11 @@ function pushPhotos(prog) {
         kind: 'phone', code: o.code, name: o.ph.n + '.jpg',
         data: o.ph.d.split(',')[1]
       });
-    }).then(function () { o.ph.s = 1; setPh(o.lid, o.arr); })
+    }).then(function (r) {
+      o.ph.s = 1;
+      if (r && r.name) o.ph.sn = r.name;   // 服务器端文件名（md5 名），核对用
+      setPh(o.lid, o.arr);
+    })
       .catch(function () {
         fail += 1;                          // 不中断：下次同步自动重试
       });
@@ -1163,7 +1167,7 @@ function pushPhotos(prog) {
 /* 换电脑连接时重置全部照片的上传标记：s 标记只代表「传到当前这台电脑」，
    换一台就要全部重传（电脑端照片按内容 md5 去重，重传不会产生重复文件）。
    PH_SYNC_VER 升级时同样重置一次（旧版本的标记含义不可信）。 */
-var PH_SYNC_VER = 'v3';
+var PH_SYNC_VER = 'v4';
 function resetPhSynced() {
   DB.items.forEach(function (it) {
     var arr = getPh(it.lid);
@@ -1172,6 +1176,41 @@ function resetPhSynced() {
     arr.forEach(function (ph) { if (ph.s) { ph.s = 0; ch = true; } });
     if (ch) setPh(it.lid, arr);
   });
+}
+/* 同步前与电脑核对照片还在不在：电脑端照片被删过（误删、清空重置）时，
+   手机把这些照片重新标记为待上传，本轮同步自动补传。
+   按服务器端文件名（sn，photo_add 返回的 md5 名）比对；老照片没有 sn 的
+   由 PH_SYNC_VER 升级时的一次全量重传补上。核对失败不阻塞同步。 */
+function checkPhotos() {
+  var checks = [];
+  DB.items.forEach(function (it) {
+    if (it.dirty || !it.code) return;
+    var arr = getPh(it.lid), names = [];
+    arr.forEach(function (ph) { if (ph.s && ph.sn) names.push(ph.sn); });
+    if (names.length) {
+      checks.push({ code: it.code, arr: arr, lid: it.lid, names: names });
+    }
+  });
+  if (!checks.length) return Promise.resolve(0);
+  return api('POST', '/m/api/photo_check', {
+    checks: checks.map(function (c) {
+      return { code: c.code, names: c.names };
+    })
+  }).then(function (r) {
+    var miss = (r && r.missing) || {}, n = 0;
+    checks.forEach(function (c) {
+      var m = miss[c.code];
+      if (!m || !m.length) return;
+      var set = {};
+      m.forEach(function (x) { set[x] = 1; });
+      var ch = false;
+      c.arr.forEach(function (ph) {
+        if (ph.s && ph.sn && set[ph.sn]) { ph.s = 0; ch = true; n += 1; }
+      });
+      if (ch) setPh(c.lid, c.arr);
+    });
+    return n;
+  }).catch(function () { return 0; });
 }
 function pendingPhotos() {
   var n = 0;
@@ -1186,44 +1225,53 @@ function pendingPhotos() {
    不需要先在数据里点保存；/m/api/m_item、m_sale 按手机 lid 幂等覆盖，重复同步安全。 */
 function syncAll(manual, full) {
   if (!DB.share.token) { if (manual) toast('请先在设置里连接电脑'); return Promise.resolve(); }
+  /* 照片同步逻辑升级（PH_SYNC_VER 变化）→ 旧标记含义不可信，全量重传一次。
+     放在 syncAll 里：点「立即同步」/自动同步都生效，不依赖重新连接。 */
+  if (DB.share.phVer !== PH_SYNC_VER) {
+    resetPhSynced();
+    DB.share.phVer = PH_SYNC_VER;
+    saveDB();
+  }
   var items = DB.items.filter(function (it) { return full ? true : it.dirty; });
   var sales = DB.sales.filter(function (s) { return full ? true : s.dirty; });
-  var phN = pendingPhotos();
-  if (!items.length && !sales.length && !phN) {
-    if (manual) toast('手机里还没有数据，先在库存页点「＋ 录入」添加');
-    renderSync(); return Promise.resolve();
-  }
-  var p = Promise.resolve();
-  items.forEach(function (it) {
-    p = p.then(function () { return pushItem(it); });
-  });
-  sales.forEach(function (s) {
-    p = p.then(function () { return pushSale(s); });
-  });
-  return p.then(function () { return pushPhotos(function (done, total) {
-    if (total) $('syncStat').textContent = '正在上传照片 ' + done + '/' + total + '…';
-  }); }).then(function (phRes) {
-    DB.share.last = nowStr();
-    saveDB(); renderSync(); refreshHead();
-    if (manual) {
-      var n = items.length + sales.length;
-      var phUploaded = phRes && phRes.ok, phFail = phRes && phRes.fail;
-      if (phFail) {
-        toast('同步完成：记录 ' + n + ' 条；照片 ' + phFail + ' 张上传失败'
-              + '（检查电脑连接，下次同步自动重试）');
-      } else if (phUploaded) {
-        toast('同步完成：记录 ' + n + ' 条，照片 ' + phUploaded + ' 张已上传');
-      } else if (n) {
-        toast('同步完成：已上传 ' + n + ' 条');
-      } else {
-        toast('照片已全部同步到电脑');
-      }
-    } else if (phFail) {
-      toast('有 ' + phFail + ' 张照片上传失败，下次同步自动重试');
+  return checkPhotos().then(function () {
+    var phN = pendingPhotos();
+    if (!items.length && !sales.length && !phN) {
+      if (manual) toast('手机里还没有数据，先在库存页点「＋ 录入」添加');
+      renderSync(); return Promise.resolve();
     }
-  }).catch(function (e) {
-    renderSync();
-    if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
+    var p = Promise.resolve();
+    items.forEach(function (it) {
+      p = p.then(function () { return pushItem(it); });
+    });
+    sales.forEach(function (s) {
+      p = p.then(function () { return pushSale(s); });
+    });
+    return p.then(function () { return pushPhotos(function (done, total) {
+      if (total) $('syncStat').textContent = '正在上传照片 ' + done + '/' + total + '…';
+    }); }).then(function (phRes) {
+      DB.share.last = nowStr();
+      saveDB(); renderSync(); refreshHead();
+      if (manual) {
+        var n = items.length + sales.length;
+        var phUploaded = phRes && phRes.ok, phFail = phRes && phRes.fail;
+        if (phFail) {
+          toast('同步完成：记录 ' + n + ' 条；照片 ' + phFail + ' 张上传失败'
+                + '（检查电脑连接，下次同步自动重试）');
+        } else if (phUploaded) {
+          toast('同步完成：记录 ' + n + ' 条，照片 ' + phUploaded + ' 张已上传');
+        } else if (n) {
+          toast('同步完成：已上传 ' + n + ' 条');
+        } else {
+          toast('照片已全部同步到电脑');
+        }
+      } else if (phFail) {
+        toast('有 ' + phFail + ' 张照片上传失败，下次同步自动重试');
+      }
+    }).catch(function (e) {
+      renderSync();
+      if (manual || String(e.message || e) !== 'need_login') toast(e.message || e);
+    });
   });
 }
 $('btnSync').onclick = function () { syncAll(true, true); };

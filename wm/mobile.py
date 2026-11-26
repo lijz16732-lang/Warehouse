@@ -1036,6 +1036,36 @@ def handle_photo_add(srv, ip, token, payload):
     return 200, {"ok": True, "name": name, "message": "照片已保存"}, NO_STORE
 
 
+def handle_photo_check(srv, ip, token, payload):
+    """POST /m/api/photo_check {checks:[{code, names:[服务器文件名]}]}。
+    手机同步前核对照片还在不在电脑上（电脑端被误删的照片 → 手机重新标记
+    待上传后自动补传）。按服务器端文件名（photo_add 返回的 md5 名）比对。
+    手机区照片登录即可（独立数据，权限同 photo_add）。"""
+    gate = _need_login(srv, ip, token)
+    if gate:
+        return gate
+    checks = (payload or {}).get("checks")
+    if not isinstance(checks, list):
+        return 400, {"ok": False, "error": "参数不正确"}, NO_STORE
+    store = srv.get_store()
+    missing = {}
+    for c in checks[:500]:                       # 防御上限，正常远小于此
+        if not isinstance(c, dict):
+            continue
+        code = str(c.get("code") or "").strip()
+        names = c.get("names")
+        if not code or not isinstance(names, list) or not names:
+            continue
+        try:
+            have = set(store.photos_list("phone", code))
+        except Exception:
+            have = set()
+        miss = [str(n) for n in names[:200] if str(n) not in have]
+        if miss:
+            missing[code] = miss
+    return 200, {"ok": True, "missing": missing}, NO_STORE
+
+
 def handle_photo_del(srv, ip, token, payload):
     """POST /m/api/photo_del {kind, code, name}。权限同 photo_add。"""
     p = payload or {}

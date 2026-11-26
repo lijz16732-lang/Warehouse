@@ -1013,7 +1013,7 @@ try:
           and "full ? true : it.dirty" in _ajs)
     check("App 连接电脑后不自动上传（待同步数保留给用户手动点）",
           "正在同步手机数据" not in _ajs
-          and "待同步 ' + n + ' 条，点「立即同步到电脑」上传" in _ajs)
+          and "点「立即同步到电脑」上传" in _ajs)
     # v1.22.0：深色模式 / 表格列自定义 / 搜索历史与快捷筛选
     check("App 有深色模式（三档外观 + CSS 变量主题）",
           all(x in _app_html for x in ("id=\"thDark\"", "body.dark", "applyTheme",
