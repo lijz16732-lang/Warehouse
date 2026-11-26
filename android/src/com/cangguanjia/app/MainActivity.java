@@ -495,7 +495,9 @@ public class MainActivity extends Activity {
             cm.flush();
         } catch (Throwable ignore) {
         }
+        deleteTree(new File(getFilesDir(), "db"));          // v1.44.1 本地数据库
         deleteTree(new File(getCacheDir(), "photos"));
+        deleteTree(new File(getFilesDir(), "phphotos"));
         deleteTree(new File(getCacheDir(), "exports"));
         File crash = new File(getFilesDir(), CgmApp.CRASH_FILE);
         crash.delete();
@@ -578,6 +580,140 @@ public class MainActivity extends Activity {
             }
             String r = nativePickResult;
             return r == null ? "[]" : r;
+        }
+
+        // ---- 照片磁盘存储（v1.44.0）----
+        // 照片正文存 files/phphotos/<lid>/<名字>（应用私有目录，真实磁盘），
+        // localStorage 只放 {n, s} 元数据。此前照片整包塞 localStorage，
+        // WebView 配额只有几 MB，照片多了必然 QuotaExceeded——
+        // 和手机剩余磁盘空间无关，这就是「手机内存不足」误报的根源。
+
+        /** lid / 文件名只保留安全字符，防止拼出路径穿越。 */
+        private String phSafe(String s) {
+            return String.valueOf(s).replaceAll("[^A-Za-z0-9._-]", "_");
+        }
+
+        private File phDir(String lid) {
+            File d = new File(new File(getFilesDir(), "phphotos"), phSafe(lid));
+            if (!d.isDirectory()) {
+                d.mkdirs();
+            }
+            return d;
+        }
+
+        /** 写入一张照片（dataURL），成功返回 true。 */
+        @JavascriptInterface
+        public boolean phWrite(String lid, String name, String dataUrl) {
+            try {
+                if (dataUrl == null || dataUrl.length() == 0) {
+                    return false;
+                }
+                int i = dataUrl.indexOf("base64,");
+                byte[] bytes = android.util.Base64.decode(
+                        i >= 0 ? dataUrl.substring(i + 7) : dataUrl,
+                        android.util.Base64.DEFAULT);
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(
+                        new File(phDir(lid), phSafe(name)));
+                fo.write(bytes);
+                fo.close();
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        /** 读取一张照片，返回 dataURL；不存在或失败返回空串。 */
+        @JavascriptInterface
+        public String phRead(String lid, String name) {
+            try {
+                File f = new File(phDir(lid), phSafe(name));
+                if (!f.isFile() || f.length() == 0) {
+                    return "";
+                }
+                java.io.ByteArrayOutputStream bos =
+                        new java.io.ByteArrayOutputStream();
+                java.io.FileInputStream fi = new java.io.FileInputStream(f);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = fi.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                }
+                fi.close();
+                return "data:image/jpeg;base64,"
+                        + android.util.Base64.encodeToString(bos.toByteArray(),
+                                android.util.Base64.NO_WRAP);
+            } catch (Throwable t) {
+                return "";
+            }
+        }
+
+        /** 覆写本地数据库 JSON（临时文件+改名，崩溃不写坏）；成功返回 true。 */
+        @JavascriptInterface
+        public boolean dbWrite(String json) {
+            try {
+                if (json == null) {
+                    return false;
+                }
+                File dir = new File(getFilesDir(), "db");
+                if (!dir.isDirectory() && !dir.mkdirs()) {
+                    return false;
+                }
+                File out = new File(dir, "cgm_db.json");
+                File tmp = new File(dir, "cgm_db.json.tmp");
+                java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+                fo.write(json.getBytes("UTF-8"));
+                fo.close();
+                if (!tmp.renameTo(out)) {           // 目标已存在时 rename 失败 → 删旧重试
+                    out.delete();
+                    if (!tmp.renameTo(out)) {
+                        tmp.delete();
+                        return false;
+                    }
+                }
+                return true;
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+
+        /** 读取本地数据库 JSON；不存在或失败返回空串。 */
+        @JavascriptInterface
+        public String dbRead() {
+            try {
+                File f = new File(new File(getFilesDir(), "db"), "cgm_db.json");
+                if (!f.isFile()) {
+                    return "";
+                }
+                byte[] buf = new byte[(int) f.length()];
+                java.io.FileInputStream fi = new java.io.FileInputStream(f);
+                int off = 0, n;
+                while (off < buf.length
+                        && (n = fi.read(buf, off, buf.length - off)) > 0) {
+                    off += n;
+                }
+                fi.close();
+                return new String(buf, 0, off, "UTF-8");
+            } catch (Throwable t) {
+                return "";
+            }
+        }
+
+        /** 删除一张照片。 */
+        @JavascriptInterface
+        public void phDelete(String lid, String name) {
+            try {
+                new File(phDir(lid), phSafe(name)).delete();
+            } catch (Throwable ignore) {
+            }
+        }
+
+        /** 清空某个商品的全部照片文件。 */
+        @JavascriptInterface
+        public void phClear(String lid) {
+            try {
+                deleteTree(phDir(lid));
+            } catch (Throwable ignore) {
+            }
         }
     }
 

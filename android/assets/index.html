@@ -622,37 +622,137 @@ function blankDB() {
            share: { base: '', code: '', token: '', auto: 0, last: '' } };
 }
 var DB = blankDB();
+var HAS_BRIDGE = !!(window.AndroidPhotos && window.AndroidPhotos.available);
 function loadDB() {
+  var raw = null, fromDisk = false;
+  if (HAS_BRIDGE) {
+    raw = AndroidPhotos.dbRead();
+    fromDisk = !!raw;
+  }
+  if (!raw) raw = LS.getItem('cgm_db');
   try {
-    var raw = LS.getItem('cgm_db');
     if (raw) DB = JSON.parse(raw);
   } catch (e) { DB = blankDB(); }
   if (!DB.share) DB.share = blankDB().share;
   if (!DB.theme) DB.theme = 'auto';                      // 旧版本数据补默认
   if (!DB.locCols || !DB.locCols.length) DB.locCols = DEF_COLS.slice();
   if (!DB.kwHist) DB.kwHist = [];
+  /* 迁移：老版本数据在 localStorage 里 → 搬进磁盘后清掉 LS 键释放配额 */
+  if (HAS_BRIDGE && !fromDisk && raw) {
+    if (AndroidPhotos.dbWrite(raw)) LS.removeItem('cgm_db');
+  }
 }
-function saveDB() { LS.setItem('cgm_db', JSON.stringify(DB)); }
+function saveDB() {
+  var s = JSON.stringify(DB);
+  if (HAS_BRIDGE) {
+    if (AndroidPhotos.dbWrite(s)) return;
+    /* 磁盘写入失败极少见，但绝不能静默丢数据 → 回退 LS 并告知 */
+    try { LS.setItem('cgm_db', s); toast('数据改存到备用位置，请尽快同步到电脑'); }
+    catch (e2) { toast('数据保存失败！请截图记录后联系开发者'); }
+    return;
+  }
+  try { LS.setItem('cgm_db', s); }
+  catch (e) { toast('存储空间不足，保存失败（数据未写入，请减少数据量）'); }
+}
 
-/* ================= 照片（v1.25.0） =================
-   每件商品最多 10 张；照片按 lid 存在独立 localStorage 键里（cgm_ph_<lid>），
-   不跟 cgm_db 一起序列化，避免每次保存都搬运几百 KB 的图片数据。
-   每张 {n:名字, d:dataURL, s:是否已同步到电脑}；连上电脑后自动补传 s=0 的。 */
+/* ================= 照片（v1.25.0，v1.44.0 改磁盘存储） =================
+   每件商品最多 10 张；有原生桥（App 内）时照片正文存手机磁盘
+   （AndroidPhotos.phWrite/phRead，应用私有目录，容量只受磁盘限制），
+   localStorage 只放 {n, s} 元数据；浏览器（无桥）仍整包存 localStorage。
+   此前正文塞 localStorage：WebView 配额仅几 MB，照片多了必然爆——
+   这与手机剩余空间无关，正是「手机存储空间不足」误报的根源。
+   每张 {n:名字, d:dataURL(仅内存), s:是否已同步到电脑}；连上电脑后自动补传 s=0 的。 */
 var PH_MAX = 10;
 /* 页面脚本出错直接弹出来（WebView 无控制台，静默失败最难排查） */
 window.onerror = function (msg) {
   try { toast('脚本错误：' + msg); } catch (e) {}
 };
+var PHN = (window.AndroidPhotos && AndroidPhotos.phRead) ? AndroidPhotos : null;
 function phKey(lid) { return 'cgm_ph_' + lid; }
 function getPh(lid) {
-  try { return JSON.parse(LS.getItem(phKey(lid)) || '[]') || []; }
-  catch (e) { return []; }
+  var raw = null;
+  try { raw = LS.getItem(phKey(lid)); } catch (e) {}
+  var arr = [];
+  try { arr = raw ? (JSON.parse(raw) || []) : []; } catch (e) { arr = []; }
+  if (!PHN) return arr;
+  var out = [];
+  for (var i = 0; i < arr.length; i++) {
+    var p = arr[i], d = '';
+    if (p.d) { d = p.d; }                    // 迁移前的旧格式（正文还在 LS）
+    else { try { d = PHN.phRead(String(lid), p.n) || ''; } catch (e) {} }
+    if (d) out.push({ n: p.n, d: d, s: p.s || 0 });
+  }
+  return out;
 }
 function setPh(lid, arr) {
-  try { LS.setItem(phKey(lid), JSON.stringify(arr)); return true; }
-  catch (e) { toast('手机存储空间不足，照片没保存上（可删几张旧照片）'); return false; }
+  try {
+    if (PHN) {
+      var old = [];
+      try { old = JSON.parse(LS.getItem(phKey(lid)) || '[]') || []; }
+      catch (e) {}
+      var oldD = {};
+      for (var i = 0; i < old.length; i++) oldD[old[i].n] = old[i];
+      var keep = {};
+      for (var j = 0; j < arr.length; j++) {
+        var p = arr[j];
+        keep[p.n] = 1;
+        // 新名字或旧格式（元数据里还带 d）→ 落盘；同名照片不会改内容
+        if (!oldD[p.n] || oldD[p.n].d !== undefined) {
+          if (!PHN.phWrite(String(lid), p.n, p.d)) throw new Error('write');
+        }
+      }
+      for (var n in oldD) {
+        if (!keep[n]) { try { PHN.phDelete(String(lid), n); } catch (e) {} }
+      }
+      LS.setItem(phKey(lid), JSON.stringify(arr.map(function (p) {
+        return { n: p.n, s: p.s || 0 };
+      })));
+      return true;
+    }
+    LS.setItem(phKey(lid), JSON.stringify(arr));
+    return true;
+  } catch (e) {
+    toast('照片没保存上，请重试；若反复失败可删几张旧照片');
+    return false;
+  }
 }
-function delPh(lid) { LS.removeItem(phKey(lid)); }
+function delPh(lid) {
+  try { LS.removeItem(phKey(lid)); } catch (e) {}
+  if (PHN) { try { PHN.phClear(String(lid)); } catch (e) {} }
+}
+/* 只数张数不读正文（列表里每个商品都用，走 LS 元数据即可） */
+function phCount(lid) {
+  if (PHN) {
+    try {
+      return (JSON.parse(LS.getItem(phKey(lid)) || '[]') || []).length;
+    } catch (e) { return 0; }
+  }
+  return getPh(lid).length;
+}
+/* 老用户升级迁移：把还躺在 localStorage 里的照片正文搬到磁盘（幂等） */
+function phMigrate() {
+  if (!PHN) return;
+  var keys = [];
+  try { for (var i = 0; i < LS.length; i++) keys.push(LS.key(i)); } catch (e) {}
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    if (!key || key.indexOf('cgm_ph_') !== 0) continue;
+    var arr;
+    try { arr = JSON.parse(LS.getItem(key) || '[]') || []; } catch (e) { continue; }
+    var changed = false;
+    for (var j = 0; j < arr.length; j++) {
+      var p = arr[j];
+      if (!p.d) continue;
+      try {
+        if (PHN.phWrite(String(key.slice(7)), p.n, p.d)) {
+          delete p.d;
+          changed = true;
+        }
+      } catch (e) {}
+    }
+    if (changed) { try { LS.setItem(key, JSON.stringify(arr)); } catch (e) {} }
+  }
+}
 function phNewName() {
   return 'P' + Date.now().toString(36) + Math.floor(Math.random() * 1679616).toString(36);
 }
@@ -1718,7 +1818,7 @@ function openItemPanel(r) {
   info.className = 'panel-info';
   var lines = [[r.brand, r.model, r.condition].filter(Boolean).join(' · ') || '（未填品牌 / 型号）',
                '数量 ' + r.qty + ' · 单价 ¥' + r.price + (r.shelf ? ' · 货架 ' + r.shelf : '')];
-  var phN = getPh(r.lid).length;
+  var phN = phCount(r.lid);
   if (phN) lines.push('📷 ' + phN + ' 张照片');
   info.textContent = lines.join('\n');
   b.appendChild(info);
@@ -3041,6 +3141,7 @@ $('btnColReset').onclick = function () {
 
 /* ================= 启动 ================= */
 loadDB();
+phMigrate();
 $('inPrefix').value = DB.prefix || 'APP';
 applyTheme();
 renderFlts(); renderKwHist();
