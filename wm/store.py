@@ -763,10 +763,17 @@ class Store(object):
             row = self.conn.execute("SELECT code, model FROM phone_items WHERE lid = ?",
                                     (int(lid),)).fetchone()
             self.conn.execute("DELETE FROM phone_items WHERE lid = ?", (int(lid),))
+            # 多台手机编号重复时（老版本遗留），照片目录是按编号共用的：
+            # 还有别的记录用同一个编号，就不能把目录删掉，否则会连对方照片一起删。
+            left = 0
+            if row and row["code"]:
+                left = self.conn.execute(
+                    "SELECT COUNT(*) FROM phone_items WHERE code = ?",
+                    (row["code"],)).fetchone()[0]
         self.conn.commit()
         self.m_set_color("item:%d" % int(lid), None)     # 颜色标记一并清理
         d = dict(row) if row else {}
-        if d.get("code"):                    # 手机区商品照片一并清理
+        if d.get("code") and not left:        # 手机区商品照片一并清理
             self.photos_wipe("phone", d["code"])
         self.log_op("手机删除商品", d.get("code") or d.get("model") or "", "手机区商品")
 

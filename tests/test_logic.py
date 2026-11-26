@@ -1131,6 +1131,15 @@ try:
     check("局域网照片 RPC：photos_list/photo_data 只读，photo_add/photo_del 需授权",
           "photos_list" in _lan_src and "photo_data" in _lan_src
           and '"photos_dir", "photo_path"' in _lan_src)
+    # v1.45.0：多台手机同步不串号——编号带本机设备码、lid 带设备种子，
+    # 否则两台手机都从 APP-00001 起，电脑端重号、照片目录串台
+    check("多台手机不串号：编号带设备码、lid 带设备种子（不再裸 Date.now）",
+          "dev: ''" in _app_html_ph
+          and "function ensureDev(" in _app_html_ph
+          and "p + DB.dev + '-'" in _app_html_ph
+          and "function nextLid(" in _app_html_ph
+          and "devSeed() * 2" in _app_html_ph
+          and "lid: Date.now()" not in _app_html_ph)
     check("电脑端照片条：详情面板缩略图/大图/添加/删除 + 手机数据页接入",
           all(x in _app_src for x in ("PhotoStrip", "photo_strip"))
           and "PhotoStrip" in open(os.path.join(_wm_dir, "phone.py"),

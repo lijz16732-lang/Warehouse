@@ -18,13 +18,13 @@ from .theme import CellHover, RowHover
 
 # (key, 标题, 宽度)
 PHONE_ITEM_COLS = (
-    ("code", "手机编号", 95), ("brand", "品牌", 110), ("category", "品类", 90),
+    ("code", "手机编号", 112), ("brand", "品牌", 110), ("category", "品类", 90),
     ("model", "型号", 150), ("condition", "成色", 70), ("qty", "数量", 60),
     ("price", "单价", 80), ("shelf", "货架", 90), ("remark", "备注", 130),
     ("state", "状态", 90), ("synced_at", "同步时间", 135),
 )
 PHONE_SALE_COLS = (
-    ("sale_date", "日期", 130), ("code", "手机编号", 95), ("brand", "品牌", 100),
+    ("sale_date", "日期", 130), ("code", "手机编号", 112), ("brand", "品牌", 100),
     ("category", "品类", 90), ("model", "型号", 140), ("qty", "数量", 55),
     ("price", "单价", 75), ("total", "合计", 85), ("buyer", "买家", 90),
     ("out_type", "类型", 65), ("remark", "备注", 150),

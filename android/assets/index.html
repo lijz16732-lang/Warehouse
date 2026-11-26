@@ -620,7 +620,7 @@ var invView = 'loc';                  // loc=手机库存 pc=电脑库存
 /* ================= 本地数据库 ================= */
 var DEF_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
 function blankDB() {
-  return { items: [], sales: [], seq: 1, prefix: 'APP',
+  return { items: [], sales: [], seq: 1, prefix: 'APP', dev: '',
            theme: 'auto', locCols: DEF_COLS.slice(), kwHist: [],
            share: { base: '', code: '', token: '', auto: 0, last: '',
                     phBase: '', phVer: '' } };
@@ -878,11 +878,41 @@ function itemByLid(lid) {
     if (DB.items[i].lid === lid) return DB.items[i];
   return null;
 }
+/* 本机设备码（v1.45.0）：多台手机各自录数据时，编号里带上设备码，
+   例如 APP7K3F-00001，避免两台手机都从 APP-00001 开始、上传到电脑后重号
+   （重号会导致手机区两条记录混在一起、照片目录串台）。
+   设备码只在首次启用时生成一次，之后固定；已生成的编号永不变。 */
+function newDevCode() {
+  var A = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';   // 去掉易混的 0/O/1/I
+  var s = '';
+  for (var i = 0; i < 4; i += 1) s += A.charAt(Math.floor(Math.random() * A.length));
+  return s;
+}
+function ensureDev() {
+  if (!DB.dev) {
+    DB.dev = newDevCode();
+    saveDB();
+    return true;
+  }
+  return false;
+}
 function nextCode() {
   var p = (DB.prefix || 'APP').replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '') || 'APP';
-  var c = p + '-' + ('00000' + DB.seq).slice(-5);
+  ensureDev();                      // 老数据没有设备码：这里补一个，编号从此唯一
+  var c = p + DB.dev + '-' + ('00000' + DB.seq).slice(-5);
   DB.seq += 1;
   return c;
+}
+/* 本地记录 id（lid）：电脑端按 lid 幂等覆盖，两台手机绝不能撞。
+   时间戳 × 1024 + 设备种子 × 2 + 类型位 → 不同设备/商品与出售记录都不同号。 */
+function devSeed() {
+  ensureDev();
+  var s = 7, d = DB.dev || '';
+  for (var i = 0; i < d.length; i += 1) s = (s * 131 + d.charCodeAt(i)) % 512;
+  return s;
+}
+function nextLid(isSale) {
+  return Date.now() * 1024 + devSeed() * 2 + (isSale ? 1 : 0);
 }
 function pendingCount() {
   var n = 0;
@@ -2005,7 +2035,7 @@ $('btnScanModel').onclick = function () { startScan('add'); };
 /* ================= 录入 ================= */
 $('btnAdd').onclick = function () {
   var it = {
-    lid: Date.now(),
+    lid: nextLid(0),
     code: nextCode(),
     brand: $('aBrand').value.trim(), category: $('aCate').value.trim(),
     model: $('aModel').value.trim(), condition: $('aCond').value.trim(),
@@ -2038,7 +2068,7 @@ $('btnSell').onclick = function () {
   if (qty > it.qty) { toast('库存只有 ' + it.qty + ' 个'); return; }
   var price = $('sPrice').value === '' ? it.price : (parseFloat($('sPrice').value) || 0);
   var s = {
-    lid: Date.now(), lidRef: it.lid, code: it.code,
+    lid: nextLid(1), lidRef: it.lid, code: it.code,
     brand: it.brand, model: it.model, qty: qty, price: price,
     total: Math.round(qty * price * 100) / 100,
     buyer: $('sBuyer').value.trim(), sale_date: nowStr(),
@@ -2608,11 +2638,19 @@ function openStDetail(id) {
 }
 
 /* ================= 设置 ================= */
+function paintPrefixStat() {
+  ensureDev();
+  var el = $('prefixStat');
+  if (el) {
+    el.textContent = '新编号形如 ' + DB.prefix + DB.dev + '-00001'
+      + '；本机设备码 ' + DB.dev + ' 让多台手机的编号互不重复（已生成的不变）';
+  }
+}
 $('btnPrefix').onclick = function () {
   var v = $('inPrefix').value.trim().replace(/[^0-9A-Za-z\u4e00-\u9fa5-]/g, '');
   DB.prefix = v || 'APP';
   saveDB();
-  $('prefixStat').textContent = '新编号将形如 ' + DB.prefix + '-00001（已生成的不变）';
+  paintPrefixStat();
   toast('前缀已保存：' + DB.prefix);
 };
 $('btnWipe').onclick = function () {
@@ -3263,7 +3301,9 @@ $('btnColReset').onclick = function () {
 /* ================= 启动 ================= */
 loadDB();
 phMigrate();
+ensureDev();                 // 本机设备码：多台手机编号互不重复
 $('inPrefix').value = DB.prefix || 'APP';
+paintPrefixStat();
 applyTheme();
 renderFlts(); renderKwHist();
 refreshHead();
