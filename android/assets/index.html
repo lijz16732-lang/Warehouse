@@ -619,7 +619,8 @@ var DEF_COLS = ['code', 'brand', 'model', 'qty', 'price', 'shelf'];
 function blankDB() {
   return { items: [], sales: [], seq: 1, prefix: 'APP',
            theme: 'auto', locCols: DEF_COLS.slice(), kwHist: [],
-           share: { base: '', code: '', token: '', auto: 0, last: '' } };
+           share: { base: '', code: '', token: '', auto: 0, last: '',
+                    phBase: '' } };
 }
 var DB = blankDB();
 var HAS_BRIDGE = !!(window.AndroidPhotos && window.AndroidPhotos.available);
@@ -1006,6 +1007,12 @@ function connectTo(b, code, thenSync) {
     if (!j.ok) { toast(j.error || '连接失败'); return; }
     DB.share.base = b; DB.share.token = j.token || '';
     DB.share.code = '';          /* 连接码是凭据，只本次会话用，不写进本地存储 */
+    var switched = false;
+    if (DB.share.phBase && DB.share.phBase !== b) {
+      resetPhSynced();           /* 换了电脑：照片全部重传到这台 */
+      switched = true;
+    }
+    DB.share.phBase = b;
     saveDB();
     if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
     $('shBase').value = b;
@@ -1017,9 +1024,14 @@ function connectTo(b, code, thenSync) {
       toast('已连接：' + (w.warehouse || '电脑端'));
       if (thenSync) {
         // 连上后不自动上传：待同步数保留，由用户点「立即同步到电脑」决定
-        var n = pendingCount();
-        if (n) { toast('已连接 · 待同步 ' + n + ' 条，点「立即同步到电脑」上传'); }
-        else { toast('已连接（手机数据已全部同步过）'); }
+        var n = pendingCount(), np = pendingPhotos();
+        if (n || np) {
+          toast('已连接 · 待同步 ' + n + ' 条'
+                + (switched ? '，照片 ' + np + ' 张将传到这台电脑' : '')
+                + '，点「立即同步到电脑」上传');
+        } else {
+          toast('已连接（手机数据已全部同步过）');
+        }
         renderSync();
       }
     }).catch(function () { refreshHead(); renderShare(); renderSync(); });
@@ -1138,6 +1150,17 @@ function pushPhotos(prog) {
       });
   });
   return p.then(function () { return { ok: list.length - fail, fail: fail }; });
+}
+/* 换电脑连接时重置全部照片的上传标记：s 标记只代表「传到当前这台电脑」，
+   换一台就要全部重传（电脑端照片按内容 md5 去重，重传不会产生重复文件）。 */
+function resetPhSynced() {
+  DB.items.forEach(function (it) {
+    var arr = getPh(it.lid);
+    if (!arr.length) return;
+    var ch = false;
+    arr.forEach(function (ph) { if (ph.s) { ph.s = 0; ch = true; } });
+    if (ch) setPh(it.lid, arr);
+  });
 }
 function pendingPhotos() {
   var n = 0;
