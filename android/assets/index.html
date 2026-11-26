@@ -620,7 +620,7 @@ function blankDB() {
   return { items: [], sales: [], seq: 1, prefix: 'APP',
            theme: 'auto', locCols: DEF_COLS.slice(), kwHist: [],
            share: { base: '', code: '', token: '', auto: 0, last: '',
-                    phBase: '' } };
+                    phBase: '', phVer: '' } };
 }
 var DB = blankDB();
 var HAS_BRIDGE = !!(window.AndroidPhotos && window.AndroidPhotos.available);
@@ -1007,12 +1007,21 @@ function connectTo(b, code, thenSync) {
     if (!j.ok) { toast(j.error || '连接失败'); return; }
     DB.share.base = b; DB.share.token = j.token || '';
     DB.share.code = '';          /* 连接码是凭据，只本次会话用，不写进本地存储 */
+    /* 照片上传标记只对「当前这台电脑」有意义：
+       ① 换了电脑 → 全部重传（md5 去重不会产生重复文件）；
+       ② 照片同步逻辑升级（phVer 变了）→ 旧标记含义不可信，也全部重传。
+          兼容老用户：在旧版本上已传给 A 电脑、装新版后连 B，phVer 为空
+          同样触发重传，否则照片永远传不到 B。 */
     var switched = false;
-    if (DB.share.phBase && DB.share.phBase !== b) {
-      resetPhSynced();           /* 换了电脑：照片全部重传到这台 */
+    if (DB.share.phVer !== PH_SYNC_VER) {
+      resetPhSynced();
+      switched = true;
+    } else if (DB.share.phBase && DB.share.phBase !== b) {
+      resetPhSynced();
       switched = true;
     }
     DB.share.phBase = b;
+    DB.share.phVer = PH_SYNC_VER;
     saveDB();
     if (!DB.share.token) { toast('电脑端版本过旧，请先升级电脑端'); return; }
     $('shBase').value = b;
@@ -1152,7 +1161,9 @@ function pushPhotos(prog) {
   return p.then(function () { return { ok: list.length - fail, fail: fail }; });
 }
 /* 换电脑连接时重置全部照片的上传标记：s 标记只代表「传到当前这台电脑」，
-   换一台就要全部重传（电脑端照片按内容 md5 去重，重传不会产生重复文件）。 */
+   换一台就要全部重传（电脑端照片按内容 md5 去重，重传不会产生重复文件）。
+   PH_SYNC_VER 升级时同样重置一次（旧版本的标记含义不可信）。 */
+var PH_SYNC_VER = 'v3';
 function resetPhSynced() {
   DB.items.forEach(function (it) {
     var arr = getPh(it.lid);
