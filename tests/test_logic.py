@@ -1094,6 +1094,11 @@ try:
     except ValueError:
         _ok_limit = len(_pst.photos_list("item", "WL-P2")) == _wstore.PHOTO_MAX
     check("照片：超过 10 张抛 ValueError", _ok_limit)
+    # v1.44.6：满 10 张时重传「已存在的那张」不应报错（先去重再判上限），
+    # 否则手机「重新上传」对满额记录必然失败
+    check("照片：满额时重传已存在照片仍成功（去重优先于上限判断）",
+          _pst.photo_add("item", "WL-P2", _jpg, "x.jpg") in
+          _pst.photos_list("item", "WL-P2"))
     _pst.photo_del("item", "WL-P1", _pn)
     check("照片：删除生效", _pn not in _pst.photos_list("item", "WL-P1"))
     _ridp = _pst.insert(blank_record() | {"code": "WL-P3", "model": "PM"})
@@ -1114,6 +1119,15 @@ try:
               ("handle_photos", "handle_photo_get", "handle_photo_add",
                "handle_photo_del", "_need_write")))
     _lan_src = open(os.path.join(_wm_dir, "lan.py"), encoding="utf-8").read()
+    # v1.44.5/6：照片同步防丢——核对接口 + 手机端文件名(sn)必须落盘，
+    # getPh/setPh 只存 {n,s} 会丢掉 sn，核对永远查不到东西（v1.44.5 失效根因）
+    check("手机照片防丢：核对接口 + sn 落盘（getPh/setPh 都保留 sn）",
+          "handle_photo_check" in _mob_src
+          and "/m/api/photo_check" in _app_html_ph
+          and "handle_photo_check" in _lan_src
+          and "sn: p.sn || ''" in _app_html_ph
+          and "function checkPhotos" in _app_html_ph
+          and "btnResync" in _app_html_ph)
     check("局域网照片 RPC：photos_list/photo_data 只读，photo_add/photo_del 需授权",
           "photos_list" in _lan_src and "photo_data" in _lan_src
           and '"photos_dir", "photo_path"' in _lan_src)

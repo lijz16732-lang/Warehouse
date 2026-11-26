@@ -1313,14 +1313,16 @@ class Store(object):
         if not data:
             raise ValueError("空照片")
         cur = self.photos_list(kind, code)
-        if len(cur) >= PHOTO_MAX:
-            raise ValueError("每条记录最多 %d 张照片" % PHOTO_MAX)
         jpg, ext = _shrink_image(data)
         if ext is None:                      # PIL 不可用 → 按原始扩展名保存
             ext = os.path.splitext(orig_name or "")[1].lower()
             if ext not in PHOTO_EXTS:
                 ext = ".jpg"
         name = hashlib.md5(jpg).hexdigest()[:12] + ext
+        if name in cur:
+            return name                      # 同内容已存在：直接返回（重传不算新增）
+        if len(cur) >= PHOTO_MAX:
+            raise ValueError("每条记录最多 %d 张照片" % PHOTO_MAX)
         d = self.photos_dir(kind, code)
         os.makedirs(d, exist_ok=True)
         if name not in cur:

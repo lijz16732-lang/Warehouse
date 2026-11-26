@@ -507,6 +507,9 @@ body.dark .fab2 { box-shadow:0 6px 16px rgba(0,0,0,.5); }
           <button id="btnSync" class="gray">立即同步</button>
           <button id="btnAuto" class="gray">自动同步：关</button>
         </div>
+        <div class="btnrow" style="margin-top:8px">
+          <button id="btnResync" class="gray">重新上传（数据+照片）</button>
+        </div>
         <div class="stat" id="syncStat"></div>
       </div>
     </div>
@@ -681,7 +684,7 @@ function getPh(lid) {
     var p = arr[i], d = '';
     if (p.d) { d = p.d; }                    // 迁移前的旧格式（正文还在 LS）
     else { try { d = PHN.phRead(String(lid), p.n) || ''; } catch (e) {} }
-    if (d) out.push({ n: p.n, d: d, s: p.s || 0 });
+    if (d) out.push({ n: p.n, d: d, s: p.s || 0, sn: p.sn || '' });
   }
   return out;
 }
@@ -706,7 +709,7 @@ function setPh(lid, arr) {
         if (!keep[n]) { try { PHN.phDelete(String(lid), n); } catch (e) {} }
       }
       LS.setItem(phKey(lid), JSON.stringify(arr.map(function (p) {
-        return { n: p.n, s: p.s || 0 };
+        return { n: p.n, s: p.s || 0, sn: p.sn || '' };   // sn=电脑端文件名（核对用）
       })));
       return true;
     }
@@ -1143,7 +1146,7 @@ function pushPhotos(prog) {
     var arr = getPh(it.lid);               // 同一商品共用一次解析的数组（s 标记要写回）
     arr.forEach(function (ph) { if (!ph.s) list.push({ arr: arr, ph: ph, lid: it.lid, code: it.code }); });
   });
-  var done = 0, fail = 0;
+  var done = 0, fail = 0, err = '';
   var p = Promise.resolve();
   list.forEach(function (o) {
     p = p.then(function () {
@@ -1158,11 +1161,14 @@ function pushPhotos(prog) {
       if (r && r.name) o.ph.sn = r.name;   // 服务器端文件名（md5 名），核对用
       setPh(o.lid, o.arr);
     })
-      .catch(function () {
+      .catch(function (e) {
         fail += 1;                          // 不中断：下次同步自动重试
+        if (!err) err = String((e && e.message) || e || '');
       });
   });
-  return p.then(function () { return { ok: list.length - fail, fail: fail }; });
+  return p.then(function () {
+    return { ok: list.length - fail, fail: fail, err: err };
+  });
 }
 /* 换电脑连接时重置全部照片的上传标记：s 标记只代表「传到当前这台电脑」，
    换一台就要全部重传（电脑端照片按内容 md5 去重，重传不会产生重复文件）。
@@ -1257,7 +1263,8 @@ function syncAll(manual, full) {
         var phUploaded = phRes && phRes.ok, phFail = phRes && phRes.fail;
         if (phFail) {
           toast('同步完成：记录 ' + n + ' 条；照片 ' + phFail + ' 张上传失败'
-                + '（检查电脑连接，下次同步自动重试）');
+                + (phRes && phRes.err ? '（' + String(phRes.err).slice(0, 40) + '）' : '')
+                + '，下次同步自动重试');
         } else if (phUploaded) {
           toast('同步完成：记录 ' + n + ' 条，照片 ' + phUploaded + ' 张已上传');
         } else if (n) {
@@ -1275,6 +1282,37 @@ function syncAll(manual, full) {
   });
 }
 $('btnSync').onclick = function () { syncAll(true, true); };
+/* 重新上传：把手机里的全部数据和全部照片强制推一遍到当前连接的电脑。
+   电脑「手机数据」区按手机编号覆盖（= 以手机为准），主库存不受影响；
+   照片按内容去重，电脑上已有的不会重复。用于「电脑上只剩数据没图片」等
+   各种状态错乱的兜底修复。
+   注意：App 的 WebView 未接管 onJsConfirm，confirm() 会被静默取消 →
+   这里用「点两次确认」代替（5 秒内再点一次才执行）。 */
+var _resyncArm = 0;
+$('btnResync').onclick = function () {
+  var btn = $('btnResync');
+  if (!DB.share.token) { toast('请先在设置里连接电脑'); return; }
+  var now = Date.now();
+  if (now - _resyncArm > 5000) {
+    _resyncArm = now;
+    btn.textContent = '再点一次确认';
+    toast('重新上传：手机数据+全部照片重推到电脑（手机数据区以手机为准）');
+    setTimeout(function () {
+      _resyncArm = 0;
+      var b = $('btnResync');
+      if (b) b.textContent = '重新上传（数据+照片）';
+    }, 5000);
+    return;
+  }
+  _resyncArm = 0;
+  btn.textContent = '重新上传（数据+照片）';
+  resetPhSynced();
+  DB.share.phVer = PH_SYNC_VER;
+  DB.share.phBase = DB.share.base || DB.share.phBase;
+  saveDB();
+  toast('开始重新上传…');
+  syncAll(true, true);
+};
 $('btnAuto').onclick = function () {
   DB.share.auto = DB.share.auto ? 0 : 1;
   saveDB(); renderShare(); renderSync();
@@ -1303,6 +1341,7 @@ function renderSync() {
     (n && !DB.share.token ? '（连接电脑后同步）' : '');
   /* 只要已连接就能随时点同步（没有待同步数据时点了会提示，不置灰） */
   $('btnSync').disabled = !DB.share.token;
+  $('btnResync').disabled = !DB.share.token;
 }
 
 /* ================= 库存 ================= */
