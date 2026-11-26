@@ -585,21 +585,30 @@ class PhotoStrip(tk.Frame):
                     nn = names[idx["i"]]
                     stem, ext = os.path.splitext(nn)
                     default = "%s_%s%s" % (self.code, stem, ext or ".jpg")
+                    # 默认定位到「所选目录/型号」子文件夹（保存时自动创建）
+                    base = self.app._dialog_dir()
+                    try:
+                        sub = self.app.store.photo_export_folder(
+                            self.kind, self.code)
+                    except Exception:
+                        sub = ""
+                    initial = os.path.join(base, sub) if sub else base
                     path = filedialog.asksaveasfilename(
                         parent=pv, title="保存图片", initialfile=default,
-                        initialdir=self.app._dialog_dir(),
+                        initialdir=initial,
                         defaultextension=ext or ".jpg",
                         filetypes=[("图片", "*.jpg *.jpeg *.png"),
                                    ("所有文件", "*.*")])
                     if not path:
                         return
-                    self.app._note_dir(path)
+                    self.app._note_dir(os.path.dirname(path))
                     raw = self._bytes_of(nn)
                     if not raw:
                         messagebox.showerror("保存图片", "照片数据读取失败",
                                              parent=pv)
                         return
                     try:
+                        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
                         with open(path, "wb") as f:
                             f.write(raw)
                     except OSError as e:
@@ -715,11 +724,24 @@ class PhotoStrip(tk.Frame):
                 tip.configure(text="请先单击选中要保存的照片")
                 return
             folder = filedialog.askdirectory(
-                parent=win, title="选择保存位置", mustexist=True,
-                initialdir=self.app._dialog_dir())
+                parent=win, title="选择保存位置（自动建型号文件夹）",
+                mustexist=True, initialdir=self.app._dialog_dir())
             if not folder:
                 return
             self.app._note_dir(folder)
+            # 自动以本条记录的型号建子文件夹（同名已存在则直接用）
+            sub = ""
+            try:
+                sub = self.app.store.photo_export_folder(self.kind, self.code)
+            except Exception:
+                sub = ""
+            target = os.path.join(folder, sub) if sub else folder
+            try:
+                os.makedirs(target, exist_ok=True)
+            except OSError as e:
+                messagebox.showerror("保存失败", str(e)[:100], parent=win)
+                return
+            folder = target
             used = set()
             ok, err = 0, ""
             for n in picked:

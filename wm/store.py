@@ -1232,6 +1232,37 @@ class Store(object):
         except OSError:
             return []
 
+    def photo_export_folder(self, kind, code):
+        """照片导出的子文件夹名：库存/手机数据取型号，制作单取标题，
+        都取不到就退回编号。已去掉文件名非法字符，空则退回编号。"""
+        name = ""
+        try:
+            with self._lock:
+                if kind == "item":
+                    cur = self.conn.execute(
+                        'SELECT "model" FROM items WHERE "code" = ? '
+                        'AND deleted_at IS NULL ORDER BY id DESC LIMIT 1',
+                        (code,))
+                    row = cur.fetchone()
+                    name = (row["model"] if row else "") or ""
+                elif kind == "phone":
+                    cur = self.conn.execute(
+                        'SELECT "model" FROM phone_items WHERE "code" = ? '
+                        'ORDER BY lid DESC LIMIT 1', (code,))
+                    row = cur.fetchone()
+                    name = (row["model"] if row else "") or ""
+                elif kind == "wf":
+                    cur = self.conn.execute(
+                        'SELECT title, target FROM workflows WHERE no = ? '
+                        'ORDER BY id DESC LIMIT 1', (code,))
+                    row = cur.fetchone()
+                    if row:
+                        name = (row["title"] or row["target"] or "")
+        except Exception:
+            name = ""
+        name = re.sub(r'[\\/:*?"<>|]+', "_", str(name)).strip()
+        return name or str(code)
+
     def photo_codes(self, kind):
         """该类别下所有存有照片的编号集合（扫一遍照片目录，轻量）。
         供表格渲染 📷 指示列，避免逐条 photos_list。"""
