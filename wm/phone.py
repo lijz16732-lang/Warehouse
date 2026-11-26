@@ -63,6 +63,9 @@ class PhoneTab(ttk.Frame):
         self._hovers = {}         # tree → RowHover（划过行高亮）
         self._cell_hovers = {}    # tree → CellHover（划过单元格"选中"高亮）
         self._kw_debounce = None
+        self._sort = {}           # tree → (排序列, 是否倒序)（点表头切换）
+        self._cols_def = {}       # tree → 列定义（排序箭头 / 拖选范围用）
+        self._drag = {}           # tree → 拖选区块状态（anchor / block）
         self._build()
 
     # ------------------------------------------------------------ UI
@@ -102,6 +105,9 @@ class PhoneTab(ttk.Frame):
         self.lbl_summary = tk.Label(flt, text="", bg=CLR_BG, fg=CLR_MUTED,
                                     font=(self.fam, 9))
         self.lbl_summary.pack(side="left", padx=(10, 0))
+        tk.Label(flt, text="拖选区块 · Ctrl+C 复制 · Ctrl+A 全选 · 点表头排序 · 右键更多",
+                 bg=CLR_BG, fg=CLR_MUTED,
+                 font=(self.fam, 9)).pack(side="right")
 
         # 子页签：手机库存 / 手机出售记录
         self.nb = ttk.Notebook(self)
@@ -204,9 +210,11 @@ class PhoneTab(ttk.Frame):
         vs = ttk.Scrollbar(wrap, orient="vertical", style="Vertical.TScrollbar",
                            command=tree.yview)
         tree.configure(yscrollcommand=vs.set)
+        self._cols_def[tree] = cols_def
         for key, title, w in cols_def:
             anc = _PHONE_ANCHOR.get(key, "center")
-            tree.heading(key, text=title, anchor=anc)
+            tree.heading(key, text=title, anchor=anc,
+                         command=lambda t=tree, k=key: self._sort_tree(t, k))
             tree.column(key, width=w, anchor=anc,
                         stretch=(key in ("model", "remark", "brand")))
         if is_items:
@@ -224,14 +232,29 @@ class PhoneTab(ttk.Frame):
         self._hovers[tree] = RowHover(tree, self.app.root)
         self._cell_hovers[tree] = CellHover(tree)   # 划过单元格"选中"式高亮
         tree.bind("<Delete>", lambda e: self.delete_selected())
-        # 划过高亮行上 Ctrl+C：复制鼠标所指单元格（不在表格上则复制选中行）
+        # v1.43.7 与主库存页对齐的基础操作：
+        # Ctrl+A 全选本表 / Ctrl+C 复制（悬停格 > 拖选区块 > 选中行）/ 拖选区块
+        tree.bind("<Control-a>", lambda e, t=tree: self._select_all(t))
         tree.bind("<Control-c>", lambda e, t=tree: self._copy_hover(t))
-        # 右键菜单：复制 / 删除选中 / 转入库存（仅手机库存表）
+        tree.bind("<Button-1>", lambda e, t=tree: self._drag_press(t, e), add="+")
+        tree.bind("<B1-Motion>", lambda e, t=tree: self._drag_motion(t, e),
+                  add="+")
+        tree.bind("<ButtonRelease-1>",
+                  lambda e, t=tree: self._drag_release(t, e), add="+")
+        # 右键菜单：复制六件套 / 删除 / 转入库存（仅手机库存表）/ 标记颜色
         menu = tk.Menu(tree, tearoff=0)
         menu.add_command(label="复制此格",
                          command=lambda t=tree: self._copy_menu_cell(t))
         menu.add_command(label="复制整行",
                          command=lambda t=tree: self._copy_menu_row(t))
+        menu.add_command(label="复制选中行",
+                         command=lambda t=tree: self._copy_selected(t))
+        menu.add_command(label="复制整列",
+                         command=lambda t=tree: self._copy_menu_col(t))
+        menu.add_command(label="复制区块",
+                         command=lambda t=tree: self._copy_block(t))
+        menu.add_command(label="复制全部结果",
+                         command=lambda t=tree: self._copy_all(t))
         menu.add_separator()
         menu.add_command(label="删除选中", command=self.delete_selected)
         if is_items:
@@ -256,20 +279,34 @@ class PhoneTab(ttk.Frame):
         menu.add_command(label="刷新", command=self.refresh_rows)
 
         def _popup(ev):
-            tree._rb_x, tree._rb_y = ev.x, ev.y   # 右键位置（复制此格用）
-            # 空白处右键也弹菜单（此时保留原有选中，不动选择）
+            tree._rb_x, tree._rb_y = ev.x, ev.y   # 右键位置（复制此格/整列用）
+            try:
+                tree._rb_col = int(str(tree.identify_column(ev.x))
+                                   .replace("#", "")) - 1
+            except (TypeError, ValueError):
+                tree._rb_col = None
             iid = tree.identify_row(ev.y)
             if iid and iid not in tree.selection():
                 tree.selection_set(iid)      # 右键落在未选中的行：改为只选该行
                 tree.focus(iid)
             try:
-                # 没有选中行时「删除选中/转入库存」灰掉，避免点了才提示
+                # 选中/区块决定动作菜单项的可用状态，避免点了才提示
                 has_sel = bool(tree.selection())
+                n_sel = len(tree.selection())
+                blk = (self._drag.get(tree) or {}).get("block")
+                states = {"删除选中": has_sel, "转入库存": has_sel,
+                          "复制选中行": has_sel,
+                          "复制区块": bool(blk and blk.get("rows"))}
                 for _i in range(menu.index("end") + 1):
-                    if (menu.type(_i) == "command"
-                            and menu.entrycget(_i, "label") in ("删除选中", "转入库存")):
+                    if menu.type(_i) != "command":
+                        continue
+                    lb = menu.entrycget(_i, "label")
+                    if lb == "复制选中行" and has_sel:
                         menu.entryconfigure(
-                            _i, state="normal" if has_sel else "disabled")
+                            _i, label="复制选中行（%d 行）" % n_sel)
+                    if lb in states:
+                        menu.entryconfigure(
+                            _i, state="normal" if states[lb] else "disabled")
                 menu.tk_popup(ev.x_root, ev.y_root)
             finally:
                 menu.grab_release()
@@ -449,6 +486,13 @@ class PhoneTab(ttk.Frame):
         self._fill_choices(self.cb_buyer, self.var_f_buyer, raw_sales, "buyer")
         self.item_rows = [r for r in raw_items if self._match_item(r)]
         self.sale_rows = [r for r in raw_sales if self._match_sale(r)]
+        # 表头排序状态保持：重查后按已选列重新排序，箭头同步
+        for tr, rows in ((self.tree_items, self.item_rows),
+                         (self.tree_sales, self.sale_rows)):
+            st = self._sort.get(tr)
+            if st:
+                rows.sort(key=self._sort_key(st[0]), reverse=st[1])
+            self._headings(tr)
         self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS,
                    self._item_state,
                    photo_codes=self._store().photo_codes("phone"),
@@ -471,6 +515,7 @@ class PhoneTab(ttk.Frame):
     def _fill(self, tree, rows, cols_def, extra=None, photo_codes=None,
               kind=None):
         tree.delete(*tree.get_children())
+        self._drag[tree] = {"anchor": None, "block": None}   # 旧行已失效
         mapping = {}                       # 每个 tree 独立映射（共用会互相覆盖）
         self._maps[tree] = mapping
         colors = self._store().m_colors() if kind else {}
@@ -701,10 +746,12 @@ class PhoneTab(ttk.Frame):
         return len(self.item_rows), len(self.sale_rows)
 
     # ------------------------------------------------------------ 复制
-    def _clip(self, text):
+    def _clip(self, text, msg=None):
         r = self.root()
         r.clipboard_clear()
         r.clipboard_append(text)
+        if msg:
+            self._status(msg)
 
     def _cell_text(self, tree, x, y):
         """(x, y) 处单元格文本；不在数据单元格上返回 None。"""
@@ -723,7 +770,7 @@ class PhoneTab(ttk.Frame):
         return str(vals[cidx])
 
     def _copy_hover(self, tree):
-        """Ctrl+C：划过高亮行上 → 复制鼠标所指单元格；否则复制选中行。"""
+        """Ctrl+C 优先级：悬停单元格 > 拖选区块 > 选中行（与主库存页一致）。"""
         hv = self._hovers.get(tree)
         iid = hv.row if hv else None
         px, py = tree.winfo_pointerxy()
@@ -734,12 +781,187 @@ class PhoneTab(ttk.Frame):
                 self._clip(text)
                 self._status("已复制：%s" % text[:60])
                 return
+        if self._copy_block(tree, silent=False):
+            return
         sels = tree.selection()
         if sels:
             lines = ["\t".join(str(v) for v in tree.item(s, "values"))
                      for s in sels]
             self._clip("\n".join(lines))
             self._status("已复制 %d 行" % len(sels))
+
+    def _copy_selected(self, tree):
+        """复制选中行为 TSV（可直接粘贴进 Excel）。"""
+        sels = tree.selection()
+        if not sels:
+            self._status("请先选中行")
+            return
+        lines = ["\t".join(str(v) for v in tree.item(s, "values"))
+                 for s in sels]
+        self._clip("\n".join(lines), "已复制 %d 行（可贴进 Excel）" % len(sels))
+
+    def _copy_menu_col(self, tree):
+        """复制右键所在列的整列（当前表格全部行）。"""
+        cidx = getattr(tree, "_rb_col", None)
+        cols_def = self._cols_def.get(tree) or ()
+        if cidx is None or not (0 <= cidx < len(cols_def)):
+            cidx = 0
+        title = cols_def[cidx][1]
+        vals = [self._cell_str(tree, iid, cidx)
+                for iid in tree.get_children()]
+        if not vals:
+            self._status("没有可复制的数据")
+            return
+        self._clip("\n".join(vals), "已复制「%s」列 %d 项" % (title, len(vals)))
+
+    def _copy_all(self, tree):
+        """复制当前表格全部结果（含表头，可直接粘贴成带标题的表格）。"""
+        cols_def = self._cols_def.get(tree) or ()
+        rows = self.item_rows if tree is self.tree_items else self.sale_rows
+        if not rows:
+            self._status("没有可复制的数据")
+            return
+        ncol = len(cols_def)
+        lines = ["\t".join(c[1] for c in cols_def)]
+        for iid in tree.get_children():
+            vals = tree.item(iid, "values")
+            lines.append("\t".join(str(v) for v in vals[:ncol]))
+        self._clip("\n".join(lines),
+                   "已复制全部结果 %d 行（含表头）" % len(rows))
+
+    def _copy_block(self, tree, silent=True):
+        """复制拖选出来的单元格区块（TSV，可直接贴进 Excel）。有区块返回 True。"""
+        blk = (self._drag.get(tree) or {}).get("block")
+        if not blk or not blk.get("rows"):
+            if not silent:
+                self._status("没有选中区块（按住左键拖选）")
+            return False
+        lines = []
+        for iid in blk["rows"]:
+            vals = tree.item(iid, "values")
+            lines.append("\t".join(str(v)
+                                   for v in vals[blk["c0"]:blk["c1"] + 1]))
+        self._clip("\n".join(lines),
+                   "已复制区块（%d 行 × %d 列）" % (len(blk["rows"]),
+                                              blk["c1"] - blk["c0"] + 1))
+        return True
+
+    # ---------------------------------------------------------- 拖选区块
+    def _drag_cell(self, tree, ev):
+        """事件坐标 → (行 iid, 列下标)；不在数据单元格上返回 None。
+        📷 指示列等超出数据列的范围不参与框选。"""
+        cols_def = self._cols_def.get(tree) or ()
+        try:
+            if tree.identify_region(ev.x, ev.y) != "cell":
+                return None
+            row = tree.identify_row(ev.y)
+            cidx = int(str(tree.identify_column(ev.x)).replace("#", "")) - 1
+        except (TypeError, ValueError, tk.TclError):
+            return None
+        if not row or not isinstance(cidx, int) or not (0 <= cidx < len(cols_def)):
+            return None
+        return str(row), int(cidx)
+
+    def _drag_press(self, tree, ev):
+        """按下左键：重置上一次的区块选择，记录框选起点。"""
+        self._drag[tree] = {"anchor": self._drag_cell(tree, ev),
+                            "block": None, "hint": None}
+
+    def _drag_motion(self, tree, ev):
+        """拖动中：实时算出框选区块并提示（不改动行选择）。"""
+        d = self._drag.get(tree)
+        if not d or not d.get("anchor"):
+            return
+        cell = self._drag_cell(tree, ev)
+        if not cell:
+            return
+        (r0, c0), (r1, c1) = d["anchor"], cell
+        children = tree.get_children()
+        try:
+            i, j = children.index(r0), children.index(r1)
+        except ValueError:
+            return
+        blk = {"rows": list(children[min(i, j):max(i, j) + 1]),
+               "c0": min(c0, c1), "c1": max(c0, c1)}
+        if len(blk["rows"]) * (blk["c1"] - blk["c0"] + 1) > 1:
+            d["block"] = blk
+            hint = "已框选 %d 行 × %d 列，松开后 Ctrl+C 复制" % (
+                len(blk["rows"]), blk["c1"] - blk["c0"] + 1)
+            if d.get("hint") != hint:
+                d["hint"] = hint
+                self._status(hint)
+
+    def _drag_release(self, tree, ev):
+        """松开左键：区块保留（Ctrl+C / 右键可复制），起点清掉。"""
+        d = self._drag.get(tree)
+        if d:
+            d["anchor"] = None
+
+    # ---------------------------------------------------------- 全选 / 排序
+    def _select_all(self, tree):
+        """Ctrl+A：全选当前表（本页全部行，不是全量数据）。"""
+        children = tree.get_children()
+        if children:
+            tree.selection_set(children)
+            tree.focus(children[-1])
+        self._status("已全选 %d 行" % len(children))
+        return "break"
+
+    @staticmethod
+    def _sort_key(key):
+        """排序取值：数量/价格/合计按数值，其余按文本。"""
+        if key in ("qty", "price", "total"):
+            def f(r):
+                try:
+                    return float(r.get(key) or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+            return f
+        return lambda r: str(r.get(key) or "").strip().lower()
+
+    def _title(self, tree, key):
+        for k, t, _w in (self._cols_def.get(tree) or ()):
+            if k == key:
+                return t
+        return key
+
+    def _sort_tree(self, tree, key):
+        """点表头排序：再点同列切换升/降序，点其他列重新升序。"""
+        st = self._sort.get(tree)
+        desc = bool(st and st[0] == key and not st[1])
+        self._sort[tree] = (key, desc)
+        rows = self.item_rows if tree is self.tree_items else self.sale_rows
+        rows.sort(key=self._sort_key(key), reverse=desc)
+        self._headings(tree)
+        self._refill(tree)
+        self._status("已按「%s」%s排序" % (self._title(tree, key),
+                                       "倒序" if desc else "升序"))
+
+    def _headings(self, tree):
+        """表头箭头与排序状态同步。"""
+        st = self._sort.get(tree) or (None, False)
+        for key, title, _w in (self._cols_def.get(tree) or ()):
+            if key == st[0]:
+                tree.heading(key, text=title + (" ▼" if st[1] else " ▲"))
+            else:
+                tree.heading(key, text=title)
+
+    def _refill(self, tree):
+        """按当前行数据重画表格（排序后调用，不重新查库）。"""
+        if tree is self.tree_items:
+            self._fill(self.tree_items, self.item_rows, PHONE_ITEM_COLS,
+                       self._item_state,
+                       photo_codes=self._store().photo_codes("phone"),
+                       kind="item")
+        else:
+            self._fill(self.tree_sales, self.sale_rows, PHONE_SALE_COLS,
+                       kind="sale")
+
+    @staticmethod
+    def _cell_str(tree, iid, cidx):
+        """行 iid 第 cidx 列的显示文本。"""
+        vals = tree.item(iid, "values")
+        return str(vals[cidx]) if cidx < len(vals) else ""
 
     def _copy_menu_cell(self, tree):
         x = getattr(tree, "_rb_x", None)
