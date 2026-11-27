@@ -938,6 +938,11 @@ class App(object):
         self._sep(inner)
         ttk.Button(inner, text="批量修改", width=9,
                    command=self.batch_edit).pack(side="left")
+        # v1.45.6：主库存工具栏补「刷新」按钮（原来只有 数据菜单/F5 入口）——
+        # 局域网多工位场景要能随手重读电脑端数据库，不必记快捷键。
+        self._sep(inner)
+        ttk.Button(inner, text="刷新", style="Ghost.TButton", width=5,
+                   command=self.load_data).pack(side="left")
 
         # 侧栏筛选 + 表格
     def _build_body(self):
