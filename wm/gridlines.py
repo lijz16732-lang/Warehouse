@@ -19,7 +19,7 @@ import time
 
 import tkinter as tk
 
-from .constants import (CLR_ACCENT, CLR_ACCENT_LT, CLR_BORDER_LT, CLR_HOVER_BG,
+from .constants import (CLR_ACCENT, CLR_ACCENT_LT, CLR_BORDER_LT,
                         CLR_INPUT, CLR_LOW_BG, CLR_ROW_ALT, CLR_SEL,
                         CLR_UNLISTED_BG)
 from .pillimg import capsule_b64
@@ -253,11 +253,7 @@ class TreeDecor(object):
                     return c
         except Exception:
             pass
-        try:
-            if self.app.hover is not None and str(iid) == self.app.hover.row:
-                return CLR_HOVER_BG
-        except Exception:
-            pass
+        # 划过整行高亮已移除（v1.45.1）：开关底色只跟用户上色 / 下架灰
         try:
             tags = self.tree.item(iid, "tags")
         except Exception:
@@ -320,12 +316,10 @@ class TreeDecor(object):
             cv._sig = None       # 内容改由 _draw_pill 直接画，签名作废以便下轮重认
 
     def _bind_pill_events(self, cv):
-        """开关只接管左键；滚轮/划过/右键必须自己补，否则指针停在开关上就断。"""
+        """开关只接管左键；滚轮/右键必须自己补，否则指针停在开关上就断。
+        （划过整行高亮已移除，v1.45.1——Motion/Enter/Leave 不再需要转发）"""
         app = self.app
         cv.bind("<MouseWheel>", app._on_wheel)
-        cv.bind("<Motion>", app.hover._on_motion)
-        cv.bind("<Enter>", app.hover._on_motion)
-        cv.bind("<Leave>", app.hover._on_leave)
         cv.bind("<Button-3>", lambda e: self.tree.event_generate(
             "<Button-3>", x=e.x, y=e.y, rootx=e.x_root, rooty=e.y_root))
 

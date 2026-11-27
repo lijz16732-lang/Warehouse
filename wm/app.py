@@ -28,7 +28,7 @@ from .stocktake import StocktakeTab
 from .workflow import WorkflowTab
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
-                        CLR_ACCENT_LT, CLR_HEAD_FG, CLR_HOVER_EDGE, CLR_INPUT, CLR_LOW_BG,
+                        CLR_ACCENT_LT, CLR_HEAD_FG, CLR_INPUT, CLR_LOW_BG,
                         CLR_LOW_FG, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TAB_HV,
                         CLR_UNLISTED_BG, CLR_UNLISTED_FG, CLR_TEXT, CLR_WARN,
                         FIELD_ANCHOR, FIELD_KEYS, FIELD_LABEL, FIELD_TYPE,
@@ -44,7 +44,7 @@ from .xlsxio import normalize_record
 from .store import Store, dedupe_records
 from .lan import DEFAULT_PORT, LanServer, local_ips
 from .remote import HostUnreachable, PermissionDenied, RemoteError, RemoteStore
-from .theme import CellHover, RowHover, apply_theme, dot_check
+from .theme import apply_theme, dot_check
 
 PAGE_SIZES = ["100", "200", "500", "1000", "全部"]
 
@@ -159,7 +159,7 @@ class App(object):
         self._paint_labels = []
         self._scroll_job = None       # 滚动后重画贴片的 idle 任务
         self._head_h = 0              # 表头高度（内容区上沿，用来裁剪贴片）
-        self.hover = None             # 鼠标划过整行高亮（建表格时创建）
+        self.hover = None             # 划过整行高亮已移除（v1.45.1，出售页仍保留）
         self.decor = None             # 网格线 + 上架开关覆盖层（v1.31.1）
         self._decor_job = None        # 覆盖层重排的 idle 任务
 
@@ -1035,7 +1035,7 @@ class App(object):
         self.lbl_table_title = tk.Label(tbar, text="库存明细", bg=CLR_CARD, fg=CLR_TEXT,
                                         font=(self.fam, 10, "bold"))
         self.lbl_table_title.pack(side="left")
-        self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · 鼠标划过高亮整行 · 拖选单元格即选中 · 右键可复制或「区域上色」",
+        self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · Ctrl+A 全选 · Ctrl/Shift 点选多行 · 拖选单元格即复制 · 右键可复制或「区域上色」",
                                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8))
         self.lbl_hint.pack(side="right")
         dot_check(tbar, "拖选即复制", self.var_drag_copy,
@@ -1059,14 +1059,8 @@ class App(object):
         self.tree.pack(side="left", fill="both", expand=True)
         hs.pack(side="bottom", fill="x", padx=10, pady=(0, 6), before=tw)
 
-        # Treeview 的 tag 优先级由「创建先后」决定（先创建的先胜，与 tags 列表顺序无关），
-        # 所以要按下面的优先级从高到低依次创建：
-        #   鼠标划过 > 下架灰 > 低库存橙 > 斑马纹
-        # 划过高亮最先建，才能盖住下架灰/低库存橙/斑马纹（v1.10.7）
-        self.hover = RowHover(self.tree, self.root)
-        self.hover.on_change = self._on_hover_change
-        # 划过单元格"文本选中"式高亮（蓝底白字贴片），配合 Ctrl+C 复制
-        self.cell_hover = CellHover(self.tree)
+        # Treeview 的 tag 优先级由「创建先后」决定（先创建的先胜，与 tags 列表顺序无关）：
+        #   下架灰 > 低库存橙 > 斑马纹（划过整行高亮已于 v1.45.1 应用户要求移除）
         # 下架（未上架）：淡灰底 + 灰字，与已上架一眼区分
         self.tree.tag_configure("unlisted", background=CLR_UNLISTED_BG, foreground=CLR_UNLISTED_FG)
         self.tree.tag_configure("low", background=CLR_LOW_BG, foreground=CLR_LOW_FG)
@@ -1083,10 +1077,12 @@ class App(object):
         self.tree.bind("<Button-3>", self.on_right_click)
         self.tree.bind("<Delete>", lambda e: self.delete_selected())
         self.tree.bind("<Control-c>", self._on_ctrl_c)
+        # Ctrl+A 全选本页（v1.45.1：之前只有菜单入口，按 Ctrl+A 没反应）
+        self.tree.bind("<Control-a>", self._on_ctrl_a)
+        self.tree.bind("<Control-A>", self._on_ctrl_a)
         # 滚动/改变尺寸/键盘上下移动后，上色贴片要重新贴合单元格
-        # 滚轮自己做主（见 _on_wheel）：Tk 自带滚动在实例绑定之后执行，
-        # 交给它滚动的话贴片会停在滚动前的像素位置，颜色看起来就"没了"
-        self.tree.bind("<MouseWheel>", self._on_wheel, add="+")   # add: 别覆盖 CellHover 的滚轮隐藏
+        # 滚轮自己做主（见 _on_wheel）
+        self.tree.bind("<MouseWheel>", self._on_wheel)
         self.tree.bind("<Configure>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyPress>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyRelease>", lambda e: self._after_scroll_soon(), add="+")
@@ -1436,7 +1432,7 @@ class App(object):
         self._drag_anchor = None
         self._drag_block = None
         self._block_preview = None
-        # 行全部重建，划过的高亮（挂在旧行上）作废
+        # 行全部重建（划过高亮已移除，出售页仍有各自的重置逻辑）
         if self.hover:
             self.hover.reset()
         self.tree.delete(*self.tree.get_children())
@@ -1823,32 +1819,6 @@ class App(object):
         if self._drag_block:
             self.copy_block()
             return "break"
-        # 划过高亮行上 Ctrl+C：直接复制鼠标所指的那个单元格（不用先点击）
-        hover_iid = getattr(self.hover, "row", None)
-        if hover_iid:
-            px, py = self.tree.winfo_pointerxy()
-            x = px - self.tree.winfo_rootx()
-            y = py - self.tree.winfo_rooty()
-            try:
-                on_cell = (0 <= x < self.tree.winfo_width()
-                           and 0 <= y < self.tree.winfo_height()
-                           and self.tree.identify_region(x, y) == "cell"
-                           and self.tree.identify_row(y) == str(hover_iid))
-            except Exception:
-                on_cell = False
-            if on_cell:
-                cols = self._cols()
-                try:
-                    cidx = int(str(self.tree.identify_column(x))
-                               .replace("#", "")) - 1
-                except (TypeError, ValueError):
-                    cidx = None
-                rec = self.by_id.get(str(hover_iid))
-                if (cidx is not None and 0 <= cidx < len(cols) and rec):
-                    col = cols[cidx]
-                    self._clip(self.fmt(col, rec),
-                               "已复制「%s」" % FIELD_LABEL.get(col, col))
-                    return "break"
         self.copy_selected()
         return "break"
 
@@ -2677,40 +2647,13 @@ class App(object):
                 pass
         self._paint_labels = []
 
-    # ------------------------------------------------ 鼠标划过整行高亮（v1.10.7）
-    def _on_hover_change(self, old, new):
-        """划过的是上色行：贴片盖住了背景色，改描边作为划过提示（不重建贴片）。"""
-        if self._row_has_paint(old) or self._row_has_paint(new):
-            self._update_hover_outline()
-        # 开关整格铺底：换行就得重刷底色，否则旧行留下一个方框
-        if self.decor is not None:
-            try:
-                self.decor.refresh_colors()
-            except Exception:
-                self.decor.redraw()
+    def _on_ctrl_a(self, _event=None):
+        """Ctrl+A 全选本页（v1.45.1：之前只有「编辑 → 全选本页」菜单入口）。"""
+        self.select_all()
+        return "break"
 
     def _row_has_paint(self, iid):
         return bool(iid and self.cell_colors.get(str(iid)))
-
-    def _update_hover_outline(self):
-        """划过/离开上色行时只改描边，不重建贴片（鼠标下的控件被销毁会抖）。"""
-        sel = set(self.tree.selection())
-        for lb in self._paint_labels:
-            rid = getattr(lb, "_row_iid", None)
-            if rid is None or rid in sel:
-                continue                      # 选中行由选中描边负责
-            try:
-                if rid == self.hover.row:
-                    lb.configure(highlightthickness=1,
-                                 highlightbackground=CLR_HOVER_EDGE,
-                                 highlightcolor=CLR_HOVER_EDGE)
-                else:
-                    lb.configure(highlightthickness=0)
-                sig = getattr(lb, "_sig", None)     # 签名同步，滚动复用才不会误判重建
-                if sig:
-                    lb._sig = sig[:3] + (rid == self.hover.row,)
-            except Exception:
-                pass
 
     def _on_wheel(self, event):
         """滚轮：自己滚 + 立刻重画贴片（返回 break，避免 Tk 再滚一次）。
@@ -2778,8 +2721,6 @@ class App(object):
         注意：判据必须是"这一页有没有上色单元格"，不能是"当前有没有贴片"——
         上色行滚出可视区后贴片为 0，用贴片数量当开关会让颜色再也回不来。
         """
-        if self.hover:
-            self.hover.sync()       # 行位置变了，划过的高亮要跟着换行
         if self.decor is not None:
             self.decor.redraw()     # 网格线/开关跟着滚动走
         if self._has_paintable():
@@ -2840,9 +2781,8 @@ class App(object):
                 if int(bbox[1]) < head_h:
                     continue   # 半行被表头压住：不画，免得贴片盖到表头上
                 want[(str(iid), key)] = (
-                    self.fmt(key, rec), color,
-                    str(iid) in sel, str(iid) == self.hover.row, bbox)
-        # 先复用：内容签名一致（文字/颜色/选中/划过）的贴片只挪位置
+                    self.fmt(key, rec), color, str(iid) in sel, bbox)
+        # 先复用：内容签名一致（文字/颜色/选中）的贴片只挪位置
         keep, stale, used = [], [], set()
         for lb in self._paint_labels:
             k = getattr(lb, "_cell", None)
@@ -2850,8 +2790,8 @@ class App(object):
             if info is None or k in used:
                 stale.append(lb)
                 continue
-            text, bg, is_sel, is_hover, bbox = info
-            sig = (text, bg, is_sel, is_hover)
+            text, bg, is_sel, bbox = info
+            sig = (text, bg, is_sel)
             if getattr(lb, "_sig", None) != sig:
                 stale.append(lb)
                 continue
@@ -2870,7 +2810,7 @@ class App(object):
             except Exception:
                 pass
         # 重建复用不了的（新增 / 文字颜色状态变化）
-        for k, (text, bg, is_sel, is_hover, bbox) in want.items():
+        for k, (text, bg, is_sel, bbox) in want.items():
             if k in used:
                 continue
             lb = tk.Label(self.tree, text=text, bg=bg, fg=CLR_TEXT, font=font,
@@ -2883,16 +2823,11 @@ class App(object):
                 lb.configure(highlightthickness=2,
                              highlightbackground=CLR_ACCENT,
                              highlightcolor=CLR_ACCENT, font=bold)
-            elif is_hover:
-                # 划过的行：贴片盖住了背景色，用淡蓝描边代替整行高亮
-                lb.configure(highlightthickness=1,
-                             highlightbackground=CLR_HOVER_EDGE,
-                             highlightcolor=CLR_HOVER_EDGE)
             lb.place(x=int(bbox[0]), y=int(bbox[1]),
                      width=int(bbox[2]), height=int(bbox[3]))
-            lb._row_iid = k[0]         # 划过时按行改描边（不重建贴片）
+            lb._row_iid = k[0]         # 贴片所属行（事件定位用）
             lb._cell = k               # 滚动时按格复用（增量重排）
-            lb._sig = (text, bg, is_sel, is_hover)
+            lb._sig = (text, bg, is_sel)
             self._bind_overlay_events(lb)
             self._paint_labels.append(lb)
         if self.decor is not None:
@@ -2912,13 +2847,37 @@ class App(object):
 
         def _press(event):
             ev = _map(event)
-            # 按下贴片时同步选中该行：与普通格子的行为一致，
-            # 且拖选区块万一没形成时，「按选中行上色」也不会落到别的行上
+            # 按下贴片时按修饰键决定选择行为，与 Treeview 原生一致：
+            # 普通点击=只选该行；Ctrl=切换该行；Shift=从焦点行加选到该行。
+            # （v1.45.1 修复：原来无条件 selection_set，Ctrl/Shift 点上色格
+            #  会把已选的多行打散 → 「上色后不能多选」）
             iid, _idx = self._cell_at(ev.x, ev.y)
             if iid:
+                state = int(getattr(event, "state", 0) or 0)
                 try:
-                    self.tree.selection_set(iid)
-                    self.tree.focus(iid)
+                    if state & 0x0004:                      # Ctrl
+                        if str(iid) in self.tree.selection():
+                            self.tree.selection_remove(iid)
+                        else:
+                            self.tree.selection_add(iid)
+                        self.tree.focus(iid)
+                    elif state & 0x0001:                    # Shift
+                        anchor = self.tree.focus()
+                        kids = self.tree.get_children()
+                        if anchor and str(anchor) in kids and str(iid) in kids:
+                            i, j = sorted((kids.index(str(anchor)),
+                                           kids.index(str(iid))))
+                            self.tree.selection_add(kids[i:j + 1])
+                        else:
+                            self.tree.selection_add(iid)
+                        self.tree.focus(iid)
+                    else:
+                        self.tree.selection_set(iid)
+                        self.tree.focus(iid)
+                except Exception:
+                    pass
+                try:
+                    self.tree.focus_set()   # 焦点回到表格，Ctrl+A/Ctrl+C 才有效
                 except Exception:
                     pass
             self._on_click(ev)
@@ -2929,10 +2888,6 @@ class App(object):
         lb.bind("<Button-3>", lambda e: self.on_right_click(_map(e)))
         # 鼠标停在上色格子上滚轮：由贴片接管，滚动后重画（否则滚不动）
         lb.bind("<MouseWheel>", self._on_wheel)
-        # 划过贴片时把整行高亮维持在贴片所在行（贴片挡住了 tree 的 Motion/Enter）
-        lb.bind("<Motion>", self.hover._on_motion)
-        lb.bind("<Enter>", self.hover._on_motion)
-        lb.bind("<Leave>", self.hover._on_leave)
 
     def set_low_stock(self):
         cur = int(getattr(self, "low_threshold", 3) or 0)
