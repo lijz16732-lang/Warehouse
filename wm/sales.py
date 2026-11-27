@@ -998,6 +998,10 @@ class SalesTab(ttk.Frame):
         self.tree.bind("<ButtonRelease-1>", self._on_drag_end)
         self.tree.bind("<Button-3>", self.on_right_click)
         self.tree.bind("<Control-c>", self._on_ctrl_c)
+        # v1.45.5：多选计数（选 1 行不打扰；refresh 清空触发时 n=0 不刷）
+        self.tree.bind("<<TreeviewSelect>>", lambda e: (
+            self.app._status("已选 %d 行" % len(self.tree.selection()))
+            if len(self.tree.selection()) >= 2 else None), add="+")
 
         foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=(0, 10))

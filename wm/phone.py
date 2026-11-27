@@ -231,10 +231,14 @@ class PhoneTab(ttk.Frame):
         # v1.45.3：不再挂 RowHover / CellHover（划过高亮已去掉）
         tree.bind("<Delete>", lambda e: self.delete_selected())
         # v1.43.7 与主库存页对齐的基础操作：
-        # Ctrl+A 全选本表 / Ctrl+C 复制（悬停格 > 拖选区块 > 选中行）/ 拖选区块
+        # Ctrl+A 全选本表 / Ctrl+C 复制（拖选区块 > 选中行）/ 拖选区块
         tree.bind("<Control-a>", lambda e, t=tree: self._select_all(t))
         tree.bind("<Control-A>", lambda e, t=tree: self._select_all(t))
         tree.bind("<Control-c>", lambda e, t=tree: self._on_ctrl_c(t))
+        # v1.45.5：多选计数（选 1 行不打扰；refresh 清空触发时 n=0 不刷）
+        tree.bind("<<TreeviewSelect>>", lambda e, t=tree: (
+            self._status("已选 %d 行" % len(t.selection()))
+            if len(t.selection()) >= 2 else None), add="+")
         tree.bind("<Button-1>", lambda e, t=tree: self._drag_press(t, e), add="+")
         tree.bind("<B1-Motion>", lambda e, t=tree: self._drag_motion(t, e),
                   add="+")

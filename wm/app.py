@@ -1513,6 +1513,10 @@ class App(object):
 
     def on_select(self, _e=None):
         self._update_detail()
+        # v1.45.5：多选时状态栏显示计数（选 1 行不打扰，0 行是 refresh 清空不刷）
+        n = len(self.tree.selection())
+        if n >= 2:
+            self._status("已选 %d 行" % n)
 
     def _update_detail(self):
         blk = self._block_preview
