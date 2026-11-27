@@ -235,6 +235,7 @@ class PhoneTab(ttk.Frame):
         # v1.43.7 与主库存页对齐的基础操作：
         # Ctrl+A 全选本表 / Ctrl+C 复制（悬停格 > 拖选区块 > 选中行）/ 拖选区块
         tree.bind("<Control-a>", lambda e, t=tree: self._select_all(t))
+        tree.bind("<Control-A>", lambda e, t=tree: self._select_all(t))
         tree.bind("<Control-c>", lambda e, t=tree: self._copy_hover(t))
         tree.bind("<Button-1>", lambda e, t=tree: self._drag_press(t, e), add="+")
         tree.bind("<B1-Motion>", lambda e, t=tree: self._drag_motion(t, e),

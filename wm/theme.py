@@ -398,12 +398,19 @@ class CellHover:
 
     # ----------------------------------------------------------------
     def _forward(self, seq, e):
-        """把贴片收到的事件在 tree 上原样再生成一次（坐标换算成相对 tree）。"""
+        """把贴片收到的事件在 tree 上原样再生成一次（坐标换算成相对 tree）。
+
+        v1.45.2 关键修复：必须把 state（修饰键）一起转发——贴片盖住格子时
+        Ctrl+点击 / Shift+点击 会被当成普通点击（extended 多选被冲掉）。
+        Windows 下 Tk 把 <Control-Button-1> 映射成 <<ToggleSelection>>，
+        Treeview 原生按 state 做 toggle / extend，所以带上 state 即可。
+        """
         t = self.tree
         try:
             kw = {"x": int(e.x_root) - t.winfo_rootx(),
                   "y": int(e.y_root) - t.winfo_rooty(),
-                  "rootx": int(e.x_root), "rooty": int(e.y_root)}
+                  "rootx": int(e.x_root), "rooty": int(e.y_root),
+                  "state": int(getattr(e, "state", 0) or 0)}
             d = int(getattr(e, "delta", 0) or 0)
             if d:
                 kw["delta"] = d
