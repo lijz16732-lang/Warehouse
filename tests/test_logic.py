@@ -1144,6 +1144,16 @@ try:
           all(x in _app_src for x in ("PhotoStrip", "photo_strip"))
           and "PhotoStrip" in open(os.path.join(_wm_dir, "phone.py"),
                                    encoding="utf-8").read())
+    # v1.45.4：边缘滑动/返回键 = App 内返回上一级（弹层→二级页），没级才退后台；
+    # MainActivity 必须先问页面的 __androidBack()，页面必须定义返回栈逻辑
+    _main_src = open(os.path.join(ROOT, "android", "src", "com", "cangguanjia",
+                                  "app", "MainActivity.java"),
+                     encoding="utf-8").read()
+    check("手机返回手势：MainActivity 先问 __androidBack，页面有返回栈",
+          "__androidBack" in _app_html_ph
+          and "window.__androidBack = function" in _app_html_ph
+          and "moveTaskToBack" in _main_src
+          and "__androidBack" in _main_src)
     # v1.29.2 手机数据页筛选，导出跟随筛选结果
     _phone_src = open(os.path.join(_wm_dir, "phone.py"), encoding="utf-8").read()
     check("手机数据页筛选：库存(品牌/品类/成色/状态/同步时间) + 出售(类型/买家/时间到分)",

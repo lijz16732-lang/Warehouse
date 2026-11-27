@@ -1076,6 +1076,27 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            // v1.45.4：边缘滑动/返回键 = App 内返回上一级（关弹层 → 退二级页），
+            // 没有上一级才退到后台（moveTaskToBack，不退出，数据和登录都保留）。
+            // 页面里先问 __androidBack()：true=页面已消费；false=没弹层没二级页。
+            if (web != null) {
+                if (web.canGoBack()) {
+                    web.goBack();
+                    return true;
+                }
+                web.evaluateJavascript(
+                        "(function(){try{return !!(window.__androidBack"
+                                + "&&window.__androidBack())}catch(e){return false}})()",
+                        new ValueCallback<String>() {
+                            @Override
+                            public void onReceiveValue(String v) {
+                                if (!"true".equals(v)) {
+                                    moveTaskToBack(true);
+                                }
+                            }
+                        });
+                return true;
+            }
             moveTaskToBack(true);      // 不直接退出，保留数据与登录状态
             return true;
         }

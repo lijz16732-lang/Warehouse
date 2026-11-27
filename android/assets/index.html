@@ -1959,6 +1959,27 @@ function hideSub() {
 $('btnAddBack').onclick = hideSub;
 $('btnSellBack').onclick = hideSub;
 
+/* ================= Android 边缘滑动返回（v1.45.4） =================
+   现代手机的手势导航：屏幕边缘滑动 = 返回上一级，而不是退出 App。
+   返回优先级：弹层/操作面板(#mask) → 二级页(录入/出售) → 退到后台
+   （退后台不是退出：数据和登录状态都保留，点图标即可回来）。
+   MainActivity 的返回键处理会先调这个函数，返回 true 表示已消费。 */
+window.__androidBack = function () {
+  var mask = $('mask');
+  if (mask && !mask.classList.contains('hide')) {
+    mask.classList.add('hide');       // 关掉弹层/编辑面板/确认框 = 返回
+    confirmCb = null;
+    return true;
+  }
+  var a = $('pAdd'), s = $('pSell');
+  if ((a && !a.classList.contains('hide')) ||
+      (s && !s.classList.contains('hide'))) {
+    hideSub();                        // 二级页返回库存
+    return true;
+  }
+  return false;                       // 没有上一级：交回系统（退到后台）
+};
+
 /* 点商品行 → 操作面板：出售（带编号）/ 修改 / 删除 */
 function openItemPanel(r) {
   curItem = r;
