@@ -129,7 +129,7 @@ def main():
         got.count("\n") == 1 and got.count("\t") == 2
         and "APP-0001" in got and "西门子" in got, got)
     # Ctrl+C 优先级：无悬停格时走区块
-    tab._copy_hover(tree)
+    tab._on_ctrl_c(tree)
     got = clip(root)
     chk("Ctrl+C 走区块复制", "APP-0001" in got and got.count("\t") == 2, got)
 

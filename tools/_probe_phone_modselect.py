@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-"""探针：手机数据页贴片上的 Ctrl/Shift 多选 + Ctrl+A（v1.45.2）。
+"""探针：手机数据页 Ctrl/Shift 多选 + Ctrl+A（v1.45.2 / v1.45.3）。
 
-背景：手机数据页悬停的蓝色单元格贴片（CellHover）盖住格子吞掉点击，
-转发回 tree 时丢了 state 修饰键 → Ctrl/Shift+点击被当成普通点击，
-extended 多选被冲掉。v1.45.2 在 CellHover._forward 补转发 state。
+v1.45.2：CellHover._forward 转发事件时补齐 state 修饰键，贴片上的
+Ctrl/Shift+点击不再被当成普通点击。
+v1.45.3：与主库存页对齐——手机数据页移除 RowHover/CellHover 划过高亮，
+Ctrl/Shift+点击直接走 Treeview 原生 extended 行为，事件直接落在 tree 上。
 
-断言（全部走真实链路：事件打到贴片 lbl → _forward → tree）：
-1) Ctrl+点贴片 = 加选该行（保留已选）
+断言（真实按键事件）：
+1) Ctrl+点击 = 加选该行
 2) 再 Ctrl+点同一格 = 取消该行（toggle）
-3) Shift+点 = 从焦点行加选一片（区间）
-4) 普通+点 = 恢复单选（旧行为不变）
-5) Ctrl+A / Ctrl+Shift+A？ —— <Control-a> 与 <Control-A> 都绑全选
+3) Shift+点击 = 从焦点行加选一片（区间）
+4) 普通+点击 = 单选该行（旧行为不变）
+5) Ctrl+A（含大写 <Control-A>）= 全选
+6) 手机数据页不再挂 RowHover / CellHover
 用法：.venv310/Scripts/python.exe tools/_probe_phone_modselect.py
 """
 import ctypes
@@ -46,13 +48,13 @@ for lid, code, b, cat, cond, m, q, p in ITEMS:
     st.m_upsert_item(rec)      # 手机区数据
 st.close()
 
-try:                            # 探针铁律：指针移开，防悬停贴片/轮询干扰
+try:                            # 探针铁律：指针移开，防悬停干扰
     ctypes.windll.user32.SetCursorPos(2, 2)
 except Exception:
     pass
 
 root = tk.Tk()
-root.geometry("1200x800+20+20")     # 真显形：贴片链路要用 bbox/winfo_rootx
+root.geometry("1200x800+20+20")     # 真显形：bbox 需要控件已布局
 app = wapp.App(root)
 tab = app.tab_phone
 app.nb.select(tab)
@@ -60,7 +62,6 @@ tab.refresh_tab()
 root.update()
 
 tree = tab.tree_items
-ch = tab._cell_hovers[tree]
 kids = [str(i) for i in tree.get_children()]
 r0, r1, r2, r3, r4 = kids[:5]
 
@@ -80,44 +81,41 @@ def sel():
     return [str(i) for i in tree.selection()]
 
 
-def press_via_patch(iid, state):
-    """真实链路：把贴片盖在该行第一格上，向 lbl 发一次 Button-1。"""
+def press(iid, state):
+    """真实链路：向 tree 发一次 Button-1（带修饰键），坐标落在该行第一格。"""
     bb = tree.bbox(iid, "#1")
     assert bb, "bbox 取不到 %s" % iid
     bx, by, bw, bh = bb
-    ch.lbl.place(x=bx, y=by, width=bw, height=bh)
-    root.update()
-    ch.lbl.event_generate("<Button-1>", x=6, y=6, state=state,
-                          rootx=ch.lbl.winfo_rootx() + 6,
-                          rooty=ch.lbl.winfo_rooty() + 6)
-    root.update()
-    ch.hide()
+    tree.event_generate("<Button-1>", x=bx + 6, y=by + bh // 2,
+                        state=state,
+                        rootx=tree.winfo_rootx() + bx + 6,
+                        rooty=tree.winfo_rooty() + by + bh // 2)
     root.update()
 
 
 def main():
     chk("手机库存表 5 行", len(kids) == 5, kids)
 
-    # ① 普通+点贴片 = 单选该行（旧行为不变）
+    # ① 普通+点 = 单选该行（旧行为不变）
     tree.selection_set([r0, r1])
-    press_via_patch(r3, 0)
-    chk("普通点贴片 = 单选该行", sel() == [r3], str(sel()))
+    press(r3, 0)
+    chk("普通点击 = 单选该行", sel() == [r3], str(sel()))
 
     # ② Ctrl+点 = 加选
     tree.selection_set([r0, r1])
     tree.focus(r1)
-    press_via_patch(r3, 0x0004)
-    chk("Ctrl+点贴片 = 加选该行", set(sel()) == {r0, r1, r3}, str(sel()))
+    press(r3, 0x0004)
+    chk("Ctrl+点击 = 加选该行", set(sel()) == {r0, r1, r3}, str(sel()))
 
     # ③ 再 Ctrl+点同一格 = 取消该行
-    press_via_patch(r3, 0x0004)
+    press(r3, 0x0004)
     chk("Ctrl+再点 = 取消该行", set(sel()) == {r0, r1}, str(sel()))
 
     # ④ Shift+点 = 从焦点行加选一片
     tree.selection_set([r1])
     tree.focus(r1)
-    press_via_patch(r4, 0x0001)
-    chk("Shift+点 = 区间加选 r1..r4",
+    press(r4, 0x0001)
+    chk("Shift+点击 = 区间加选 r1..r4",
         set(sel()) == {r1, r2, r3, r4}, str(sel()))
 
     # ⑤ Ctrl+A 全选（真按键事件走 <Control-a> 绑定）
@@ -132,13 +130,16 @@ def main():
     root.update()
     chk("Ctrl+Shift+A(大写) = 全选", set(sel()) == set(kids), str(sel()))
 
-    # ⑥ 修饰键转发落到了 tree：state 字段已随 _forward 传递
-    tsrc = open(os.path.join(ROOT, "wm", "theme.py"), encoding="utf-8").read()
-    chk("CellHover._forward 转发 state",
-        '"state": int(getattr(e, "state"' in tsrc)
+    # ⑥ v1.45.3：划过高亮已移除
+    chk("手机页不再挂 RowHover",
+        not getattr(tab, "_hovers", {}) and "RowHover(" not in
+        open(os.path.join(ROOT, "wm", "phone.py"), encoding="utf-8").read())
+    chk("手机页不再挂 CellHover",
+        not getattr(tab, "_cell_hovers", {}) and "CellHover(" not in
+        open(os.path.join(ROOT, "wm", "phone.py"), encoding="utf-8").read())
 
     root.destroy()
-    print("\n%d 项通过，%d 项失败" % (PASS, 0 if PASS else 1))
+    print("\n%d 项通过" % PASS)
     return 0
 
 

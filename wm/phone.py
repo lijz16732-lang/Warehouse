@@ -14,7 +14,6 @@ from tkinter import filedialog, messagebox, ttk
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
                         CLR_TEXT)
 from .photos import PhotoStrip
-from .theme import CellHover, RowHover
 
 # (key, 标题, 宽度)
 PHONE_ITEM_COLS = (
@@ -60,8 +59,8 @@ class PhoneTab(ttk.Frame):
         self.raw_items = []       # 未筛选的全量（清空/统计用）
         self.raw_sales = []
         self._maps = {}           # tree → {iid: 记录}（两表各自独立，防覆盖）
-        self._hovers = {}         # tree → RowHover（划过行高亮）
-        self._cell_hovers = {}    # tree → CellHover（划过单元格"选中"高亮）
+        # v1.45.3：与主库存页 v1.45.1 对齐——移除划过行/划过格高亮
+        #（RowHover/CellHover），多选直接走 Treeview 原生 extended 行为
         self._kw_debounce = None
         self._sort = {}           # tree → (排序列, 是否倒序)（点表头切换）
         self._cols_def = {}       # tree → 列定义（排序箭头 / 拖选范围用）
@@ -229,14 +228,13 @@ class PhoneTab(ttk.Frame):
                                background=_hex)
         tree.tag_configure("done", background="#F0F7F0")   # 已转入：淡绿底
         tree.tag_configure("odd", background="#F7FAFD")
-        self._hovers[tree] = RowHover(tree, self.app.root)
-        self._cell_hovers[tree] = CellHover(tree)   # 划过单元格"选中"式高亮
+        # v1.45.3：不再挂 RowHover / CellHover（划过高亮已去掉）
         tree.bind("<Delete>", lambda e: self.delete_selected())
         # v1.43.7 与主库存页对齐的基础操作：
         # Ctrl+A 全选本表 / Ctrl+C 复制（悬停格 > 拖选区块 > 选中行）/ 拖选区块
         tree.bind("<Control-a>", lambda e, t=tree: self._select_all(t))
         tree.bind("<Control-A>", lambda e, t=tree: self._select_all(t))
-        tree.bind("<Control-c>", lambda e, t=tree: self._copy_hover(t))
+        tree.bind("<Control-c>", lambda e, t=tree: self._on_ctrl_c(t))
         tree.bind("<Button-1>", lambda e, t=tree: self._drag_press(t, e), add="+")
         tree.bind("<B1-Motion>", lambda e, t=tree: self._drag_motion(t, e),
                   add="+")
@@ -770,18 +768,9 @@ class PhoneTab(ttk.Frame):
             return None
         return str(vals[cidx])
 
-    def _copy_hover(self, tree):
-        """Ctrl+C 优先级：悬停单元格 > 拖选区块 > 选中行（与主库存页一致）。"""
-        hv = self._hovers.get(tree)
-        iid = hv.row if hv else None
-        px, py = tree.winfo_pointerxy()
-        x, y = px - tree.winfo_rootx(), py - tree.winfo_rooty()
-        if iid and tree.identify_row(y) == iid:
-            text = self._cell_text(tree, x, y)
-            if text:
-                self._clip(text)
-                self._status("已复制：%s" % text[:60])
-                return
+    def _on_ctrl_c(self, tree):
+        """Ctrl+C 优先级：拖选区块 > 选中行（与主库存页一致；
+        v1.45.3 去掉悬停格分支——划过高亮已移除）。"""
         if self._copy_block(tree, silent=False):
             return
         sels = tree.selection()
