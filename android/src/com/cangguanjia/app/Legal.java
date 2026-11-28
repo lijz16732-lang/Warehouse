@@ -33,7 +33,7 @@ import java.io.InputStream;
 public final class Legal {
 
     /** 政策版本号：任何实质性修改都必须递增，否则老用户不会重新看到同意页。 */
-    public static final String VERSION = "1.1";
+    public static final String VERSION = "1.2";
     public static final String EFFECTIVE = "2026年11月2日";
 
     private static final String PREF = "cgm";

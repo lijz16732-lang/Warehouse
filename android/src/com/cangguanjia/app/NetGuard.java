@@ -19,6 +19,16 @@ public final class NetGuard {
     private NetGuard() {
     }
 
+    /**
+     * v1.45.7 云更新：检查更新需要拉 GitHub 上的版本信息文件（只读 JSON，
+     * 不发送库存数据；APK 下载走系统浏览器，不经 WebView）。
+     * 白名单精确到这两个只读域名，其余公网域名一律照旧拒绝。
+     */
+    private static final String[] UPDATE_HOSTS = {
+            "raw.githubusercontent.com",
+            "api.github.com",
+    };
+
     /** URL 是否允许加载/请求。非 http(s)（如 file:// 本地页面）直接放行。 */
     static boolean allow(String url) {
         if (url == null || url.length() == 0) {
@@ -54,6 +64,11 @@ public final class NetGuard {
         int colon = host.indexOf(':');
         if (colon >= 0) {
             host = host.substring(0, colon);   // 去端口
+        }
+        for (String h : UPDATE_HOSTS) {        // 云更新：只读版本检查
+            if (h.equals(host)) {
+                return true;
+            }
         }
         return isLanHost(host);
     }

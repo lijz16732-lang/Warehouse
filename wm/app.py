@@ -788,6 +788,8 @@ class App(object):
         dm.add_command(label="局域网共享（多台电脑共用一份数据）…",
                        command=self.open_lan)
         dm.add_separator()
+        dm.add_command(label="检查更新…", command=self.check_update_manual)
+        dm.add_separator()
         dm.add_command(label="导入 XLSX（按型号合并）…", command=self.do_import)
         dm.add_separator()
         dm.add_command(label="按型号检查重复…", command=self.check_duplicates)
@@ -1101,6 +1103,38 @@ class App(object):
 
         self._build_pager(table_card)
         self._build_detail(main)
+        # v1.45.7 云更新：启动 9 秒后后台静默检查新版本（失败静默不打扰）
+        self.root.after(9000, self._auto_update_check)
+
+    def _auto_update_check(self):
+        try:
+            from . import updater
+            updater.check_async(self)
+        except Exception:
+            pass
+
+    def check_update_manual(self):
+        """「数据 → 检查更新」：手动检查并明确告知结果。"""
+        from . import updater
+
+        def work():
+            info = updater.fetch_update_info()
+            if not info:
+                self._ui(lambda: messagebox.showinfo(
+                    "检查更新", "连不上更新服务器（需要能访问 GitHub）。\n"
+                    "当前版本 %s 继续可用。" % updater._cur_version(),
+                    parent=self.root))
+                return
+            exe = updater.new_exe_info(info)
+            if exe:
+                self._ui(lambda: updater._offer_update(self, exe))
+            else:
+                self._ui(lambda: messagebox.showinfo(
+                    "检查更新", "已是最新版本（%s）。" % updater._cur_version(),
+                    parent=self.root))
+
+        self._status("正在检查更新…")
+        threading.Thread(target=work, daemon=True).start()
 
     def _tree_yview(self, *args):
         """滚动条命令：滚动后由 yscrollcommand 同步重排贴片（位置没变不触发）。"""

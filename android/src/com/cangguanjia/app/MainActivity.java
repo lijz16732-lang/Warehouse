@@ -413,6 +413,70 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        // ---- v1.45.7 云更新：检查版本 + 去系统浏览器下载新 APK ----
+        @JavascriptInterface
+        public String appVersionName() {
+            return appVersionInfo()[0];
+        }
+
+        @JavascriptInterface
+        public String appVersionCode() {
+            return appVersionInfo()[1];
+        }
+
+        private String[] appVersionInfo() {
+            try {
+                android.content.pm.PackageInfo pi = getPackageManager()
+                        .getPackageInfo(getPackageName(), 0);
+                return new String[]{String.valueOf(pi.versionName),
+                        String.valueOf(pi.versionCode)};
+            } catch (Exception e) {
+                return new String[]{"", "0"};
+            }
+        }
+
+        /** 只允许跳系统浏览器打开官方发布地址（GitHub Release），防注入。 */
+        @JavascriptInterface
+        public void openDownloadPage(final String url) {
+            if (url == null) {
+                return;
+            }
+            String u = url.trim();
+            if (!u.startsWith("https://")) {
+                return;
+            }
+            String host = u.substring(8);
+            int cut = host.indexOf('/');
+            if (cut >= 0) {
+                host = host.substring(0, cut);
+            }
+            boolean ok = host.equals("github.com")
+                    || host.endsWith(".github.com")
+                    || host.equals("raw.githubusercontent.com")
+                    || host.endsWith(".githubusercontent.com");
+            if (!ok) {
+                ui(new Runnable() {
+                    @Override
+                    public void run() {
+                        toast("不是官方下载地址，已拦截");
+                    }
+                });
+                return;
+            }
+            final String furl = u;
+            ui(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse(furl)));
+                    } catch (Exception e) {
+                        toast("打不开浏览器");
+                    }
+                }
+            });
+        }
     }
 
     private void ui(final Runnable r) {

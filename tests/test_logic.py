@@ -1154,6 +1154,39 @@ try:
           and "window.__androidBack = function" in _app_html_ph
           and "moveTaskToBack" in _main_src
           and "__androidBack" in _main_src)
+    # ---- v1.45.7 云更新守卫（GitHub Release + version.json） ----
+    _upd_src = open(os.path.join(_wm_dir, "updater.py"), encoding="utf-8").read()
+    check("电脑端云更新：updater 检查/比对/md5/bat 替换 + 菜单与启动接入",
+          all(x in _upd_src for x in
+              ("def fetch_update_info", "def new_exe_info", "def _spawn_replacer",
+               ".new", "md5", "raw.githubusercontent.com"))
+          and "check_update_manual" in _app_src
+          and "_auto_update_check" in _app_src)
+    check("APK 云更新合规：NetGuard 白名单只放行 GitHub 只读域名",
+          "raw.githubusercontent.com" in _main_src
+          and "UPDATE_HOSTS" in open(
+              os.path.join(ROOT, "android", "src", "com", "cangguanjia",
+                           "app", "NetGuard.java"), encoding="utf-8").read()
+          and "openDownloadPage" in _main_src
+          and "appVersionCode" in _main_src
+          and "appVersionCode" in _app_html_ph
+          and "btnUpdate" in _app_html_ph
+          and "UPDATE_URL" in _app_html_ph)
+    check("APK 云更新政策同步：Legal.VERSION 1.2 + privacy.txt 更新日期 2026-11-28",
+          'VERSION = "1.2"' in open(
+              os.path.join(ROOT, "android", "src", "com", "cangguanjia",
+                           "app", "Legal.java"), encoding="utf-8").read()
+          and "版本号：1.2" in open(
+              os.path.join(ROOT, "android", "assets", "legal", "privacy.txt"),
+              encoding="utf-8").read())
+    # ---- v1.45.8 安装向导守卫（tools/installer.py + build_installer.py） ----
+    _ins_src = open(os.path.join(ROOT, "tools", "installer.py"),
+                    encoding="utf-8").read()
+    check("安装向导：复制/快捷方式/卸载 bat/注册表齐全，data 目录不被动",
+          all(x in _ins_src for x in
+              ("def copy_exe", "def make_shortcuts", "def write_uninstall_bat",
+               "def write_uninstall_reg", "Uninstall", "EncodedCommand"))
+          and "data" not in _ins_src.split("def copy_exe")[1].split("def ")[0])
     # v1.29.2 手机数据页筛选，导出跟随筛选结果
     _phone_src = open(os.path.join(_wm_dir, "phone.py"), encoding="utf-8").read()
     check("手机数据页筛选：库存(品牌/品类/成色/状态/同步时间) + 出售(类型/买家/时间到分)",

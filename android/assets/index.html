@@ -570,6 +570,16 @@ body.dark .fab2 { box-shadow:0 6px 16px rgba(0,0,0,.5); }
       <div class="card tight">
         <div class="row-head">
           <div>
+            <div class="row-t">版本更新</div>
+            <div class="row-sub" id="updStat">检查更新</div>
+          </div>
+        </div>
+        <button id="btnUpdate" class="rowbtn">检查更新</button>
+        <div class="hint">新版本发布后可一键检查并跳转下载安装包。</div>
+      </div>
+      <div class="card tight">
+        <div class="row-head">
+          <div>
             <div class="row-t">隐私</div>
             <div class="row-sub" id="legalStat">隐私政策</div>
           </div>
@@ -1978,6 +1988,49 @@ window.__androidBack = function () {
     return true;
   }
   return false;                       // 没有上一级：交回系统（退到后台）
+};
+
+/* ================= 云更新（v1.45.7） =================
+   检查更新：拉 GitHub 上的 version.json（只读，白名单已放行），
+   与本机 versionCode 比较；有新版弹确认框 → 跳系统浏览器下载 APK
+   （下载安装是用户在浏览器里完成的，App 不申请任何新权限）。 */
+var UPDATE_URL = 'https://raw.githubusercontent.com/lijz16732-lang/Warehouse/main/deploy/version.json';
+$('btnUpdate').onclick = function () {
+  var info = window.AndroidPhotos || {};
+  if (typeof info.appVersionCode !== 'function') {
+    toast('检查更新需要仓管家手机 App（手机浏览器打开时不可用）');
+    return;
+  }
+  var myCode = parseInt(info.appVersionCode(), 10) || 0;
+  $('updStat').textContent = '正在检查…';
+  var done = function (msg) { $('updStat').textContent = msg || '检查更新'; };
+  fetch(UPDATE_URL, { cache: 'no-store' }).then(function (r) {
+    return r.json();
+  }).then(function (j) {
+    var apk = j && j.apk;
+    if (!apk || !apk.url) { done('检查更新'); toast('服务器没有发布版本信息'); return; }
+    var nc = parseInt(apk.versionCode, 10) || 0;
+    if (nc <= myCode) {
+      done('已是最新版本 v' + (apk.versionName || apk.versionCode));
+      toast('已是最新版本');
+      return;
+    }
+    done('发现新版本 v' + apk.versionName);
+    askConfirm('发现新版本 v' + apk.versionName +
+      '（当前 v' + info.appVersionName() + '）\n\n' +
+      (apk.notes || '') + '\n\n现在去浏览器下载安装包吗？\n' +
+      '下载完成后在通知栏点开即可安装。', '去下载', function () {
+      if (typeof info.openDownloadPage === 'function') {
+        info.openDownloadPage(apk.url);
+      } else {
+        toast('打不开下载链接');
+      }
+    });
+    setTimeout(done, 8000);
+  }).catch(function () {
+    done('检查更新');
+    toast('连不上更新服务器（需要能访问 GitHub）');
+  });
 };
 
 /* 点商品行 → 操作面板：出售（带编号）/ 修改 / 删除 */
