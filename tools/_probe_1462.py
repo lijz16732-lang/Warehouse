@@ -113,7 +113,7 @@ check("点胶囊移除品牌筛选", len(app.frm_chips.winfo_children()) == n_be
 app.var_kw.set("")
 app.apply_filters()
 root.update()
-check("无筛选时回显条隐藏", not app.frm_chips.winfo_ismapped())
+check("无筛选时回显条清空", len(app.frm_chips.winfo_children()) == 0)
 
 # ---- 上架徽章 ----
 decor = getattr(app, "decor", None)

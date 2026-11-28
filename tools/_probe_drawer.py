@@ -155,7 +155,7 @@ check("设置持久化 True", app.settings.get("show_detail") is True)
 check("重开后标题仍在", "WL-00001" in app.lbl_detail_title.cget("text"))
 
 # ---- 5 KPI / 汇总条共存 ----
-check("KPI 行正常", app.kpi_vals["count"].cget("text") == "3 / 3")
+check("KPI 行正常", app.kpi_vals["count"].cget("text") == "9")
 check("汇总条正常", "3 / 3" in app.lbl_sum_hit.cget("text"))
 
 root.destroy()

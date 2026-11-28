@@ -977,17 +977,24 @@ class App(object):
         self._sep(inner)
         ttk.Button(inner, text="刷新", style="Ghost.TButton", width=5,
                    command=self.load_data).pack(side="left")
+        # v1.46.3「筛选」开关：左侧筛选面板默认收起（对齐设计稿），点此展开/收起
+        self._sep(inner)
+        ttk.Button(inner, text="筛选", style="Ghost.TButton", width=5,
+                   command=self._toggle_filter_panel).pack(side="left")
 
         # 侧栏筛选 + 表格
     def _build_body(self):
         body = tk.Frame(self.tab_inv, bg=CLR_BG)
         body.pack(fill="both", expand=True, padx=0, pady=8)
 
-        # ---- 侧栏 ----
+        # ---- 侧栏筛选（v1.46.3：默认收起对齐设计稿，工具栏「筛选」开关切换）----
         side = tk.Frame(body, bg=CLR_CARD, width=int(228 * self.ui_scale),
                         highlightbackground=CLR_BORDER,
                         highlightthickness=1)
-        side.pack(side="left", fill="y")
+        self.frm_filter_panel = side
+        self._body_main_holder = None     # _toggle_filter_panel 重排 pack 用
+        if bool(self.settings.get("filter_panel", False)):
+            side.pack(side="left", fill="y")
         side.pack_propagate(False)
 
         tk.Label(side, text="筛选条件", bg=CLR_CARD, fg=CLR_TEXT,
@@ -1063,6 +1070,7 @@ class App(object):
 
         # ---- 主区 ----
         main = tk.Frame(body, bg=CLR_BG)
+        self._body_main_holder = main   # 筛选面板重新展开时 pack 在它之前
         main.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
         # v1.46.1：KPI 卡片行（当前筛选口径下的核心指标，低库存卡可点击筛选）
@@ -1082,6 +1090,10 @@ class App(object):
         self.lbl_table_title = tk.Label(tbar, text="库存明细", bg=CLR_CARD, fg=CLR_TEXT,
                                         font=(self.fam, 10, "bold"))
         self.lbl_table_title.pack(side="left")
+        # v1.46.3 筛选回显条挪进标题行（设计稿 panel-head 同款：库存明细 [品牌：xx ✕]…）
+        self.frm_chips = tk.Frame(tbar, bg=CLR_CARD)
+        self.frm_chips.pack(side="left", padx=(12, 0))
+        self._chip_imgs = []
         self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · Ctrl+A 全选 · Ctrl/Shift 点选多行 · 拖选单元格即复制 · 右键可复制或「区域上色」",
                                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8))
         self.lbl_hint.pack(side="right")
@@ -1090,13 +1102,10 @@ class App(object):
                   fam=self.fam, size=9).pack(side="right", padx=(0, 12))
 
         tw = tk.Frame(table_card, bg=CLR_CARD)
-        # v1.46.2 筛选回显条占位（真实 pack 在 tw 之后用 before=tw 挪到中间）
-        self.frm_chips = tk.Frame(table_card, bg=CLR_CARD)
-        self._chip_imgs = []
+        self._tw = tw
 
         tw.pack(fill="both", expand=True, padx=10)
         self._tw = tw                # 筛选回显条 pack before 用
-        self.frm_chips.pack(fill="x", padx=10, pady=(0, 4), before=tw)
         self.tree = ttk.Treeview(tw, show="headings", selectmode="extended")
         vs = ttk.Scrollbar(tw, orient="vertical", style="Vertical.TScrollbar",
                            command=self._tree_yview)
@@ -1572,45 +1581,59 @@ class App(object):
             pass
 
     def _build_kpi(self, parent):
-        """KPI 卡片行（v1.46.1）：条目/总量/货值/已上架/低库存五张卡。
+        """KPI 卡片行（v1.46.3，设计稿同款 4 卡）。
 
-        口径与左侧筛选统计一致（跟随当前筛选）；「低库存预警」卡可点击，
-        一键勾选/取消「只看低库存」。颜色在 build 时读取常量即可——外观
-        热切换是整窗重建，不存在旧色残留问题。
+        在库件数 / 库存货值（成本）/ 低库存预警 / 今日出售（含近 14 天
+        出售金额迷你折线）。低库存卡整卡可点 → 切换「只看低库存」。
         """
         row = tk.Frame(parent, bg=CLR_BG)
         row.pack(fill="x", pady=(0, 8))
         self._kpi_row = row
         self.kpi_vals = {}
         self.kpi_units = {}
-        # (key, 标题, 左侧色条颜色, 大值字号)——色条配色对齐设计稿
-        specs = [("count", "库存条目", "#2563EB", 15),
-                 ("qty", "库存总量", "#0E9F8A", 15),
-                 ("val", "库存货值", "#7C3AED", 15),
-                 ("listed", "已上架", "#059669", 15),
-                 ("low", "低库存预警", "#D97706", 15)]
-        for i, (key, cap, kc, vsize) in enumerate(specs):
+        self.kpi_subs = {}       # key -> (灰字 Label, 彩色span Label)
+        # (key, 标题, 设计稿 --kc 色条颜色)
+        specs = [("count", "在库件数", "#2563EB"),
+                 ("val", "库存货值（成本）", "#7C3AED"),
+                 ("low", "低库存预警", "#D97706"),
+                 ("today", "今日出售", "#16A34A")]
+        for i, (key, cap, kc) in enumerate(specs):
             card = tk.Frame(row, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                            highlightthickness=1, cursor="hand2" if key == "low" else "arrow")
+                            highlightthickness=1,
+                            cursor="hand2" if key == "low" else "arrow")
             card.pack(side="left", fill="both", expand=True,
                       padx=(0 if i == 0 else 8, 0))
-            # 设计稿同款：左缘 3px 彩色竖条
-            bar = tk.Frame(card, bg=kc, width=3)
-            bar.pack(side="left", fill="y")
+            # 设计稿 ::before：左缘 3px 彩色竖条
+            tk.Frame(card, bg=kc, width=3).pack(side="left", fill="y")
             body = tk.Frame(card, bg=CLR_CARD)
             body.pack(side="left", fill="both", expand=True)
-            vrow = tk.Frame(body, bg=CLR_CARD)
             tk.Label(body, text=cap, bg=CLR_CARD, fg=CLR_MUTED,
                      font=(self.fam, 9)).pack(anchor="w", padx=14, pady=(9, 0))
-            vrow.pack(anchor="w", padx=14, pady=(2, 9))
+            vrow = tk.Frame(body, bg=CLR_CARD)
+            vrow.pack(anchor="w", padx=14, pady=(2, 0))
             val = tk.Label(vrow, text="—", bg=CLR_CARD, fg=CLR_TEXT,
-                           font=(self.fam, vsize, "bold"))
+                           font=(self.fam, 16, "bold"))
             val.pack(side="left")
             unit = tk.Label(vrow, text="", bg=CLR_CARD, fg=CLR_MUTED,
                             font=(self.fam, 9))
-            unit.pack(side="left", padx=(3, 0), pady=(4, 0))
+            unit.pack(side="left", padx=(3, 0), pady=(5, 0))
+            # 副行（kpi-t）：灰字 + 彩色强调字
+            srow = tk.Frame(body, bg=CLR_CARD)
+            srow.pack(anchor="w", padx=14, pady=(4, 9))
+            sub1 = tk.Label(srow, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                            font=(self.fam, 8))
+            sub1.pack(side="left")
+            sub2 = tk.Label(srow, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                            font=(self.fam, 8, "bold"))
+            sub2.pack(side="left")
             self.kpi_vals[key] = val
             self.kpi_units[key] = unit
+            self.kpi_subs[key] = (sub1, sub2)
+        # 「今日出售」卡右侧：近 14 天出售金额迷你折线（设计稿 spark 同款）
+        today_card = self.kpi_vals["today"].master.master.master
+        self.kpi_spark = tk.Canvas(today_card, width=86, height=30,
+                                   bg=CLR_CARD, highlightthickness=0)
+        self.kpi_spark.pack(side="right", padx=(0, 10), pady=10)
         # 低库存卡整卡可点 → 切换「只看低库存」（递归挂绑全部子件）
         low_card = self.kpi_vals["low"].master.master.master
 
@@ -1621,40 +1644,139 @@ class App(object):
 
         _bind_all(low_card)
 
+    def _toggle_filter_panel(self):
+        """显示/隐藏左侧筛选面板（v1.46.3，默认收起对齐设计稿），记忆偏好。"""
+        side = getattr(self, "frm_filter_panel", None)
+        if side is None:
+            return
+        if side.winfo_ismapped():
+            side.pack_forget()
+            show = False
+        else:
+            before = getattr(self, "_body_main_holder", None)
+            if before is not None and before.winfo_ismapped():
+                side.pack(side="left", fill="y", before=before)
+            else:
+                side.pack(side="left", fill="y")
+            show = True
+        self.settings["filter_panel"] = show
+        self._save_settings()
+
     def _kpi_low_click(self, _e=None):
         """点 KPI「低库存预警」卡 ⇄ 勾选「只看低库存」并重筛。"""
         self.var_low_only.set(not bool(self.var_low_only.get()))
         self.apply_filters()
 
+    def _today_sales(self):
+        """今日出售：(金额, 件数, 毛利)；sales 表无数据/出错返回 (0, 0, 0.0)。"""
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            rows = self.store.conn.execute(
+                "SELECT qty, total, cost FROM sales "
+                "WHERE substr(sale_date, 1, 10) = ?", (today,)).fetchall()
+        except Exception:
+            return 0.0, 0, 0.0
+        amt = sum(float(r["total"] or 0) for r in rows)
+        qty = sum(int(r["qty"] or 0) for r in rows)
+        profit = sum(float(r["total"] or 0) - float(r["cost"] or 0) * int(r["qty"] or 0)
+                     for r in rows)
+        return amt, qty, profit
+
+    def _sales_spark(self, days=14):
+        """近 N 天每日出售金额列表（今日为最后一天）；出错返回 None。"""
+        try:
+            start = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+            rows = self.store.conn.execute(
+                "SELECT sale_date, total FROM sales "
+                "WHERE substr(sale_date, 1, 10) >= ?", (start,)).fetchall()
+        except Exception:
+            return None
+        buckets = [0.0] * days
+        d0 = datetime.strptime(start, "%Y-%m-%d")
+        for row in rows:
+            try:
+                idx = (datetime.strptime(str(row["sale_date"])[:10], "%Y-%m-%d")
+                       - d0).days
+            except (ValueError, TypeError):
+                continue
+            if 0 <= idx < days:
+                buckets[idx] += float(row["total"] or 0)
+        return buckets
+
     def _update_kpi(self):
-        """刷新 KPI 卡片（数据源与 _update_side_stats 相同：self.filtered）。"""
+        """刷新 KPI 卡片（v1.46.3 设计稿口径：件数/成本货值/低库存/今日出售）。"""
         if not getattr(self, "kpi_vals", None):
             return
         shown = len(getattr(self, "filtered", None) or [])
         total = len(getattr(self, "records", None) or [])
-        qty = sum(int(r.get("qty") or 0) for r in (self.filtered or []))
-        val = sum(float(r.get("price") or 0) * int(r.get("qty") or 0)
-                  for r in (self.filtered or []))
-        listed = sum(1 for r in (self.filtered or []) if int(r.get("listed") or 0))
+        rows = self.filtered or []
+        qty = sum(int(r.get("qty") or 0) for r in rows)
+        models = len({str(r.get("model") or "").strip()
+                      for r in rows} - {""})
+        cost_val = sum(float(r.get("cost") or 0) * int(r.get("qty") or 0)
+                       for r in rows)
+        price_val = sum(float(r.get("price") or 0) * int(r.get("qty") or 0)
+                        for r in rows)
+        soldout = sum(1 for r in rows if int(r.get("sold_out") or 0))
         thr = int(getattr(self, "low_threshold", 0) or 0)
-        low = sum(1 for r in (self.filtered or [])
+        low = sum(1 for r in rows
                   if not int(r.get("sold_out") or 0)
                   and int(r.get("qty") or 0) <= thr) if thr > 0 else 0
-        self.kpi_vals["count"].configure(text="{:,} / {:,}".format(shown, total))
-        self.kpi_units["count"].configure(text="")
-        self.kpi_vals["qty"].configure(text="{:,}".format(qty))
-        self.kpi_units["qty"].configure(text="件")
-        self.kpi_vals["val"].configure(text="¥{:,.2f}".format(val))
+        amt, tqty, profit = self._today_sales()
+        s1, s2 = self.kpi_subs["count"]
+        s1.configure(text="命中 {:,} / 共 {:,} 条".format(shown, total))
+        s2.configure(text="", fg=CLR_MUTED)
+        self.kpi_vals["count"].configure(text="{:,}".format(qty))
+        self.kpi_units["count"].configure(text="件 · {:,} 个型号".format(models))
+        v = self.kpi_vals["val"]
+        v.configure(text="¥{:,.0f}".format(cost_val))
         self.kpi_units["val"].configure(text="")
-        self.kpi_vals["listed"].configure(text="{:,}".format(listed))
-        self.kpi_units["listed"].configure(text="条")
+        self.kpi_subs["val"][0].configure(text="售价货值 ")
+        self.kpi_subs["val"][1].configure(text="¥{:,.0f}".format(price_val),
+                                          fg="#7C3AED")
         lv, lu = self.kpi_vals["low"], self.kpi_units["low"]
+        l1, l2 = self.kpi_subs["low"]
+        l1.configure(text="{:,} 项已售完 · ".format(soldout))
         if low:
             lv.configure(text="{:,}".format(low), fg=CLR_WARN)
-            lu.configure(text="条", fg=CLR_WARN)
+            lu.configure(text="项 低于阈值", fg=CLR_WARN)
+            l2.configure(text="点击筛选 →", fg=CLR_WARN)
         else:
             lv.configure(text="0", fg=CLR_MUTED)
-            lu.configure(text="条", fg=CLR_MUTED)
+            lu.configure(text="项 低于阈值", fg=CLR_MUTED)
+            l2.configure(text="点击筛选 →", fg=CLR_MUTED)
+        t = self.kpi_vals["today"]
+        t.configure(text="¥{:,.0f}".format(amt))
+        self.kpi_units["today"].configure(text="· {:,} 件".format(tqty))
+        t1, t2 = self.kpi_subs["today"]
+        t1.configure(text="毛利 ")
+        t2.configure(text="¥{:,.0f}（{:.1f}%）".format(profit,
+                    profit / amt * 100 if amt else 0.0), fg="#16A34A")
+        self._render_kpi_spark()
+
+    def _render_kpi_spark(self):
+        """「今日出售」卡右侧近 14 天出售金额折线（设计稿 spark 同款）。"""
+        cv = self.kpi_spark
+        cv.delete("all")
+        data = self._sales_spark(14)
+        if data is None:
+            return
+        w = cv.winfo_width()
+        if w <= 20:
+            w = 86
+        h = 30
+        mx = max(data)
+        pad = 3
+        pts = []
+        n = len(data)
+        for i, v in enumerate(data):
+            x = pad + i * (w - 2 * pad) / max(1, n - 1)
+            y = (h - pad) - (v / mx) * (h - 2 * pad) if mx else (h - pad)
+            pts.append((x, y))
+        flat = [c for p in pts for c in p]
+        color = "#16A34A" if mx else CLR_BORDER
+        cv.create_line(*flat, fill=color, width=2, smooth=True,
+                       capstyle="round")
 
     def _build_summary_bar(self, parent):
         """表尾汇总条（v1.46.0）：已选行数 + 命中/总数 + 数量/货值合计。
@@ -1879,14 +2001,11 @@ class App(object):
             chips.append(("只看低库存", lambda: (self.var_low_only.set(False),
                                                  self.apply_filters())))
         if not chips:
-            self.frm_chips.pack_forget()
             return
         for text, fn in chips:
             chip = Chip(self.frm_chips, self, text, fn)
             chip.pack(side="left", padx=(0, 6))
             self._chip_imgs.append(chip)
-        # 空间不够宽时全部挪到第二行也行——先简单左流式排列
-        self.frm_chips.pack(fill="x", padx=10, pady=(0, 4), before=self._tw)
 
     def _sort(self, rows):
         key = self.sort_key
