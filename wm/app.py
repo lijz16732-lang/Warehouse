@@ -788,8 +788,6 @@ class App(object):
         dm.add_command(label="局域网共享（多台电脑共用一份数据）…",
                        command=self.open_lan)
         dm.add_separator()
-        dm.add_command(label="检查更新…", command=self.check_update_manual)
-        dm.add_separator()
         dm.add_command(label="导入 XLSX（按型号合并）…", command=self.do_import)
         dm.add_separator()
         dm.add_command(label="按型号检查重复…", command=self.check_duplicates)
@@ -1114,7 +1112,7 @@ class App(object):
             pass
 
     def check_update_manual(self):
-        """「数据 → 检查更新」：手动检查并明确告知结果。"""
+        """「设置 → 关于与维护 → 版本更新 → 检查更新」：手动检查并明确告知结果。"""
         from . import updater
 
         def work():
@@ -4711,6 +4709,17 @@ class App(object):
         tk.Label(inner, text="数据文件夹：%s" % self.data_dir, bg=CLR_CARD,
                  fg=CLR_MUTED, font=(fam, 8)).pack(anchor="w")
         hint(inner, "整个数据文件夹复制到别的电脑，就是一套完整的数据（含照片与备份）。")
+
+        inner = card(pf, "版本更新",
+                     "启动约 9 秒后会自动检查一次，发现新版会弹窗询问；"
+                     "这里可随时手动检查")
+        rowu = tk.Frame(inner, bg=CLR_CARD)
+        rowu.pack(fill="x")
+        ttk.Button(rowu, text="检查更新", width=9,
+                   command=self.check_update_manual).pack(side="left")
+        tk.Label(rowu, text="当前 v%s" % APP_VERSION, bg=CLR_CARD,
+                 fg=CLR_MUTED, font=(fam, 9)).pack(side="left", padx=(10, 0))
+        hint(inner, "更新包来自 GitHub，下载完成后自动替换重启，无需手动安装。")
 
         inner = card(pf, "存储占用", "只统计不清理，数字随正常使用增长")
         store_vars = {}
