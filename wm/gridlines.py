@@ -580,7 +580,13 @@ class TreeDecor(object):
 
     # -------------------------------------------- 表头全选复选框（v1.46.7）
     def _head_chkbox(self, x, y, w, h):
-        """表头首列画设计稿同款三态复选框：全选蓝勾 / 半选蓝横杠 / 未选灰边。"""
+        """表头首列画设计稿同款复选框：有选中=蓝底白勾 / 无选中=白底灰边。
+
+        v1.46.8 两处修正（用户反馈）：
+        ① 位置：canvas 占满整列宽（同行复选框一致），图在 w//2 —— 之前用
+           cx 偏移 + 缩窄 canvas，中心跟行复选框差十几像素（明显错位）。
+        ② 状态：不要半选横杠，只要有选中就显示勾（与行选中态同款）。
+        """
         cv = self._head_chk
         if cv is None:
             cv = tk.Canvas(self.tree, bd=0, highlightthickness=0,
@@ -588,11 +594,8 @@ class TreeDecor(object):
             cv.bind("<Button-1>", self._on_head_chk_click)
             cv.bind("<MouseWheel>", self.app._on_wheel)
             self._head_chk = cv
-        kids = self.tree.get_children()
-        n = len(kids)
         sel = len(self.tree.selection())
-        # 三态：全选(True) / 部分选中("partial") / 未选(False)
-        state = True if (n and sel >= n) else ("partial" if sel else False)
+        state = bool(sel)              # 有选中就画勾，不再区分全选/半选
         scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
         px = min(int(15 * scale), h - int(6 * scale), w - int(10 * scale))
         if px < 9:
@@ -600,17 +603,15 @@ class TreeDecor(object):
             return
         img = self._chk_image(state, px)
         sig = (state, px, w, h)
+        # 画布占满整列（x..x+w），图片画在正中 w//2 —— 与行复选框定位完全一致
         if getattr(cv, "_sig", None) != sig:
             cv.delete("all")
             cv.configure(bg=self._head_bg())
             if img is not None:
                 cv.create_image(w // 2, h // 2, image=img)
             cv._sig = sig
-        # 表头格居中（列从 -xoff 起，这里首列 x=0 未滚出时即 0）
-        cx = x + (w - min(w, px + int(8 * scale))) // 2
-        cw = min(w, px + int(8 * scale))
         try:
-            cv.place(x=cx, y=y, width=cw, height=h)
+            cv.place(x=x, y=y, width=w, height=h)
         except Exception:
             pass
 

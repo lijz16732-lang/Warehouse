@@ -69,24 +69,30 @@ info = hc.place_info()
 check("表头复选框已放置", bool(info) and int(info["y"]) == 0)
 check("表头复选框在首列（x 靠左）", bool(info) and int(info["x"]) < 20)
 check("表头复选框高度=表头高", info and abs(int(info["height"]) - app._head_height()) <= 2)
+# v1.46.8：表头复选框中心必须与行复选框中心对齐（之前偏右十几像素）
+row_cv = decor._chks[list(tree.get_children())[0]]
+ri = row_cv.place_info()
+head_cx = int(info["x"]) + int(info["width"]) // 2
+row_cx = int(ri["x"]) + int(ri["width"]) // 2
+check("表头与行复选框中心对齐", abs(head_cx - row_cx) <= 1)
 
 
 def state_of():
-    """从签名里读当前三态（sig=(state,px,w,h)）。"""
+    """从签名里读当前状态（sig=(state,px,w,h)）。"""
     sig = getattr(hc, "_sig", None)
     return sig[0] if sig else None
 
 
-# ---- 3 三态 ----
-check("初始未选态=off", state_of() is False or state_of() == "off")
+# ---- 3 状态：无选中=灰边，有选中=勾（不要半选横杠）----
+check("初始未选态=off", state_of() is False)
 tree.selection_set(list(tree.get_children())[:3])   # 部分选
 root.update()
 decor.redraw()
-check("部分选中态=partial", state_of() == "partial")
+check("部分选中也显示勾（无横杠）", state_of() is True)
 tree.selection_set(list(tree.get_children()))      # 全选
 root.update()
 decor.redraw()
-check("全选态=on/True", state_of() is True or state_of() == "on")
+check("全选态=on/True", state_of() is True)
 
 # ---- 4 点击全选/全不选 ----
 decor._on_head_chk_click(None)
@@ -96,9 +102,9 @@ decor._on_head_chk_click(None)
 root.update()
 check("再点→全选当前页", len(tree.selection()) == len(tree.get_children()))
 
-# ---- 5 三态图片缓存都有 ----
-check("三态图片都已渲染", all(("chk", s, hc._sig[1]) in decor._imgs
-                          for s in ("on", "off", "partial")))
+# ---- 5 勾/灰边两态图片缓存都有（partial 横杠已废弃）----
+check("勾/灰边两态都已渲染", all(("chk", s, hc._sig[1]) in decor._imgs
+                            for s in ("on", "off")))
 
 print("%d/%d 项通过" % (ok[1], ok[0]))
 root.destroy()
