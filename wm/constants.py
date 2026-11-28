@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.45.8"
+APP_VERSION = "1.46.0"
 
 
 def app_icon_path():
@@ -372,6 +372,13 @@ _PALETTE_LIGHT = {
     # 鼠标划过整行高亮（比选中色浅，避免与系统选中混淆）
     "CLR_HOVER_BG":  "#E9F1FF",
     "CLR_HOVER_EDGE": "#9CC0FF",
+    # v1.46.0 专业版深蓝侧栏（浅色主题下侧栏也是深底——主流 ERP 布局）
+    "CLR_SIDE_BG":   "#0B1220",
+    "CLR_SIDE_GRP":  "#55647E",
+    "CLR_SIDE_TXT":  "#94A3B8",
+    "CLR_SIDE_ON":   "#F1F5F9",
+    "CLR_SIDE_HV":   "#16233E",
+    "CLR_SIDE_LINE": "#1B2942",
 }
 
 _PALETTE_DARK = {
@@ -408,6 +415,12 @@ _PALETTE_DARK = {
     "CLR_LOW_FG":    "#F0A132",
     "CLR_HOVER_BG":  "#22304A",
     "CLR_HOVER_EDGE": "#3B6BC7",
+    "CLR_SIDE_BG":   "#070D18",
+    "CLR_SIDE_GRP":  "#4A5872",
+    "CLR_SIDE_TXT":  "#8EA0BB",
+    "CLR_SIDE_ON":   "#F1F5F9",
+    "CLR_SIDE_HV":   "#101B31",
+    "CLR_SIDE_LINE": "#1B2942",
 }
 
 def apply_palette(theme):

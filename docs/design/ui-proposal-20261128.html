@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仓管家 · 专业版界面设计稿（预览，不影响现有软件）</title>
+<style>
+  :root{
+    --bg:#F1F5F9; --card:#FFFFFF; --border:#E2E8F0;
+    --text:#0F172A; --muted:#64748B;
+    --brand:#2563EB; --brand-dk:#1D4ED8;
+    --side:#0B1220; --side2:#111C33; --side-txt:#94A3B8; --side-on:#E2E8F0;
+    --ok:#16A34A; --warn:#D97706; --danger:#DC2626;
+    --row-hover:#F0F6FF; --zebra:#F8FAFC;
+    --radius:10px;
+  }
+  html[data-theme="dark"]{
+    --bg:#0B1220; --card:#121D33; --border:#24334F;
+    --text:#E2E8F0; --muted:#8EA0BB;
+    --side:#070D18; --side2:#0E1729;
+    --row-hover:#16223B; --zebra:#0F1929;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:13px;transition:background .2s,color .2s}
+
+  .layout{display:flex;height:100vh;overflow:hidden}
+
+  /* ================= 侧栏 ================= */
+  .side{width:216px;background:var(--side);color:var(--side-txt);display:flex;flex-direction:column;flex-shrink:0}
+  .logo{display:flex;align-items:center;gap:10px;padding:18px 18px 14px}
+  .logo-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#2563EB,#4F46E5);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px}
+  .logo-t{color:#F1F5F9;font-weight:600;font-size:15px;letter-spacing:.5px}
+  .logo-v{color:#64748B;font-size:10px;margin-top:1px}
+  .nav{flex:1;overflow-y:auto;padding:4px 10px 10px}
+  .nav-g{font-size:10.5px;color:#55647E;letter-spacing:2px;padding:14px 10px 6px}
+  .nav-i{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;
+    color:var(--side-txt);margin:2px 0;font-size:13px;user-select:none}
+  .nav-i:hover{background:var(--side2);color:var(--side-on)}
+  .nav-i.on{background:linear-gradient(90deg,#2563EB,#3B82F6);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(37,99,235,.35)}
+  .nav-i .ic{width:18px;text-align:center;font-size:14px}
+  .nav-i .bdg{margin-left:auto;background:rgba(255,255,255,.14);border-radius:10px;font-size:10px;padding:1px 7px}
+  .nav-i.on .bdg{background:rgba(255,255,255,.25)}
+  .side-foot{padding:12px 14px;border-top:1px solid #1B2942;font-size:11px;color:#64748B}
+  .lan-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#22C55E;margin-right:6px;
+    box-shadow:0 0 6px #22C55E}
+  .lan-ok{color:#86EFAC}
+
+  /* ================= 主区 ================= */
+  .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+  .topbar{height:52px;background:var(--card);border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:14px;padding:0 18px;flex-shrink:0}
+  .crumb{color:var(--muted);font-size:12px}
+  .crumb b{color:var(--text);font-size:15px;font-weight:600;margin-left:6px}
+  .top-sp{flex:1}
+  .g-search{width:280px;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:7px 12px;color:var(--muted);display:flex;gap:8px;align-items:center}
+  .top-chip{border:1px solid var(--border);border-radius:8px;padding:6px 12px;color:var(--muted);
+    display:flex;align-items:center;gap:6px;cursor:pointer;background:var(--card)}
+  .top-chip.ok{color:var(--ok);border-color:#BBF7D0;background:#F0FDF4}
+  html[data-theme="dark"] .top-chip.ok{background:#0E2417;border-color:#1B4332}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#F59E0B,#EF4444);
+    color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+
+  .content{flex:1;overflow-y:auto;padding:16px 18px}
+
+  /* ---- KPI 卡片 ---- */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;position:relative;overflow:hidden}
+  .kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--kc,var(--brand))}
+  .kpi-l{color:var(--muted);font-size:12px;display:flex;justify-content:space-between;align-items:center}
+  .kpi-v{font-size:22px;font-weight:700;margin-top:6px;font-variant-numeric:tabular-nums}
+  .kpi-v small{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  .kpi-t{font-size:11px;margin-top:6px;color:var(--muted)}
+  .up{color:var(--ok)} .dn{color:var(--danger)}
+  .spark{position:absolute;right:10px;bottom:10px;opacity:.85}
+
+  /* ---- 面板 ---- */
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  .panel-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  .panel-t{font-weight:600;font-size:14px;margin-right:6px}
+  .fchip{border:1px solid var(--border);background:var(--bg);border-radius:16px;padding:4px 12px;
+    color:var(--muted);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .fchip.on{background:#EFF6FF;border-color:#BFDBFE;color:var(--brand);font-weight:600}
+  html[data-theme="dark"] .fchip.on{background:#122445;border-color:#1E3A6E}
+  .fchip .x{opacity:.6}
+  .head-sp{flex:1}
+  .btn{border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;
+    padding:6px 13px;font-size:12.5px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover{background:var(--bg)}
+  .btn.pri{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+  .btn.pri:hover{background:var(--brand-dk)}
+
+  /* ---- 表格 ---- */
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  thead th{background:var(--bg);color:var(--muted);font-weight:600;font-size:12px;text-align:left;
+    padding:9px 12px;border-bottom:1px solid var(--border);white-space:nowrap;position:sticky;top:0}
+  thead th.num, td.num{text-align:right}
+  thead th.ctr, td.ctr{text-align:center}
+  tbody td{padding:9px 12px;border-bottom:1px solid var(--border)}
+  tbody tr:nth-child(even){background:var(--zebra)}
+  tbody tr:hover{background:var(--row-hover)}
+  tbody tr.sel{background:#EFF6FF}
+  html[data-theme="dark"] tbody tr.sel{background:#122445}
+  .code{font-family:Consolas,monospace;color:var(--brand);font-weight:600;cursor:pointer}
+  .pill{display:inline-flex;align-items:center;gap:5px;border-radius:12px;padding:2px 10px;font-size:11.5px;font-weight:600}
+  .pill.ok{background:#DCFCE7;color:#15803D}
+  .pill.off{background:#E2E8F0;color:#64748B}
+  .pill.wf{background:#EDE9FE;color:#6D28D9}
+  html[data-theme="dark"] .pill.ok{background:#0E2A18;color:#4ADE80}
+  html[data-theme="dark"] .pill.off{background:#233049;color:#94A3B8}
+  html[data-theme="dark"] .pill.wf{background:#231A3F;color:#C4B5FD}
+  .pill .d{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .cond{font-size:11.5px;color:var(--muted)}
+  .qty-low{color:var(--danger);font-weight:700}
+  .photos{color:var(--brand);cursor:pointer;letter-spacing:1px}
+  .muted{color:var(--muted)}
+  .money{font-weight:600}
+
+  /* ---- 表尾 ---- */
+  .tfoot{display:flex;align-items:center;padding:10px 14px;gap:14px;font-size:12.5px}
+  .tfoot .sum{color:var(--muted)}
+  .tfoot .sum b{color:var(--text);font-variant-numeric:tabular-nums}
+  .pager{margin-left:auto;display:flex;gap:5px;align-items:center}
+  .pg{min-width:26px;height:26px;border:1px solid var(--border);border-radius:6px;display:flex;
+    align-items:center;justify-content:center;cursor:pointer;color:var(--muted);font-size:12px;padding:0 6px}
+  .pg.on{background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600}
+
+  /* ---- 右侧详情抽屉 ---- */
+  .body-row{display:flex;gap:12px;align-items:stretch}
+  .table-wrap{flex:1;min-width:0}
+  .drawer{width:264px;flex-shrink:0;display:flex;flex-direction:column;gap:12px}
+  .d-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .d-t{font-weight:600;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+  .d-t .close{color:var(--muted);cursor:pointer;font-size:15px}
+  .kv{display:flex;justify-content:space-between;padding:5px 0;font-size:12.5px;border-bottom:1px dashed var(--border)}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--muted)}
+  .thumbs{display:flex;gap:6px;margin-top:8px}
+  .th2{width:52px;height:52px;border-radius:8px;background:linear-gradient(135deg,#CBD5E1,#94A3B8);
+    display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;cursor:pointer}
+  .th2.add{background:var(--bg);border:1px dashed var(--border);color:var(--muted);font-size:20px}
+  .d-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+
+  /* ---- 状态栏 ---- */
+  .statusbar{height:30px;background:var(--card);border-top:1px solid var(--border);display:flex;
+    align-items:center;gap:18px;padding:0 16px;font-size:11.5px;color:var(--muted);flex-shrink:0}
+  .statusbar .sel-n{color:var(--brand);font-weight:600}
+
+  /* ---- 主题切换 + 说明条 ---- */
+  .theme-btn{position:fixed;right:18px;bottom:44px;z-index:9;border:1px solid var(--border);
+    background:var(--card);border-radius:20px;padding:8px 16px;cursor:pointer;color:var(--text);
+    box-shadow:0 3px 12px rgba(0,0,0,.12);font-size:12.5px}
+  .note{background:linear-gradient(90deg,#EFF6FF,#F0FDF4);border:1px solid #BFDBFE;border-radius:var(--radius);
+    padding:10px 16px;margin-bottom:14px;font-size:12.5px;color:#334155;display:flex;gap:10px;align-items:center}
+  html[data-theme="dark"] .note{background:#122445;border-color:#1E3A6E;color:#C7D6EE}
+  .note b{color:var(--brand)}
+
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#CBD5E1;border-radius:5px}
+  html[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#2A3A57}
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ============ 左侧导航 ============ -->
+  <aside class="side">
+    <div class="logo">
+      <div class="logo-mark">仓</div>
+      <div>
+        <div class="logo-t">仓管家</div>
+        <div class="logo-v">Warehouse Pro · v1.45.8</div>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="nav-g">库存管理</div>
+      <div class="nav-i on"><span class="ic">▤</span>库存明细<span class="bdg">1248</span></div>
+      <div class="nav-i"><span class="ic">☑</span>盘点单</div>
+      <div class="nav-i"><span class="ic">⚙</span>制作流程<span class="bdg">3</span></div>
+      <div class="nav-g">销售管理</div>
+      <div class="nav-i"><span class="ic">¥</span>出售记录</div>
+      <div class="nav-i"><span class="ic">➤</span>出库记录</div>
+      <div class="nav-i"><span class="ic">☺</span>客户管理<span class="bdg">2</span></div>
+      <div class="nav-i"><span class="ic">↩</span>销售退货</div>
+      <div class="nav-g">数据报表</div>
+      <div class="nav-i"><span class="ic">▨</span>数据分析</div>
+      <div class="nav-i"><span class="ic">📈</span>销售利润表</div>
+      <div class="nav-g">通用</div>
+      <div class="nav-i"><span class="ic">📱</span>手机数据<span class="bdg">5</span></div>
+      <div class="nav-i"><span class="ic">☰</span>操作日志</div>
+      <div class="nav-i"><span class="ic">⚡</span>设置</div>
+    </nav>
+    <div class="side-foot">
+      <span class="lan-dot"></span><span class="lan-ok">局域网共享 · 已连接</span><br>
+      <span style="color:#55647E">主机 192.168.1.100 · 3 工位在线</span>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <div class="main">
+    <div class="topbar">
+      <span class="crumb">库存管理 <b>库存明细</b></span>
+      <div class="top-sp"></div>
+      <div class="g-search">🔍 搜索编号 / 型号 / 品牌…（Ctrl+F）</div>
+      <div class="top-chip">▾ 主机仓库（D 盘）</div>
+      <div class="top-chip ok">● 共享中 · 只读 2 台</div>
+      <div class="avatar">赵</div>
+    </div>
+
+    <div class="content">
+      <div class="note">💡 这是<b>界面设计稿预览</b>（纯网页，未改动仓管家软件）。看效果、提意见，定稿后我再把这套视觉改进现有程序。</div>
+
+      <!-- KPI -->
+      <div class="kpis">
+        <div class="kpi" style="--kc:#2563EB">
+          <div class="kpi-l">在库件数</div>
+          <div class="kpi-v">1,248<small>件 · 386 个型号</small></div>
+          <div class="kpi-t">较上周 <span class="up">▲ +46</span></div>
+        </div>
+        <div class="kpi" style="--kc:#7C3AED">
+          <div class="kpi-l">库存货值（成本）</div>
+          <div class="kpi-v">¥286,540</div>
+          <div class="kpi-t">较上周 <span class="dn">▼ -12,300（出库）</span></div>
+        </div>
+        <div class="kpi" style="--kc:#D97706">
+          <div class="kpi-l">低库存预警</div>
+          <div class="kpi-v">6<small>项 低于阈值</small></div>
+          <div class="kpi-t"><span class="dn">2 项已断货</span> · 点击筛选 →</div>
+        </div>
+        <div class="kpi" style="--kc:#16A34A">
+          <div class="kpi-l">今日出售</div>
+          <div class="kpi-v">¥15,320<small>· 12 件</small></div>
+          <div class="kpi-t">毛利 <span class="up">¥4,180（27.3%）</span></div>
+          <svg class="spark" width="86" height="30"><polyline points="0,24 12,20 24,22 36,14 48,16 60,8 72,10 84,4"
+            fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+      </div>
+
+      <!-- 表格 + 详情 -->
+      <div class="body-row">
+        <div class="table-wrap panel">
+          <div class="panel-head">
+            <span class="panel-t">库存明细</span>
+            <span class="fchip on">品牌：基恩士 <span class="x">✕</span></span>
+            <span class="fchip on">货架：6排A <span class="x">✕</span></span>
+            <span class="fchip">＋ 成色</span>
+            <span class="fchip">＋ 上架状态</span>
+            <div class="head-sp"></div>
+            <button class="btn">↥ 导入</button>
+            <button class="btn">↧ 导出</button>
+            <button class="btn">批量修改</button>
+            <button class="btn">⟳ 刷新</button>
+            <button class="btn pri">＋ 新增入库</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th class="ctr" style="width:34px"><input type="checkbox" checked></th>
+                <th>编号 ▲</th><th>品牌</th><th>品类</th><th>型号</th>
+                <th class="ctr">成色</th><th class="num">价格</th><th class="num">数量</th>
+                <th class="ctr">货架</th><th class="ctr">上架</th><th class="ctr">📷</th><th>备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="sel"><td class="ctr"><input type="checkbox" checked></td>
+                <td class="code">WL-00012</td><td>基恩士</td><td>传感器</td><td>FS-V11 +R</td>
+                <td class="ctr"><span class="cond">95新</span></td><td class="num money">¥1,280</td>
+                <td class="num qty-low">1</td><td class="ctr">6排A-3</td>
+                <td class="ctr"><span class="pill ok"><span class="d"></span>已上架</span></td>
+                <td class="ctr photos">📷3</td><td class="muted">含原包装</td></tr>
+              <tr class="sel"><td class="ctr"><input type="checkbox" checked></td>
+                <td class="code">WL-00013</td><td>基恩士</td><td>放大器</td><td>FS-V21P</td>
+                <td class="ctr"><span class="cond">99新</span></td><td class="num money">¥960</td>
+                <td class="num">4</td><td class="ctr">6排A-3</td>
+                <td class="ctr"><span class="pill ok"><span class="d"></span>已上架</span></td>
+                <td class="ctr photos">📷1</td><td class="muted">—</td></tr>
+              <tr class="sel"><td class="ctr"><input type="checkbox" checked></td>
+                <td class="code">WL-00018</td><td>基恩士</td><td>光源头</td><td>FS-V30L</td>
+                <td class="ctr"><span class="cond">9成新</span></td><td class="num money">¥520</td>
+                <td class="num">2</td><td class="ctr">6排B-1</td>
+                <td class="ctr"><span class="pill off">下架</span></td>
+                <td class="ctr photos">📷2</td><td class="muted">待检测</td></tr>
+              <tr><td class="ctr"><input type="checkbox"></td>
+                <td class="code">WL-00021</td><td>西门子</td><td>PLC</td><td>S7-200 SMART</td>
+                <td class="ctr"><span class="cond">95新</span></td><td class="num money">¥2,150</td>
+                <td class="num">3</td><td class="ctr">2排C-2</td>
+                <td class="ctr"><span class="pill ok"><span class="d"></span>已上架</span></td>
+                <td class="ctr photos">📷4</td><td class="muted">—</td></tr>
+              <tr><td class="ctr"><input type="checkbox"></td>
+                <td class="code">WL-00025</td><td>三菱</td><td>变频器</td><td>FR-E740-3.7K</td>
+                <td class="ctr"><span class="cond">9成新</span></td><td class="num money">¥1,780</td>
+                <td class="num qty-low">1</td><td class="ctr">3排A-5</td>
+                <td class="ctr"><span class="pill wf">制作中·质检</span></td>
+                <td class="ctr photos">📷2</td><td class="muted">赵六负责</td></tr>
+              <tr><td class="ctr"><input type="checkbox"></td>
+                <td class="code">WL-00031</td><td>欧姆龙</td><td>继电器</td><td>MY2N-J 24VDC</td>
+                <td class="ctr"><span class="cond">全新</span></td><td class="num money">¥38</td>
+                <td class="num">56</td><td class="ctr">1排D-1</td>
+                <td class="ctr"><span class="pill ok"><span class="d"></span>已上架</span></td>
+                <td class="ctr muted">—</td><td class="muted">整盒 20 只</td></tr>
+              <tr><td class="ctr"><input type="checkbox"></td>
+                <td class="code">WL-00036</td><td>施耐德</td><td>接触器</td><td>LC1D09M7C</td>
+                <td class="ctr"><span class="cond">95新</span></td><td class="num money">¥145</td>
+                <td class="num">8</td><td class="ctr">1排D-3</td>
+                <td class="ctr"><span class="pill ok"><span class="d"></span>已上架</span></td>
+                <td class="ctr photos">📷1</td><td class="muted">—</td></tr>
+              <tr><td class="ctr"><input type="checkbox"></td>
+                <td class="code">WL-00040</td><td>基恩士</td><td>压力表</td><td>GP-M015</td>
+                <td class="ctr"><span class="cond">9成新</span></td><td class="num money">¥680</td>
+                <td class="num">2</td><td class="ctr">6排B-2</td>
+                <td class="ctr"><span class="pill off">下架</span></td>
+                <td class="ctr muted">—</td><td class="muted">缺配件</td></tr>
+            </tbody>
+          </table>
+          <div class="tfoot">
+            <span class="sel-n">已选 3 行</span>
+            <span class="sum">命中 <b>128</b> / 1,248 条 · 数量合计 <b>412</b> 件 · 货值 <b>¥96,240</b></span>
+            <div class="pager">
+              <span class="pg">‹</span><span class="pg on">1</span><span class="pg">2</span>
+              <span class="pg">3</span><span class="pg">…</span><span class="pg">13</span><span class="pg">›</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 详情抽屉 -->
+        <div class="drawer">
+          <div class="d-card">
+            <div class="d-t">记录详情 <span class="close">✕</span></div>
+            <div class="kv"><span class="k">编号</span><span class="code">WL-00012</span></div>
+            <div class="kv"><span class="k">品牌 / 型号</span><span>基恩士 FS-V11</span></div>
+            <div class="kv"><span class="k">成色</span><span>95新</span></div>
+            <div class="kv"><span class="k">价格</span><span class="money">¥1,280 × 1</span></div>
+            <div class="kv"><span class="k">成本</span><span>¥860（毛利 ¥420）</span></div>
+            <div class="kv"><span class="k">货架</span><span>6排A-3</span></div>
+            <div class="kv"><span class="k">入库时间</span><span>2026-11-26</span></div>
+            <div class="thumbs">
+              <div class="th2">📷</div><div class="th2">📷</div><div class="th2">📷</div><div class="th2 add">＋</div>
+            </div>
+            <div class="d-btns">
+              <button class="btn pri" style="justify-content:center">¥ 出售</button>
+              <button class="btn" style="justify-content:center">编辑</button>
+              <button class="btn" style="justify-content:center">打印标签</button>
+              <button class="btn" style="justify-content:center">退回制作</button>
+            </div>
+          </div>
+          <div class="d-card">
+            <div class="d-t">近 30 天动向</div>
+            <svg width="100%" height="64" viewBox="0 0 220 64">
+              <polyline points="0,50 28,44 56,48 84,30 112,34 140,20 168,26 196,12 220,16"
+                fill="none" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round"/>
+              <polyline points="0,50 28,44 56,48 84,30 112,34 140,20 168,26 196,12 220,16 220,64 0,64"
+                fill="rgba(37,99,235,.08)" stroke="none"/>
+            </svg>
+            <div class="kv"><span class="k">浏览 / 询价</span><span>23 次</span></div>
+            <div class="kv"><span class="k">同类均价</span><span>¥1,150</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <span>就绪</span><span class="sel-n">已选 3 行</span>
+      <span>库存明细 · 128 条 · 已载入 1,248 条记录</span>
+      <div style="flex:1"></div>
+      <span>GitHub 云更新：已是最新</span><span>v1.45.8</span>
+    </div>
+  </div>
+</div>
+
+<button class="theme-btn" onclick="tg()">🌙 深色模式</button>
+
+<script>
+  // 导航点击切换高亮（仅演示）
+  document.getElementById('nav').addEventListener('click', function(e){
+    var it = e.target.closest('.nav-i'); if(!it) return;
+    document.querySelectorAll('.nav-i').forEach(function(n){n.classList.remove('on')});
+    it.classList.add('on');
+  });
+  // 深浅切换
+  function tg(){
+    var h = document.documentElement;
+    var dark = h.dataset.theme === 'dark';
+    h.dataset.theme = dark ? '' : 'dark';
+    document.querySelector('.theme-btn').textContent = dark ? '🌙 深色模式' : '☀️ 浅色模式';
+  }
+  // 筛选chip点击切换
+  document.querySelectorAll('.fchip').forEach(function(c){
+    c.addEventListener('click', function(){ if(!c.textContent.includes('＋')) c.classList.toggle('on'); });
+  });
+  // 表格行点击选中
+  document.querySelectorAll('tbody tr').forEach(function(r){
+    r.addEventListener('click', function(e){
+      if(e.target.type === 'checkbox') { r.classList.toggle('sel', e.target.checked); return; }
+      r.classList.toggle('sel');
+      var cb = r.querySelector('input'); if(cb) cb.checked = r.classList.contains('sel');
+    });
+  });
+</script>
+</body>
+</html>

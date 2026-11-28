@@ -830,12 +830,37 @@ class App(object):
     def _build(self):
         # v1.31 骨架：左侧功能导航 + 右侧内容区（Notebook 页签条用样式隐藏，
         # 只当页面容器用——select/index 等旧调用全部保持有效）
+        # v1.46.0 专业版：右列顶部加一条顶栏（页面标题 + 共享状态 + 版本）
         from .nav import FunctionNav
         wrap = tk.Frame(self.root, bg=CLR_BG)
         wrap.pack(fill="both", expand=True, padx=10, pady=(8, 0))
         self.nav = FunctionNav(wrap, self, self.fam)
 
-        self.nb = ttk.Notebook(wrap)
+        right = tk.Frame(wrap, bg=CLR_BG)
+        right.pack(side="left", fill="both", expand=True)
+
+        # ---- 顶栏 ----
+        tb = tk.Frame(right, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                      highlightthickness=1)
+        tb.pack(fill="x")
+        tbi = tk.Frame(tb, bg=CLR_CARD)
+        tbi.pack(fill="x", padx=14, pady=7)
+        self.lbl_topbar = tk.Label(tbi, text="库存列表", bg=CLR_CARD,
+                                   fg=CLR_TEXT, font=(self.fam, 12, "bold"))
+        self.lbl_topbar.pack(side="left")
+        self.lbl_topbar_crumb = tk.Label(tbi, text="库存管理", bg=CLR_CARD,
+                                         fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_topbar_crumb.pack(side="left", padx=(12, 0))
+        # 右侧：共享状态 + 版本（pack 从右往左，窄窗时保住左侧标题）
+        self.lbl_topbar_ver = tk.Label(tbi, text="v%s" % APP_VERSION,
+                                       bg=CLR_CARD, fg=CLR_MUTED,
+                                       font=(self.fam, 8))
+        self.lbl_topbar_ver.pack(side="right")
+        self.lbl_top_share = tk.Label(tbi, text="○ 共享未开启", bg=CLR_CARD,
+                                      fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_top_share.pack(side="right", padx=(0, 14))
+
+        self.nb = ttk.Notebook(right)
         self.nb.pack(side="left", fill="both", expand=True)
 
         self.tab_inv = ttk.Frame(self.nb)
@@ -1100,6 +1125,7 @@ class App(object):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._decor_soon(), add="+")
 
         self._build_pager(table_card)
+        self._build_summary_bar(table_card)
         self._build_detail(main)
         # v1.45.7 云更新：启动 9 秒后后台静默检查新版本（失败静默不打扰）
         self.root.after(9000, self._auto_update_check)
@@ -1165,6 +1191,7 @@ class App(object):
     def _build_pager(self, parent):
         p = tk.Frame(parent, bg=CLR_CARD)
         p.pack(fill="x", padx=10, pady=(0, 8))
+        self._pager_frame = p
         self.lbl_page = tk.Label(p, text="", bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9))
         self.lbl_page.pack(side="left")
 
@@ -1225,6 +1252,51 @@ class App(object):
         if self.var_show_detail.get():
             self.detail_card.pack(fill="x", pady=(10, 0))
             self.detail_card.pack_configure(ipady=2)
+
+    def _build_summary_bar(self, parent):
+        """表尾汇总条（v1.46.0）：已选行数 + 命中/总数 + 数量/货值合计。
+
+        放在分页条上方（pack before=pager）。数值由 _update_summary 刷新，
+        筛选变化（_update_side_stats）与选中变化（on_select）都会触发。
+        """
+        bar = tk.Frame(parent, bg=CLR_CARD,
+                       highlightbackground=CLR_BORDER_LT, highlightthickness=1)
+        bar.pack(fill="x", padx=10, pady=(0, 6), before=self._pager_frame)
+        inner = tk.Frame(bar, bg=CLR_CARD)
+        inner.pack(fill="x", padx=4, pady=5)
+        self.lbl_sum_sel = tk.Label(inner, text="未选中", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_sel.pack(side="left")
+        tk.Label(inner, text="｜", bg=CLR_CARD, fg=CLR_BORDER,
+                 font=(self.fam, 9)).pack(side="left", padx=8)
+        self.lbl_sum_hit = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_hit.pack(side="left")
+        self.lbl_sum_qty = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_qty.pack(side="left", padx=(14, 0))
+        self.lbl_sum_val = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_TEXT, font=(self.fam, 9, "bold"))
+        self.lbl_sum_val.pack(side="left", padx=(14, 0))
+
+    def _update_summary(self):
+        """刷新表尾汇总条（数据来自 self.filtered 与当前选中行）。"""
+        if not getattr(self, "lbl_sum_hit", None):
+            return
+        shown = len(getattr(self, "filtered", None) or [])
+        total = len(getattr(self, "records", None) or [])
+        qty = sum(int(r.get("qty") or 0) for r in (self.filtered or []))
+        val = sum(float(r.get("price") or 0) * int(r.get("qty") or 0)
+                  for r in (self.filtered or []))
+        sel = len(self.tree.selection()) if getattr(self, "tree", None) else 0
+        if sel:
+            self.lbl_sum_sel.configure(text="已选 %d 行" % sel, fg=CLR_ACCENT)
+        else:
+            self.lbl_sum_sel.configure(text="未选中", fg=CLR_MUTED)
+        self.lbl_sum_hit.configure(text="命中 %s / %s 条"
+                                   % ("{:,}".format(shown), "{:,}".format(total)))
+        self.lbl_sum_qty.configure(text="数量合计 %s 件" % "{:,}".format(qty))
+        self.lbl_sum_val.configure(text="货值 ¥%s" % "{:,.2f}".format(val))
 
     def _build_statusbar(self):
         bar = tk.Frame(self.root, bg=CLR_CARD, highlightbackground=CLR_BORDER,
@@ -1538,6 +1610,15 @@ class App(object):
                  % ("{:,}".format(shown), "{:,}".format(total), "{:,}".format(listed),
                     "{:,}".format(qty), "{:,.2f}".format(val),
                     ("\n低库存 %d 条" % low) if low else ""))
+        # v1.46.0：表尾汇总条 + 侧栏「库存列表」低库存角标
+        try:
+            self._update_summary()
+        except Exception:
+            pass
+        try:
+            self.nav.set_badge(0, str(low) if low else None)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 选中
     def _selected_records(self):
@@ -1554,6 +1635,11 @@ class App(object):
         n = len(self.tree.selection())
         if n >= 2:
             self._status("已选 %d 行" % n)
+        # v1.46.0：表尾汇总条同步已选行数
+        try:
+            self._update_summary()
+        except Exception:
+            pass
 
     def _update_detail(self):
         blk = self._block_preview
@@ -2154,6 +2240,64 @@ class App(object):
         self.nav.add_item(group, idx, label)
         return idx
 
+    def _update_topbar_title(self, idx=None):
+        """顶栏标题 = 当前页名 + 所属分组（v1.46.0 专业版顶栏）。"""
+        if not getattr(self, "lbl_topbar", None):
+            return
+        if idx is None:
+            try:
+                idx = self.nb.index(self.nb.select())
+            except Exception:
+                return
+        title, group = None, None
+        for g, items in getattr(self.nav, "groups", []):
+            for i, label in items:
+                if i == idx:
+                    title, group = label, g
+                    break
+            if title:
+                break
+        if not title:
+            try:
+                title = str(self.nb.tab(idx, "text")).strip()
+            except Exception:
+                title = ""
+        self.lbl_topbar.configure(text=title)
+        self.lbl_topbar_crumb.configure(text=group or "")
+
+    def _update_topbar_share(self):
+        """顶栏共享状态（开/关共享后调用；启动时也刷一次）。"""
+        if not getattr(self, "lbl_top_share", None):
+            return
+        try:
+            st = self.lan_status()
+        except Exception:
+            st = {"running": False}
+        if st.get("running"):
+            n = len(st.get("clients") or [])
+            extra = " · %d 台在线" % n if n else ""
+            self.lbl_top_share.configure(
+                text="● 共享中%s（端口 %s）" % (extra, st.get("port")),
+                fg="#15803D")
+            try:
+                self.nav.set_lan(True, "共享中%s" % extra)
+            except Exception:
+                pass
+        elif st.get("mode") == "client":
+            ro = "" if st.get("can_write") else " · 只读"
+            self.lbl_top_share.configure(
+                text="● 已连接主机%s" % ro, fg="#15803D")
+            try:
+                self.nav.set_lan(True, "已连接主机%s" % ro)
+            except Exception:
+                pass
+        else:
+            self.lbl_top_share.configure(text="○ 共享未开启", fg=CLR_MUTED)
+            try:
+                self.nav.set_lan(False, "共享未开启")
+            except Exception:
+                pass
+
     def _on_tab_changed(self, _e=None):
         try:
             idx = self.nb.index(self.nb.select())
@@ -2162,6 +2306,7 @@ class App(object):
                 self.nav.set_active(idx)
             except Exception:
                 pass
+            self._update_topbar_title(idx)
             # 标签顺序：0 库存 / 1 出售 / 2 出库 / 3 分析 / 4 手机 / 5 日志
             if idx == 1:
                 self.tab_sales.refresh_tab()
@@ -5304,6 +5449,10 @@ class App(object):
 
     def _update_lan_ui(self, kind="auto", err=""):
         """客户端模式显示顶部状态条：绿色=可录入 / 橙色=只读 / 红色=断线。"""
+        try:
+            self._update_topbar_share()   # v1.46.0 顶栏共享状态胶囊
+        except Exception:
+            pass
         self._update_db_label()
         bar = self._lan_bar_widgets()
         if self.lan_mode != "client":
