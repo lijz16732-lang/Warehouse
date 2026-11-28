@@ -1,17 +1,17 @@
 {
-  "check": "2026-11-28T09:50:11",
+  "check": "2026-11-28T12:35:38",
   "repo": "lijz16732-lang/Warehouse",
   "exe": {
-    "version": "1.45.8",
-    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.8/WarehouseManager-1.45.8.exe",
-    "md5": "a2bafde3d47f2c326ce4d962d5bfb605",
-    "notes": "检查更新入口移到设置页（关于与维护）；含 v1.45.7 全部功能"
+    "version": "1.46.0",
+    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.46.0/WarehouseManager-1.46.0.exe",
+    "md5": "17dc16959cf83fdb0d8ae9cb82a67818",
+    "notes": "专业版界面第一阶：深蓝侧栏导航、顶栏、库存明细表尾汇总条"
   },
   "apk": {
     "versionCode": 72,
     "versionName": "1.45.7",
-    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.8/cangguanjia-mobile-1.45.7.apk",
+    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.46.0/cangguanjia-mobile-1.45.7.apk",
     "md5": "3806e8ad41700e39dabeb0f2b874c5ae",
-    "notes": "检查更新入口移到设置页（关于与维护）；含 v1.45.7 全部功能"
+    "notes": "专业版界面第一阶：深蓝侧栏导航、顶栏、库存明细表尾汇总条"
   }
 }
