@@ -88,11 +88,54 @@ class TreeDecor(object):
         self._head_chk = None   # 表头全选复选框（v1.46.7，设计稿同款三态）
         self._imgs = {}         # (pw, ph, fill, on) -> PhotoImage（抗锯齿胶囊）
         self._drag_t = 0.0      # 拖动列头时节流
-        tree.bind("<Configure>", lambda e: self.redraw(), add="+")
+        self._resize_job = None    # 窗口尺寸变化 debounce（v1.47.1）
+        self._resize_pending = False
+        tree.bind("<Configure>", lambda e: self._on_configure(), add="+")
         # 列宽拖动结束 / 滚动条拖动：等布局稳定后重排
         tree.bind("<ButtonRelease-1>", self._on_release, add="+")
         # 拖动列宽 / 拖动列头换位的过程中实时跟随（节流，松手时还会再排一次）
         tree.bind("<B1-Motion>", self._on_drag_motion, add="+")
+
+    # ------------------------------------------------------------ 尺寸变化节流
+    def _on_configure(self):
+        """窗口尺寸变化：先收起贴片，等尺寸稳定后一次性重排。
+
+        最大化/还原时 <Configure> 会连发几十次，逐帧 redraw（PIL 渲染胶囊
+        + 几十次 place）会卡住窗口动画（实测 ~20ms/帧）。这里每帧只做轻量
+        的 place_forget，真正重排交给 90ms debounce——既不掉帧，也不会让
+        贴片滞留在旧坐标形成错位。
+        """
+        if not self._resize_pending:
+            self._resize_pending = True
+            try:
+                self._hide()
+            except Exception:
+                pass
+        if self._resize_job is not None:
+            try:
+                self.tree.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        try:
+            self._resize_job = self.tree.after(90, self._do_resize)
+        except Exception:
+            self._resize_job = None
+            self._resize_pending = False
+            self.redraw()
+
+    def _do_resize(self):
+        self._resize_job = None
+        self._resize_pending = False
+        try:
+            self.redraw()
+        finally:
+            # 上色贴片（app 层）也要跟着重贴一次
+            try:
+                cb = getattr(self.app, "_on_overlay_resized", None)
+                if cb:
+                    cb()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------ 入口
     def redraw(self):

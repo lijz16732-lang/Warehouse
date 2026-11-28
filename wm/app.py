@@ -1183,10 +1183,9 @@ class App(object):
         # Ctrl+A 全选本页（v1.45.1：之前只有菜单入口，按 Ctrl+A 没反应）
         self.tree.bind("<Control-a>", self._on_ctrl_a)
         self.tree.bind("<Control-A>", self._on_ctrl_a)
-        # 滚动/改变尺寸/键盘上下移动后，上色贴片要重新贴合单元格
-        # 滚轮自己做主（见 _on_wheel）
+        # 滚动/键盘上下移动后，上色贴片要重新贴合单元格
+        # 滚轮自己做主（见 _on_wheel）；尺寸变化由 TreeDecor._on_configure 统一 debounce
         self.tree.bind("<MouseWheel>", self._on_wheel)
-        self.tree.bind("<Configure>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyPress>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<KeyRelease>", lambda e: self._after_scroll_soon(), add="+")
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._after_scroll_soon(), add="+")
@@ -1246,11 +1245,17 @@ class App(object):
         不在这里挂钩子的话开关和网格线就停在原地不跟（快速拖动时整列消失）。
         必须同步重排：after_idle 在拖动的事件洪流里会被饿死（idle 只在
         事件队列空时才跑），贴片就停在旧位置看起来"不见了"。
+
+        v1.47.1：窗口尺寸变化时滚动条范围会自动重算，也走这两个回调，
+        resize 期间逐帧同步重排会卡住最大化/还原动画——此时贴片已由
+        TreeDecor._on_configure 收起，跳过重排，等尺寸稳定后统一恢复。
         """
         try:
             self._vs.set(first, last)
         except Exception:
             pass
+        if self._in_window_resize():
+            return
         self._after_scroll()
 
     def _on_xscroll(self, first, last):
@@ -1258,7 +1263,17 @@ class App(object):
             self._hs.set(first, last)
         except Exception:
             pass
+        if self._in_window_resize():
+            return
         self._after_scroll()
+
+    def _in_window_resize(self):
+        """窗口正在 resize（贴片收起、等 debounce 重排）时为 True。"""
+        try:
+            return bool(self.decor is not None and
+                        getattr(self.decor, "_resize_pending", False))
+        except Exception:
+            return False
 
     def _build_pager(self, parent):
         """表尾单行条（v1.46.4，设计稿同款）：左侧汇总统计 + 右侧数字分页。
@@ -3684,17 +3699,25 @@ class App(object):
         return False
 
     def _after_scroll(self):
-        """滚动/尺寸变化后重新贴合贴片。
-
-        注意：判据必须是"这一页有没有上色单元格"，不能是"当前有没有贴片"——
-        上色行滚出可视区后贴片为 0，用贴片数量当开关会让颜色再也回不来。
-        """
+        """滚动后重新贴合贴片（尺寸变化走 _on_overlay_resized 的 debounce）。"""
         if self.decor is not None:
             self.decor.redraw()     # 网格线/开关跟着滚动走
+        self._sync_paint_overlays()
+
+    def _sync_paint_overlays(self):
+        """按"这一页有没有上色单元格"同步上色贴片。
+
+        判据必须是"这一页有没有上色单元格"，不能是"当前有没有贴片"——
+        上色行滚出可视区后贴片为 0，用贴片数量当开关会让颜色再也回不来。
+        """
         if self._has_paintable():
             self._paint_overlays()
         elif self._paint_labels:
             self._forget_overlays()
+
+    def _on_overlay_resized(self):
+        """覆盖层在窗口尺寸稳定后已重排，同步上色贴片。"""
+        self._sync_paint_overlays()
 
     def _head_height(self):
         """表头高度：表格滚到顶时第一行 bbox 的 y 就是内容区上沿。"""
@@ -6014,8 +6037,13 @@ class App(object):
         """主题 / 字体大小即时生效：收尾后退出 mainloop，由 main() 原地重建界面。
 
         不再另起新进程（exe 自重启在个别情况下会报错），只在程序内部重建：
-        停局域网共享 → 保存设置 → 关数据库 → 退出事件循环；main() 检测到
-        _reboot 标记后按新调色板重建 App（主机模式会在新界面里自动恢复）。
+        停局域网共享 → 停托盘图标 → 保存设置 → 关数据库 → 退出事件循环；
+        main() 检测到 _reboot 标记后按新调色板重建 App（主机模式会在新界面里
+        自动恢复）。
+
+        v1.47.1：必须停托盘图标（Shell_NotifyIcon NIM_DELETE）——之前只在
+        on_close 里停，reboot 分支漏了，每次切主题都会 NIM_ADD 一个新图标，
+        旧图标残留在任务栏，切一次多一个（用户截图反馈）。
         """
         self._stopped = True
         self._reboot = True
@@ -6025,6 +6053,12 @@ class App(object):
             except Exception:
                 pass
             self.lan_server = None
+        tr, self.tray = getattr(self, "tray", None), None
+        if tr is not None:
+            try:
+                tr.stop()
+            except Exception:
+                pass
         self._save_settings()
         try:
             self.store.close()
