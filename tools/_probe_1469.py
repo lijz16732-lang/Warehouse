@@ -111,6 +111,18 @@ check("取消选中徽章格底色=下架灰",
 app.cell_colors = {str(t0): {"listed": "#FF0000"}}
 check("用户上色格最高优先", decor._row_bg(t0) == "#FF0000")
 
+# ---- 6 已上架固定绿色语义胶囊，不随行底色变（v1.46.11）----
+from wm.gridlines import _BADGE_ON
+on_a = decor._badge_image(True, 60, 24, CLR_SEL)
+on_b = decor._badge_image(True, 60, 24, CLR_UNLISTED_BG)
+check("已上架在两底色下同一张图（底固定绿）", on_a is not None and on_a is on_b)
+check("已上架缓存 key 的 bgc=绿色",
+      any(isinstance(k, tuple) and len(k) == 5 and k[0] is True
+          and k[4] == str(_BADGE_ON["light"][0])
+          for k in decor._imgs))
+# 下架仍随底色不同（已有 img_a/img_b）
+check("下架仍随底色变化", img_a is not img_b)
+
 print("PROBE 1469: %d/%d" % (ok[1], ok[0]))
 root.destroy()
 sys.exit(0 if ok[0] == ok[1] else 1)

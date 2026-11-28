@@ -427,7 +427,8 @@ class TreeDecor(object):
             txt = "已上架" if on else "下架"
             theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
             fgc = (_BADGE_ON if on else _BADGE_OFF)[theme][1]
-            bgc = bg or (_BADGE_ON if on else _BADGE_OFF)[theme][0]
+            bgc = (_BADGE_ON[theme][0] if on
+                   else (bg or _BADGE_OFF[theme][0]))
             bh = max(12, min(int(22 * float(getattr(self.app, "ui_scale", 1.0) or 1.0)), h - 8))
             cv.create_rectangle(w // 2 - 30, h // 2 - bh // 2, w // 2 + 30,
                                 h // 2 - bh // 2 + bh, fill=bgc, outline=bgc)
@@ -441,13 +442,16 @@ class TreeDecor(object):
         v1.46.9：徽章胶囊底色跟随所在行底色（选中蓝/下架灰/斑马白…）。
         v1.46.10：纯用行底色会让胶囊轮廓消失（用户「框怎么没了」），改为
         同色系略深一档填充 + 一圈细描边——颜色协调但框清晰可见。
+        v1.46.11：已上架恢复设计稿绿色语义胶囊（不跟行底），只有下架跟随
+        行底色避免选中行割裂（用户「已上架是绿色框呀」）。
         """
         if not HAS_PIL or cw < 36 or ch < 14:
             return None
         theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
         fgc = (_BADGE_ON if on else _BADGE_OFF)[theme][1]
-        # 底色跟随行底色；无底色传入时退回主题默认胶囊色
-        bgc = bg or (_BADGE_ON if on else _BADGE_OFF)[theme][0]
+        # 已上架固定绿色语义胶囊；下架跟随行底色（无底色时退回默认灰）
+        bgc = (_BADGE_ON[theme][0] if on
+               else (bg or _BADGE_OFF[theme][0]))
         # 同色系略深填充 + 细描边，保住胶囊轮廓（light 加深 / dark 提亮）
         fill_c = _shade(bgc, 0.88 if theme == "light" else 1.18)
         edge_c = _shade(bgc, 0.78 if theme == "light" else 1.30)
