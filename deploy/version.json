@@ -1,17 +1,17 @@
 {
-  "check": "2026-11-28T08:53:39",
+  "check": "2026-11-28T09:50:11",
   "repo": "lijz16732-lang/Warehouse",
   "exe": {
-    "version": "1.45.7",
-    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.7/WarehouseManager-1.45.7.exe",
-    "md5": "858a082a8a3d40921216a1894f653712",
-    "notes": "电脑端：新增刷新按钮、数据页选中计数、云更新；手机端：边缘滑动返回、应用内检查更新"
+    "version": "1.45.8",
+    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.8/WarehouseManager-1.45.8.exe",
+    "md5": "a2bafde3d47f2c326ce4d962d5bfb605",
+    "notes": "检查更新入口移到设置页（关于与维护）；含 v1.45.7 全部功能"
   },
   "apk": {
     "versionCode": 72,
     "versionName": "1.45.7",
-    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.7/cangguanjia-mobile-1.45.7.apk",
+    "url": "https://github.com/lijz16732-lang/Warehouse/releases/download/v1.45.8/cangguanjia-mobile-1.45.7.apk",
     "md5": "3806e8ad41700e39dabeb0f2b874c5ae",
-    "notes": "电脑端：新增刷新按钮、数据页选中计数、云更新；手机端：边缘滑动返回、应用内检查更新"
+    "notes": "检查更新入口移到设置页（关于与维护）；含 v1.45.7 全部功能"
   }
 }
