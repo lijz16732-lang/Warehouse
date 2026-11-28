@@ -2098,7 +2098,9 @@ class App(object):
         if list(self.tree["columns"]) != tree_cols:
             self.tree["columns"] = tree_cols
         titles = self.store.col_titles()      # 手机端/电脑端共享的自定义列题
-        self.tree.heading("_chk", text="☑", command=self._toggle_check_all)
+        # v1.46.7：表头字形「☑」去掉，改由 gridlines 覆盖层画设计稿同款
+        # 圆角复选框（全选态蓝底白勾），点击仍走 _toggle_check_all
+        self.tree.heading("_chk", text="", command=self._toggle_check_all)
         self.tree.column("_chk", width=int(36 * self.ui_scale),
                          minwidth=int(30 * self.ui_scale),
                          anchor="center", stretch=False)

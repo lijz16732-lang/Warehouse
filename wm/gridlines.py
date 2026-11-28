@@ -69,6 +69,7 @@ class TreeDecor(object):
         self._pill_pool = []    # 回收复用
         self._chks = {}         # iid -> Canvas（首列复选框，v1.46.3）
         self._chk_pool = []     # 回收复用
+        self._head_chk = None   # 表头全选复选框（v1.46.7，设计稿同款三态）
         self._imgs = {}         # (pw, ph, fill, on) -> PhotoImage（抗锯齿胶囊）
         self._drag_t = 0.0      # 拖动列头时节流
         tree.bind("<Configure>", lambda e: self.redraw(), add="+")
@@ -126,6 +127,13 @@ class TreeDecor(object):
             x += w
             if 2 < x < vw - 1:                    # 视口内的边界才画竖线
                 vpos.append(int(x))
+        # 表头全选复选框（v1.46.7）：画在首列 _chk 表头格中央，设计稿同款
+        # 三态圆角方块（全选蓝勾 / 半选蓝横杠 / 未选灰边），点它全选/全不选。
+        if has_chk and widths:
+            self._head_chkbox(0, 0, widths[0], head_h)
+        elif self._head_chk is not None:
+            self._head_chk.place_forget()
+
         hpos = []
         pills = []
         chks = []
@@ -193,7 +201,7 @@ class TreeDecor(object):
         self.restack()
 
     def restack(self):
-        """显式定叠放：上色贴片 < 开关 < 网格线。
+        """显式定叠放：上色贴片 < 开关 < 网格线 < 表头复选框。
 
         Tk 的叠放次序按控件的创建先后（place 顺序不作数），上色贴片
         往往比开关晚创建、会盖住开关还露出「已上架」字样；所以每次
@@ -207,6 +215,11 @@ class TreeDecor(object):
         for f in self._v + self._h:
             try:
                 f.lift()
+            except Exception:
+                pass
+        if self._head_chk is not None:
+            try:
+                self._head_chk.lift()
             except Exception:
                 pass
 
@@ -522,16 +535,22 @@ class TreeDecor(object):
             cv.create_image(w // 2, h // 2, image=img)
 
     def _chk_image(self, checked, px):
-        """抗锯齿复选框：未选=白底灰边圆角方块；选中=蓝底白勾。"""
+        """抗锯齿复选框：未选=白底灰边圆角方块；选中=蓝底白勾；
+        半选=蓝底白横杠（表头部分选中态）。
+
+        checked 接受 True / False / "partial"；行里只传 bool，表头传三态。
+        """
         if not HAS_PIL:
             return None
-        key = ("chk", bool(checked), int(px))
+        state = ("on" if checked is True
+                 else "off" if checked is False else "partial")
+        key = ("chk", state, int(px))
         img = self._imgs.get(key)
         if img is not None:
             return img
         SS = 4
         W = px * SS
-        if checked:
+        if state in ("on", "partial"):
             fill, outline = CLR_ACCENT, CLR_ACCENT
         else:
             fill, outline = "#FFFFFF", "#C9D2DE"
@@ -539,7 +558,7 @@ class TreeDecor(object):
         d = ImageDraw.Draw(im)
         d.rounded_rectangle([0, 0, W - 1, W - 1], radius=int(2.5 * SS),
                             fill=fill, outline=outline, width=SS)
-        if checked:
+        if state == "on":
             # 白勾：圆头折线（相对坐标，居中）
             lw = max(2, int(1.8 * SS))
             pts = [(0.26 * W, 0.53 * W), (0.43 * W, 0.70 * W), (0.74 * W, 0.32 * W)]
@@ -547,9 +566,73 @@ class TreeDecor(object):
             for p in (pts[0], pts[2]):
                 r = lw / 2.0
                 d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill="#FFFFFF")
+        elif state == "partial":
+            # 白横杠：圆头短线（表头部分选中）
+            lw = max(2, int(1.8 * SS))
+            d.line([(0.28 * W, 0.5 * W), (0.72 * W, 0.5 * W)],
+                   fill="#FFFFFF", width=lw)
+            r = lw / 2.0
+            for x in (0.28 * W, 0.72 * W):
+                d.ellipse([x - r, 0.5 * W - r, x + r, 0.5 * W + r], fill="#FFFFFF")
         img = ImageTk.PhotoImage(im.resize((px, px), Image.LANCZOS))
         self._imgs[key] = img
         return img
+
+    # -------------------------------------------- 表头全选复选框（v1.46.7）
+    def _head_chkbox(self, x, y, w, h):
+        """表头首列画设计稿同款三态复选框：全选蓝勾 / 半选蓝横杠 / 未选灰边。"""
+        cv = self._head_chk
+        if cv is None:
+            cv = tk.Canvas(self.tree, bd=0, highlightthickness=0,
+                           cursor="hand2")
+            cv.bind("<Button-1>", self._on_head_chk_click)
+            cv.bind("<MouseWheel>", self.app._on_wheel)
+            self._head_chk = cv
+        kids = self.tree.get_children()
+        n = len(kids)
+        sel = len(self.tree.selection())
+        # 三态：全选(True) / 部分选中("partial") / 未选(False)
+        state = True if (n and sel >= n) else ("partial" if sel else False)
+        scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
+        px = min(int(15 * scale), h - int(6 * scale), w - int(10 * scale))
+        if px < 9:
+            cv.place_forget()
+            return
+        img = self._chk_image(state, px)
+        sig = (state, px, w, h)
+        if getattr(cv, "_sig", None) != sig:
+            cv.delete("all")
+            cv.configure(bg=self._head_bg())
+            if img is not None:
+                cv.create_image(w // 2, h // 2, image=img)
+            cv._sig = sig
+        # 表头格居中（列从 -xoff 起，这里首列 x=0 未滚出时即 0）
+        cx = x + (w - min(w, px + int(8 * scale))) // 2
+        cw = min(w, px + int(8 * scale))
+        try:
+            cv.place(x=cx, y=y, width=cw, height=h)
+        except Exception:
+            pass
+
+    def _head_bg(self):
+        """表头底色（跟随主题）；取 ttk 样式，取不到用常量兜底。"""
+        try:
+            import tkinter.ttk as ttk
+            bg = ttk.Style().lookup("Treeview.Heading", "background")
+            if bg:
+                return bg
+        except Exception:
+            pass
+        from . import constants as C
+        return getattr(C, "CLR_HEADER", "#F3F6FB")
+
+    def _on_head_chk_click(self, e):
+        """点表头复选框：全不选 ⇄ 全选（当前页全部行）。"""
+        try:
+            self.app._toggle_check_all()
+        except Exception:
+            pass
+        return "break"
 
     def _on_chk_click(self, e):
         """点复选框贴片：只切换该行选中（不清其他行），同 Ctrl+点行。"""
@@ -587,3 +670,8 @@ class TreeDecor(object):
                 pass
         self._chk_pool.extend(self._chks.values())
         self._chks.clear()
+        if self._head_chk is not None:
+            try:
+                self._head_chk.place_forget()
+            except Exception:
+                pass
