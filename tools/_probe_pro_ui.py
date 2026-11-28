@@ -92,9 +92,10 @@ check("低库存角标由数据驱动", nav._badges.get(0) == "3")
 nav.set_badge(0, "6")
 root.update()
 bdg = nav._badge_lbls[0]
-# v1.46.4：角标改胶囊（当前页行上=白底蓝字，不再是红字）
-check("角标挂上（库存列表=6，胶囊配色）", bdg.cget("text") == "6"
-      and bdg.cget("fg") == C.CLR_ACCENT and bdg.cget("bg") == C.CLR_SIDE_ON)
+# v1.46.6：角标改设计稿同款深灰蓝圆角胶囊 + 浅灰字（不再是白底蓝字）
+from wm.nav import FunctionNav as _Nav
+check("角标挂上（库存列表=6，深灰胶囊）", bdg.cget("text") == "6"
+      and bdg.cget("fg") == _Nav._BADGE_FG and bool(bdg.cget("image")))
 nav.set_badge(0, None)
 root.update()
 check("角标清除", bdg.cget("text") == "")

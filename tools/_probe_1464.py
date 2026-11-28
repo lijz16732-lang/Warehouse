@@ -109,8 +109,8 @@ check("手机数据无角标（无待转入）", not nav._badges.get(idx_phone))
 check("制作流程无角标（无进行中）", not nav._badges.get(idx_wf))
 check("客户管理无角标（无应收）", not nav._badges.get(idx_cust))
 bdg = nav._badge_lbls[0]
-check("角标胶囊配色（当前页白底蓝字）", bdg.cget("bg") == C.CLR_SIDE_ON
-      and bdg.cget("fg") == C.CLR_ACCENT)
+check("角标胶囊配色（设计稿深灰底浅灰字）", bdg.cget("fg") == "#E2E8F0"
+      and bool(bdg.cget("image")))
 check("汇总仍在同条（翻页不丢）", app.lbl_sum_hit.winfo_exists()
       and app.lbl_sum_hit.master is app._pages_frame.master)
 

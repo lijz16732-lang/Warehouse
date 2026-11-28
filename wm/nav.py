@@ -67,6 +67,7 @@ class FunctionNav(tk.Frame):
         self._item_rows = {}     # page_idx -> 整行 Frame（配色用）
         self._badge_lbls = {}    # page_idx -> 角标 Label
         self._badges = {}        # page_idx -> 文本
+        self._badge_imgs = {}    # (文本,缩放) -> 圆角胶囊底图（缓存，防 GC）
         self._cmds = {}          # 命令项显示名 -> 回调（add_command 注册）
         self._lbl_lan = None
         self._render()
@@ -150,25 +151,63 @@ class FunctionNav(tk.Frame):
         self._render()
         self._style_items()
 
+    # 设计稿角标配色（截图取样）：深灰蓝胶囊底 #333C50 + 浅灰字 #E2E8F0，
+    # 圆角用 PIL 图片做（Tk Label 本身只有方角）。选中行也保持一致，
+    # 让「库存列表」的 137 和设计稿「库存明细」的 1248 长得一样。
+    _BADGE_BG = "#333C50"
+    _BADGE_FG = "#E2E8F0"
+
     # ------------------------------------------------------------ 绘制
-    def _badge_colors(self, idx):
-        """角标胶囊配色（v1.46.4，设计稿同款）：当前页行上用白底蓝字，
-        普通行用浅一号的深底灰字；无角标时随行底色隐形。"""
-        if not self._badges.get(idx):
-            return (CLR_SIDE_BG, CLR_SIDE_TXT)
-        if idx == self.active:
-            return (CLR_SIDE_ON, CLR_ACCENT)       # 白底 + 主题蓝字
-        return (CLR_SIDE_HV, CLR_SIDE_TXT)         # 深色胶囊 + 灰字
+    def _badge_image(self, text):
+        """圆角胶囊底图（缓存 key=文字+缩放）；透明角露出所在行的底色。"""
+        try:
+            from PIL import Image, ImageDraw, ImageFont, ImageTk
+        except Exception:
+            return None
+        s = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
+        key = (str(text), s)
+        img = getattr(self, "_badge_imgs", {}).get(key)
+        if img is not None:
+            return img
+        px = max(8, int(round(7 * 96.0 / 72 * s)))
+        try:
+            f = ImageFont.truetype("C:/Windows/Fonts/msyhbd.ttc", px)
+        except OSError:
+            try:
+                f = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", px)
+            except OSError:
+                f = ImageFont.load_default()
+        probe = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        try:
+            box = probe.textbbox((0, 0), str(text), font=f)
+            tw = box[2] - box[0]
+        except AttributeError:
+            tw = probe.textsize(str(text), font=f)[0]
+        w = int(tw + 12 * s)
+        h = int(14 * s)   # 设计稿胶囊约 30×14px（截图取样），再收小一档
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=h // 2,
+                            fill=self._BADGE_BG)
+        out = ImageTk.PhotoImage(im)
+        self._badge_imgs[key] = out
+        return out
 
     def _apply_badge(self, lbl, idx):
         txt = self._badges.get(idx)
-        bg, fg = self._badge_colors(idx)
-        if txt:
-            lbl.configure(text=txt, fg=fg, bg=bg,
-                          padx=int(7 * getattr(self.app, "ui_scale", 1.0)),
-                          pady=1)
-        else:
-            lbl.configure(text="", fg=fg, bg=bg, padx=0, pady=1)
+        if not txt:
+            lbl.configure(image="", text="", padx=0, pady=1)
+            return
+        # 胶囊四角的透明像素要露出所在行的底色（选中蓝 / 悬停深蓝 / 常态深蓝）
+        try:
+            row_bg = self._item_rows[idx].cget("bg")
+        except Exception:
+            row_bg = CLR_SIDE_BG
+        img = self._badge_image(txt)
+        # compound=center 必须显式给：Tk Label 默认 compound=none 时
+        # 有 image 就完全不画 text，数字会被胶囊底图吞掉（实测踩坑）
+        lbl.configure(image=img if img else "", text=txt, compound="center",
+                      fg=self._BADGE_FG, bg=row_bg, padx=0, pady=1)
 
     def _render(self):
         for w in self.winfo_children():
@@ -237,7 +276,7 @@ class FunctionNav(tk.Frame):
                                anchor="w", cursor="hand2")
                 lbl.pack(side="left", fill="x", expand=True)
                 bdg = tk.Label(row, text="", bg=CLR_SIDE_BG, fg=CLR_SIDE_TXT,
-                               font=(self.fam, 8))
+                               font=(self.fam, 7))
                 bdg.pack(side="right", padx=(0, 6))
 
                 if idx is None:
