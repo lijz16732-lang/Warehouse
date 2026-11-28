@@ -150,7 +150,9 @@ class TreeDecor(object):
             if head_h < y < vh - 1:
                 hpos.append(y)
             # 行被裁掉一半以上就不画徽章/复选框：避免表格底部出现
-            # 「只有一颗徽章、没有行内容」的游离贴片（v1.46.3 用户反馈）
+            # 「只有一颗徽章、没有行内容」的游离贴片（v1.46.3 用户反馈；
+            # v1.46.5 再收紧：中点判断对「bbox 高度被裁」的形态失效，
+            # 改为贴片整格必须完整落在行区内才画）
             if int(bb[1]) + int(bb[3]) // 2 > vh:
                 continue
             if iid not in getattr(self.app, "by_id", {}):
@@ -160,14 +162,16 @@ class TreeDecor(object):
                     pb = t.bbox(str(iid), column="listed")
                 except Exception:
                     pb = None
-                if pb and int(pb[1]) >= head_h:
+                if (pb and int(pb[1]) >= head_h
+                        and int(pb[1]) + int(pb[3]) <= vh):
                     pills.append((str(iid), pb))
             if has_chk:
                 try:
                     cb = t.bbox(str(iid), column="_chk")
                 except Exception:
                     cb = None
-                if cb and int(cb[1]) >= head_h:
+                if (cb and int(cb[1]) >= head_h
+                        and int(cb[1]) + int(cb[3]) <= vh):
                     chks.append((str(iid), cb))
         live = set()
         for iid, pb in pills:
