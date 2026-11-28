@@ -9,7 +9,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
-                        CLR_TEXT, CLR_WARN, apply_window_icon, center_window)
+                        CLR_ROW_ALT, CLR_TEXT, CLR_WARN,
+                        apply_window_icon, center_window)
 from .sales import money, today
 
 COLS = [("return_date", "退货日期", 96, "center"), ("code", "编号", 120, "w"),
@@ -317,7 +318,7 @@ class ReturnTab(ttk.Frame):
                              anchor=anchor, stretch=(key in ("model", "remark")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.tag_configure("keep", background="#F7FAFD")   # 未退回库存
+        self.tree.tag_configure("keep", background=CLR_ROW_ALT)   # 未退回库存
 
         foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=(0, 10))

@@ -6,6 +6,8 @@
 """
 import os
 import sys
+import json
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -13,10 +15,19 @@ sys.path.insert(0, ROOT)
 import tkinter as tk
 from wm import constants as C
 
+# 自设临时数据目录（不碰开发库），并预设深色主题——不再依赖手工改 settings.json
+_TMP = tempfile.mkdtemp(prefix="wm_repro_theme_")
+with open(os.path.join(_TMP, "settings.json"), "w", encoding="utf-8") as _f:
+    json.dump({"ui_theme": "dark"}, _f)
+C.resolve_data_dir = lambda: _TMP
+C.app_dir = lambda: _TMP
+import wm.app as _wapp
+_wapp.resolve_data_dir = lambda: _TMP
+_wapp.app_dir = lambda: _TMP
+
 
 def boot(theme_check_tag):
     """按 settings.json 调色板建一个 App（与 main() 一致）。返回 (root, app)。"""
-    import json
     try:
         with open(os.path.join(C.resolve_data_dir(), "settings.json"),
                   encoding="utf-8") as f:

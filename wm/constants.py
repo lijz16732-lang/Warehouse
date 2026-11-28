@@ -8,7 +8,7 @@ import unicodedata
 
 APP_NAME = "仓管家 · 仓库管理系统"
 APP_SHORT = "仓管家"
-APP_VERSION = "1.46.11"
+APP_VERSION = "1.47.0"
 
 
 def app_icon_path():
@@ -379,6 +379,14 @@ _PALETTE_LIGHT = {
     "CLR_SIDE_ON":   "#F1F5F9",
     "CLR_SIDE_HV":   "#16233E",
     "CLR_SIDE_LINE": "#1B2942",
+    # v1.47.0 语义底色（表格 tag：重复/警告/已转入/未退回/命中高亮）
+    "CLR_DUP_BG":    "#FFF6E5",
+    "CLR_WARN_BG":   "#FDECEC",
+    "CLR_DONE_BG":   "#F0F7F0",
+    "CLR_HIT_BG":    "#FFE58F",
+    "CLR_WF_DONE":   "#0E9F6E",
+    "CLR_WF_URGENT": "#D92D20",
+    "CLR_WF_DIM":    "#98A2B3",
 }
 
 _PALETTE_DARK = {
@@ -421,6 +429,14 @@ _PALETTE_DARK = {
     "CLR_SIDE_ON":   "#F1F5F9",
     "CLR_SIDE_HV":   "#101B31",
     "CLR_SIDE_LINE": "#1B2942",
+    # v1.47.0 语义底色（深色下用低饱和暗色，避免亮块刺眼）
+    "CLR_DUP_BG":    "#3A2F16",
+    "CLR_WARN_BG":   "#3A1E22",
+    "CLR_DONE_BG":   "#1B2E22",
+    "CLR_HIT_BG":    "#5A4A12",
+    "CLR_WF_DONE":   "#2FB344",
+    "CLR_WF_URGENT": "#E5484D",
+    "CLR_WF_DIM":    "#7D8798",
 }
 
 def apply_palette(theme):

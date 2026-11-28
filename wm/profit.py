@@ -14,7 +14,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN)
+                        CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TEXT, CLR_WARN)
 from .sales import money, today
 
 GROUPS = [("sale", "逐笔明细"), ("brand", "按品牌"), ("category", "按品类"),
@@ -169,7 +169,7 @@ class ProfitTab(ttk.Frame):
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.tag_configure("loss", foreground=CLR_DANGER)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
 
         foot = tk.Frame(self, bg=CLR_BG)
         foot.pack(fill="x", padx=16, pady=(0, 10))

@@ -15,8 +15,9 @@ import tkinter as tk
 from tkinter import messagebox, ttk, simpledialog
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
-                        CLR_TEXT, CLR_WARN, apply_window_icon, center_window,
-                        guard_combobox)
+                        CLR_ROW_ALT, CLR_TEXT, CLR_WARN, CLR_WF_DIM,
+                        CLR_WF_DONE, CLR_WF_URGENT,
+                        apply_window_icon, center_window, guard_combobox)
 from .photos import PhotoStrip
 from .store import wf_photo_code
 
@@ -1226,12 +1227,12 @@ class WorkflowTab(ttk.Frame):
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
         # tag 优先级 = 创建先后（先创建优先）：已取消 > 已完成 > 加急 > 别站 > 临近超时 > 斑马纹
-        self.tree.tag_configure("cancelled", foreground="#98A2B3")
-        self.tree.tag_configure("done", foreground="#0E9F6E")
-        self.tree.tag_configure("urgent", foreground="#D92D20")
-        self.tree.tag_configure("other", foreground="#98A2B3")
+        self.tree.tag_configure("cancelled", foreground=CLR_WF_DIM)
+        self.tree.tag_configure("done", foreground=CLR_WF_DONE)
+        self.tree.tag_configure("urgent", foreground=CLR_WF_URGENT)
+        self.tree.tag_configure("other", foreground=CLR_WF_DIM)
         self.tree.tag_configure("stale", foreground=CLR_WARN)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
         self.tree.bind("<Double-1>", lambda e: self.show_detail())
         self.tree.bind("<<TreeviewSelect>>",
                        lambda e: self._sync_urgent_btn())

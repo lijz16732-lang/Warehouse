@@ -9,8 +9,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_INPUT, CLR_MUTED, CLR_TEXT, apply_window_icon,
-                        center_window)
+                        CLR_HIT_BG, CLR_INPUT, CLR_MUTED, CLR_TEXT,
+                        apply_window_icon, center_window)
 
 
 def help_sections(db_path=""):
@@ -249,7 +249,7 @@ class HelpDialog(tk.Toplevel):
         self.text.tag_configure("h", font=(self.fam, 12, "bold"), foreground=CLR_ACCENT,
                                 spacing1=16, spacing3=6)
         self.text.tag_configure("body", font=(self.fam, 10), lmargin1=2, lmargin2=2)
-        self.text.tag_configure("hit", background="#FFE58F")
+        self.text.tag_configure("hit", background=CLR_HIT_BG)
         for i, (title, body_txt) in enumerate(self.sections):
             idx = self.text.index("end-1c")
             self.text.mark_set("sec_%d" % i, idx)

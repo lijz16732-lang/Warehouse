@@ -29,11 +29,12 @@ from .workflow import WorkflowTab
 from .constants import (APP_NAME, APP_SHORT, APP_VERSION, CLR_ACCENT, CLR_BG,
                         CLR_BORDER, CLR_BORDER_LT, CLR_CARD, CLR_DANGER,
                         CLR_ACCENT_LT, CLR_HEAD_FG, CLR_INPUT, CLR_LOW_BG,
-                        CLR_LOW_FG, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TAB_HV,
-                        CLR_SIDE_HV,
+                        CLR_LOW_FG, CLR_MENU_BG, CLR_MUTED, CLR_OK, CLR_ROW_ALT,
+                        CLR_TAB_HV, CLR_SIDE_HV,
                         CLR_UNLISTED_BG, CLR_UNLISTED_FG, CLR_TEXT, CLR_WARN,
                         FIELD_ANCHOR, FIELD_KEYS, FIELD_LABEL, FIELD_TYPE,
                         FIELD_WIDTH, FONT_SCALES, LISTED_TEXT, MULTI_SEP,
+                        UI_THEME,
                         apply_window_icon, app_dir, center_window,
                         guard_combobox, is_blank_model, resolve_data_dir)
 from .editor import ask_record
@@ -46,7 +47,7 @@ from .xlsxio import normalize_record
 from .store import Store, dedupe_records
 from .lan import DEFAULT_PORT, LanServer, local_ips
 from .remote import HostUnreachable, PermissionDenied, RemoteError, RemoteStore
-from .theme import apply_theme, dot_check
+from .theme import apply_theme, dot_check, style_menu
 
 PAGE_SIZES = ["100", "200", "500", "1000", "全部"]
 
@@ -830,7 +831,50 @@ class App(object):
         hm.add_command(label="关于", command=self.show_about)
         m.add_cascade(label="帮助", menu=hm)
 
+        # v1.47.0：Tk 原生菜单默认白底黑字，深色模式下必须逐个套主题
+        for _mm in (m, fm, em, vm, dm, hm):
+            style_menu(_mm, self.root)
         self.root.configure(menu=m)
+
+        # Windows 上顶层菜单栏由系统视觉样式绘制，configure(bg) 被忽略——
+        # 深色模式下那条白栏无法改色。用自绘菜单条盖住原生菜单栏：
+        # 保留全部菜单功能（点 Label 弹出对应子菜单），只是把顶栏换成主题色。
+        self._native_menubar = m
+        if UI_THEME == "dark":
+            self._build_fake_menubar([
+                ("文件", fm), ("编辑", em), ("视图", vm),
+                ("数据", dm), ("帮助", hm),
+            ])
+            self.root.configure(menu="")   # 隐藏系统白条
+
+    def _build_fake_menubar(self, items):
+        """深色模式自绘菜单条（v1.47.0）。
+
+        Windows Tk 顶层菜单栏白底无法改，用一行 Label 盖住并弹出对应
+        子菜单（子菜单已 style_menu 成深色）。功能与原菜单栏完全一致。
+        """
+        bar = tk.Frame(self.root, bg=CLR_MENU_BG,
+                       highlightbackground=CLR_BORDER, highlightthickness=1)
+        bar.pack(fill="x", side="top")
+        self._fake_menubar = bar
+        for label, submenu in items:
+            lbl = tk.Label(bar, text="  %s  " % label, bg=CLR_MENU_BG,
+                           fg=CLR_TEXT, font=(self.fam, 10), cursor="hand2")
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda e, m=submenu, w=lbl: self._popup_menu(m, w))
+            lbl.bind("<Enter>", lambda e, w=lbl: w.configure(bg=CLR_ACCENT,
+                                                              fg="#FFFFFF"))
+            lbl.bind("<Leave>", lambda e, w=lbl: w.configure(bg=CLR_MENU_BG,
+                                                              fg=CLR_TEXT))
+
+    def _popup_menu(self, menu, widget):
+        """在菜单 Label 正下方弹出子菜单。"""
+        try:
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
 
     # ============================================================ 布局
     def _build(self):
@@ -1328,6 +1372,7 @@ class App(object):
         self.detail_txt.tag_configure("v", foreground=CLR_TEXT)
         self.detail_txt.bind("<Key>", self._readonly_key)
         dm = tk.Menu(self.detail_txt, tearoff=0)
+        style_menu(dm, self.root)
         dm.add_command(label="复制选中内容", command=self.copy_detail_selection)
         dm.add_command(label="复制全部内容", command=self.copy_detail)
         self._detail_menu = dm
@@ -2720,6 +2765,7 @@ class App(object):
         col = self._cell_col
         if col == "listed":
             m = tk.Menu(self.root, tearoff=0)
+            style_menu(m, self.root)
             for text, val in (("已上架", 1), ("未上架", 0)):
                 m.add_command(
                     label=text,
@@ -2758,6 +2804,7 @@ class App(object):
         n = len(recs)
         one = recs[0] if n == 1 else None
         m = tk.Menu(self.root, tearoff=0)
+        style_menu(m, self.root)
         blk = self._drag_block or self._block_preview
         if blk:
             bcols = self._cols()
@@ -2780,6 +2827,7 @@ class App(object):
         else:
             tlabel = "选中 %d 行（整行）" % n if n else "请先框选或选中行"
         pm = tk.Menu(m, tearoff=0)
+        style_menu(pm, self.root)
         for name, colr in self.PAINT_COLORS:
             pm.add_command(label="■ %s" % name, background=colr, foreground=CLR_TEXT,
                            command=lambda c=colr: self.paint_cells(c))
@@ -2833,6 +2881,7 @@ class App(object):
 
     def _show_col_menu(self, x, y, col=None):
         m = tk.Menu(self.root, tearoff=0)
+        style_menu(m, self.root)
         if col and self.settings.get("col_rename", True):
             titles = self.store.col_titles()
             cur = titles.get(col)

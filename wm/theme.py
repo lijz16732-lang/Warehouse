@@ -330,9 +330,37 @@ def dot_check(parent, text, variable, command=None, bg=None, fam=None, size=10):
     return lbl
 
 
+def style_menu(m, root=None):
+    """给 Tk 原生 Menu 套主题配色（v1.47.0 深色模式）。
+
+    Tk 原生菜单不跟 ttk 主题，默认永远是白底黑字——深色模式下极刺眼。
+    这里在菜单创建后统一 configure 成当前调色板。颜色必须在调用时读模块
+    全局（apply_palette 会同步副本），不能写成参数默认值。
+
+    注意：有些平台（macOS）Menu 不支持 bg/fg 选项，用 try 兜住不报错。
+    """
+    try:
+        m.configure(bg=CLR_MENU_BG, fg=CLR_TEXT,
+                    activebackground=CLR_ACCENT, activeforeground="#FFFFFF",
+                    selectcolor=CLR_ACCENT,
+                    disabledforeground=CLR_MUTED,
+                    bordercolor=CLR_BORDER,
+                    font=(pick_font(root) if root is not None else
+                          (FONT_FALLBACK, 10)))
+    except tk.TclError:
+        # 平台不支持某些选项时退而求其次，只设最通用的三项
+        try:
+            m.configure(bg=CLR_MENU_BG, fg=CLR_TEXT,
+                        activebackground=CLR_ACCENT)
+        except tk.TclError:
+            pass
+    return m
+
+
 def make_menu(root, items):
     """构建右键菜单。items: [(label, command_or_None, 'sep')]"""
     m = tk.Menu(root, tearoff=0, font=(pick_font(root), 10))
+    style_menu(m, root)
     for it in items:
         if it == "sep" or (isinstance(it, tuple) and it[0] == "sep"):
             m.add_separator()

@@ -9,7 +9,8 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
-                        CLR_TEXT, CLR_WARN, apply_window_icon, center_window)
+                        CLR_ROW_ALT, CLR_TEXT, CLR_WARN,
+                        apply_window_icon, center_window)
 
 COLS = [("name", "客户", 130, "w"), ("phone", "电话", 120, "center"),
         ("level", "级别", 66, "center"), ("count", "成交笔数", 78, "center"),
@@ -156,7 +157,7 @@ class CustomerTab(ttk.Frame):
                              anchor=anchor, stretch=(key in ("address", "note")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
         self.tree.tag_configure("vip", foreground=CLR_ACCENT)
         self.tree.bind("<Double-1>", lambda e: self.edit_selected())
 

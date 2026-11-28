@@ -12,7 +12,8 @@ from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_MUTED,
-                        CLR_TEXT)
+                        CLR_DONE_BG, CLR_ROW_ALT, CLR_TEXT)
+from .theme import style_menu
 from .photos import PhotoStrip
 
 # (key, 标题, 宽度)
@@ -226,8 +227,8 @@ class PhoneTab(ttk.Frame):
         for _name, _hex in _MARK_COLORS:     # 颜色标记优先级最高
             tree.tag_configure("mark_%s" % _hex.lstrip("#"),
                                background=_hex)
-        tree.tag_configure("done", background="#F0F7F0")   # 已转入：淡绿底
-        tree.tag_configure("odd", background="#F7FAFD")
+        tree.tag_configure("done", background=CLR_DONE_BG)   # 已转入：淡绿底
+        tree.tag_configure("odd", background=CLR_ROW_ALT)
         # v1.45.3：不再挂 RowHover / CellHover（划过高亮已去掉）
         tree.bind("<Delete>", lambda e: self.delete_selected())
         # v1.43.7 与主库存页对齐的基础操作：
@@ -246,6 +247,7 @@ class PhoneTab(ttk.Frame):
                   lambda e, t=tree: self._drag_release(t, e), add="+")
         # 右键菜单：复制六件套 / 删除 / 转入库存（仅手机库存表）/ 标记颜色
         menu = tk.Menu(tree, tearoff=0)
+        style_menu(menu, self.app.root)
         menu.add_command(label="复制此格",
                          command=lambda t=tree: self._copy_menu_cell(t))
         menu.add_command(label="复制整行",
@@ -267,6 +269,7 @@ class PhoneTab(ttk.Frame):
         else:
             mkind = "sale"
         cmenu = tk.Menu(menu, tearoff=0)
+        style_menu(cmenu, self.app.root)
         for _name, _hex in _MARK_COLORS:
             cmenu.add_command(
                 label=_name, command=lambda h=_hex, k=mkind, t=tree:

@@ -9,8 +9,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_LOW_BG,
-                        CLR_MUTED, CLR_TEXT, CLR_WARN, apply_window_icon,
-                        center_window)
+                        CLR_MUTED, CLR_ROW_ALT, CLR_TEXT, CLR_WARN,
+                        apply_window_icon, center_window)
 from .sales import today
 
 LIST_COLS = [("no", "单号", 130, "w"), ("name", "名称", 180, "w"),
@@ -184,7 +184,7 @@ class StocktakeDialog(tk.Toplevel):
         self.tree.pack(side="left", fill="both", expand=True)
         # tag 优先级 = 创建先后：差异橙 > 斑马纹
         self.tree.tag_configure("diff", background=CLR_LOW_BG)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
         self.tree.bind("<Double-1>", lambda e: self.edit_qty())
 
         foot = tk.Frame(self, bg=CLR_BG)

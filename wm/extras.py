@@ -12,7 +12,7 @@ from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_INPUT, CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN,
+                        CLR_INPUT, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TEXT, CLR_WARN,
                         FIELD_KEYS,
                         FIELD_LABEL, FIELD_TYPE, FIELD_WIDTH,
                         apply_window_icon, center_window)
@@ -102,7 +102,7 @@ class RecycleBinDialog(object):
                              stretch=(key in ("model", "brand")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
         self.tree.bind("<Double-1>", lambda e: self.restore())
 
         foot = tk.Frame(body, bg=CLR_BG)
@@ -490,7 +490,7 @@ class PurchaseListDialog(object):
                              stretch=(key in ("model", "supplier", "remark")))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
 
         foot = tk.Frame(body, bg=CLR_BG)
         foot.pack(fill="x", padx=14, pady=(0, 12))
@@ -615,7 +615,7 @@ class BuyerDialog(object):
                              stretch=(key == "buyer"))
         vs.pack(side="right", fill="y")
         self.tree.pack(side="left", fill="both", expand=True)
-        self.tree.tag_configure("odd", background="#F7FAFD")
+        self.tree.tag_configure("odd", background=CLR_ROW_ALT)
         self.tree.bind("<Double-1>", lambda e: self.rename())
 
         foot = tk.Frame(body, bg=CLR_BG)

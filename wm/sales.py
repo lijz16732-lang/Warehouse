@@ -22,7 +22,7 @@ from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
                         CLR_TEXT, CLR_WARN, OUT_TYPE_HINT, OUT_TYPE_SALE,
                         OUT_TYPES,
                         apply_window_icon, center_window)
-from .theme import RowHover, dot_check
+from .theme import RowHover, dot_check, style_menu
 
 TARGET_KEY = "monthly_target"        # 月度销售目标（存库 meta，随仓库独立）
 
@@ -1431,6 +1431,7 @@ class SalesTab(ttk.Frame):
         title = self.col_titles().get(self._cell_key, self._cell_key)
         blk = self._drag_block
         m = tk.Menu(self.app.root, tearoff=0)
+        style_menu(m, self.app.root)
         if blk:
             keys = self.col_keys()[blk["c0"]:blk["c1"] + 1]
             m.add_command(

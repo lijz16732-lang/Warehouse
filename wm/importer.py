@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import ttk
 
 from .constants import (CLR_ACCENT, CLR_BG, CLR_BORDER, CLR_CARD, CLR_DANGER,
-                        CLR_MUTED, CLR_OK, CLR_TEXT, CLR_WARN, FIELD_KEYS,
+                        CLR_DUP_BG, CLR_MUTED, CLR_OK, CLR_ROW_ALT, CLR_TEXT,
+                        CLR_WARN, CLR_WARN_BG, FIELD_KEYS,
                         FIELD_LABEL, FIELD_WIDTH, FIELD_TYPE, MODEL_BLANK,
                         apply_window_icon, center_window, is_blank_model, norm_model)
 from .xlsxio import (detect_header_row, list_sheets, map_headers, read_xlsx,
@@ -134,9 +135,9 @@ class ImportDialog(tk.Toplevel):
         vs.pack(side="right", fill="y")
         self.preview.pack(side="left", fill="both", expand=True)
         hs.pack(side="bottom", fill="x", padx=8, pady=(0, 8), before=wrap)
-        self.preview.tag_configure("odd", background="#F7FAFD")
-        self.preview.tag_configure("dup", background="#FFF6E5")
-        self.preview.tag_configure("warn", background="#FDECEC")
+        self.preview.tag_configure("odd", background=CLR_ROW_ALT)
+        self.preview.tag_configure("dup", background=CLR_DUP_BG)
+        self.preview.tag_configure("warn", background=CLR_WARN_BG)
 
         # 模式 + 底部
         foot = tk.Frame(self, bg=CLR_CARD, highlightbackground=CLR_BORDER, highlightthickness=1)
