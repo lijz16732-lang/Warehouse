@@ -2293,7 +2293,8 @@ try:
           [(b.winfo_width(), b.winfo_height()) for b in _bars])
     check("最小窗口下横向滚动条仍在", len(_hbars) >= 1,
           [(b.winfo_width(), b.winfo_height()) for b in _bars])
-    root.geometry("1440x900")
+    # v1.46.1 详情右抽屉占 ~310px：窗口加宽，保证表格列可视宽度不小于旧版
+    root.geometry("1840x900")
     for _ in range(4):
         root.update()
     # GUI 使用独立的 data/warehouse.db，灌入同一批数据

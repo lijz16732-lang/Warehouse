@@ -13,7 +13,7 @@ import threading
 import time
 import tkinter as tk
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 from . import screen, xlsxio
@@ -480,6 +480,10 @@ class App(object):
         self._block_preview = None
         self.detail_txt.delete("1.0", "end")
         self.lbl_detail_title.configure(text="未选中记录")
+        try:
+            self._detail_mode_card(False)   # v1.46.1：换库后回落文本区
+        except Exception:
+            pass
         try:
             self.photo_strip.set_code(None)
         except Exception:
@@ -1062,9 +1066,14 @@ class App(object):
         # v1.46.1：KPI 卡片行（当前筛选口径下的核心指标，低库存卡可点击筛选）
         self._build_kpi(main)
 
+        # v1.46.1：详情改为右侧抽屉。先建抽屉再 pack 表格（pack 按顺序分配，
+        # 窗口不够宽时被挤的是后 pack 的表格侧，抽屉固定宽度保得住）。
+        self._build_detail(main)
+
         table_card = tk.Frame(main, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                               highlightthickness=1)
-        table_card.pack(fill="both", expand=True)
+        table_card.pack(side="left", fill="both", expand=True)
+        self.table_card = table_card   # _toggle_detail 重排 pack 顺序用
 
         tbar = tk.Frame(table_card, bg=CLR_CARD)
         tbar.pack(fill="x", padx=10, pady=(8, 6))
@@ -1132,7 +1141,7 @@ class App(object):
 
         self._build_pager(table_card)
         self._build_summary_bar(table_card)
-        self._build_detail(main)
+        # v1.46.1：详情抽屉已提前建（见上方 _build_detail 提前调用）
         # v1.45.7 云更新：启动 9 秒后后台静默检查新版本（失败静默不打扰）
         self.root.after(9000, self._auto_update_check)
 
@@ -1218,25 +1227,36 @@ class App(object):
                        command=cmd).pack(side="right", padx=2)
 
     def _build_detail(self, parent):
+        """详情右抽屉（v1.46.1）：表格右侧固定宽面板，随「显示详情面板」开关。
+
+        展开态 = detail_card（标题 + 复制按钮 + ✕ + 字段文本 + 照片条）；
+        收起态 = 右缘一条「详情」竖排细条，点击展开。二者互斥 pack，
+        由 _toggle_detail 切换；设置仍存 show_detail（老用户偏好不变）。
+        """
+        s = getattr(self, "ui_scale", 1.0)
         self.detail_card = tk.Frame(parent, bg=CLR_CARD, highlightbackground=CLR_BORDER,
-                                    highlightthickness=1)
+                                    highlightthickness=1,
+                                    width=int(300 * s))
+        self.detail_card.pack_propagate(False)
         head = tk.Frame(self.detail_card, bg=CLR_CARD)
-        head.pack(fill="x", padx=12, pady=(8, 4))
+        head.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(head, text="记录详情", bg=CLR_CARD, fg=CLR_TEXT,
                  font=(self.fam, 10, "bold")).pack(side="left")
+        # 关闭按钮先 pack（side=right 顺序：✕ 最右，往左排复制按钮）
+        ttk.Button(head, text="✕", style="Ghost.TButton", width=3,
+                   command=self._close_detail_drawer).pack(side="right")
+        ttk.Button(head, text="JSON", style="Ghost.TButton", width=5,
+                   command=self.copy_detail_json).pack(side="right", padx=(0, 4))
+        ttk.Button(head, text="复制", style="Ghost.TButton", width=5,
+                   command=self.copy_detail).pack(side="right", padx=(0, 4))
         self.lbl_detail_title = tk.Label(head, text="未选中记录", bg=CLR_CARD, fg=CLR_MUTED,
                                          font=(self.fam, 9))
-        self.lbl_detail_title.pack(side="left", padx=10)
-        ttk.Button(head, text="复制本条", style="Ghost.TButton",
-                   command=self.copy_detail).pack(side="right")
-        ttk.Button(head, text="复制为 JSON", style="Ghost.TButton",
-                   command=self.copy_detail_json).pack(side="right", padx=(0, 6))
+        self.lbl_detail_title.pack(side="left", padx=8)
 
-        self.detail_txt = tk.Text(self.detail_card, height=6, relief="flat", bd=0,
+        self.detail_txt = tk.Text(self.detail_card, relief="flat", bd=0,
                                   bg=CLR_CARD, fg=CLR_TEXT, font=(self.fam, 9),
                                   wrap="word", padx=12, pady=6, cursor="arrow",
                                   selectbackground=CLR_ACCENT, selectforeground="#FFFFFF")
-        self.detail_txt.pack(fill="both", expand=True)
         try:  # 制表位：让框选区块的列对齐显示
             self.detail_txt.configure(tabs=("3c", "13c", "24c", "35c", "45c",
                                             "55c", "65c", "75c"))
@@ -1251,13 +1271,299 @@ class App(object):
         self._detail_menu = dm
         self.detail_txt.bind("<Button-3>", lambda e: dm.tk_popup(e.x_root, e.y_root))
 
+        # ---- v1.46.1 抽屉卡片化（设计稿同款）----
+        # 单条记录：字段卡（detail_rows）+ 照片条 + 动作按钮 + 近 30 天动向；
+        # 多选/框选区块/未选中：回落到 detail_txt 文本区。
+        self.detail_rows = tk.Frame(self.detail_card, bg=CLR_CARD)
+        self.detail_rows.pack(fill="x", padx=10, pady=(2, 4))
+
         # 记录照片条（v1.25.0）：缩略图一排，点开大图，可添加/删除
         self.photo_strip = PhotoStrip(self.detail_card, self, kind="item")
-        self.photo_strip.pack(fill="x")
+        self.photo_strip.pack(fill="x", padx=6)
 
+        self.detail_actions = tk.Frame(self.detail_card, bg=CLR_CARD)
+        self.detail_actions.pack(fill="x", padx=10, pady=(8, 0))
+        # 设计稿同款 2×2 动作区：¥出售 / 编辑 / 打印标签 / 退回制作
+        self.detail_actions.columnconfigure((0, 1), weight=1, uniform="act")
+        ttk.Button(self.detail_actions, text="¥ 出售", style="Accent.TButton",
+                   command=self.sell_selected).grid(row=0, column=0,
+                                                    sticky="ew", ipady=2)
+        ttk.Button(self.detail_actions, text="编辑",
+                   command=self.edit_selected).grid(row=0, column=1,
+                                                    sticky="ew", padx=(8, 0),
+                                                    ipady=2)
+        ttk.Button(self.detail_actions, text="打印标签",
+                   command=self.print_label).grid(row=1, column=0, sticky="ew",
+                                                  pady=(8, 0), ipady=2)
+        ttk.Button(self.detail_actions, text="退回制作",
+                   command=self.goto_workflow_back).grid(row=1, column=1,
+                                                         sticky="ew",
+                                                         padx=(8, 0),
+                                                         pady=(8, 0), ipady=2)
+
+        self.detail_trend = tk.Frame(self.detail_card, bg=CLR_CARD)
+        self.detail_trend.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(self.detail_trend, text="近 30 天动向", bg=CLR_CARD, fg=CLR_TEXT,
+                 font=(self.fam, 9, "bold")).pack(anchor="w")
+        self.cv_trend = tk.Canvas(self.detail_trend, height=56, bg=CLR_CARD,
+                                  highlightthickness=0)
+        self.cv_trend.pack(fill="x", pady=(2, 2))
+        # 设计稿同款两行统计：左灰字说明 + 右值
+        self.lbl_trend_sale = self._trend_stat_row("近 30 天出售")
+        self.lbl_trend_avg = self._trend_stat_row("同类均价")
+
+        self.detail_txt.pack(fill="both", expand=True)
+        self._detail_mode_card(False)   # 默认未选中：先显示提示文本区
+
+        # 收起态细条：竖排「详情」二字，点击展开抽屉
+        self.detail_rail = tk.Frame(parent, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                                    highlightthickness=1, width=int(30 * s),
+                                    cursor="hand2")
+        self.detail_rail.pack_propagate(False)
+        rl = tk.Label(self.detail_rail, text="详情 ▸", bg=CLR_CARD, fg=CLR_MUTED,
+                      font=(self.fam, 9), cursor="hand2")
+        rl.pack(expand=True)
+        for w in (self.detail_rail, rl):
+            w.bind("<Button-1>", self._open_detail_drawer)
+            w.bind("<Enter>", lambda e: self._rail_hover(True))
+            w.bind("<Leave>", lambda e: self._rail_hover(False))
+
+        self._detail_pack_apply()
+
+    def _detail_mode_card(self, on):
+        """抽屉内容模式切换：单条记录走卡片（字段/动作/动向），否则走文本区。"""
+        for w in (self.detail_rows, self.photo_strip, self.detail_actions,
+                  self.detail_trend, self.detail_txt):
+            try:
+                w.pack_forget()
+            except Exception:
+                pass
+        if on:
+            self.detail_rows.pack(fill="x", padx=10, pady=(2, 4))
+            self.photo_strip.pack(fill="x", padx=6)
+            self.detail_actions.pack(fill="x", padx=10, pady=(8, 0))
+            self.detail_trend.pack(fill="x", padx=10, pady=(10, 0))
+        else:
+            self.detail_txt.pack(fill="both", expand=True)
+
+    def _render_card_detail(self, r):
+        """单条记录的卡片式字段区（v1.46.1，设计稿同款）。"""
+        for w in self.detail_rows.winfo_children():
+            w.destroy()
+        s = getattr(self, "ui_scale", 1.0)
+        wrap = int(170 * s)
+
+        def row(caption, value, bold=False, color=None):
+            tk.Frame(self.detail_rows, bg=CLR_BORDER_LT, height=1).pack(fill="x")
+            line = tk.Frame(self.detail_rows, bg=CLR_CARD)
+            line.pack(fill="x", pady=4)
+            tk.Label(line, text=caption, bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(self.fam, 9)).pack(side="left")
+            tk.Label(line, text=value, bg=CLR_CARD, fg=color or CLR_TEXT,
+                     font=(self.fam, 9, "bold") if bold else (self.fam, 9),
+                     anchor="e", wraplength=wrap,
+                     justify="right").pack(side="right")
+
+        price = float(r.get("price") or 0)
+        qty = int(r.get("qty") or 0)
+        cost = float(r.get("cost") or 0)
+        row("编号", r.get("code") or "无编号", bold=True, color=CLR_ACCENT)
+        row("品牌 / 型号", "%s %s" % (r.get("brand") or "", r.get("model") or ""),
+            bold=True)
+        row("成色", r.get("condition") or "—")
+        row("价格", "¥{:,.2f} × {}".format(price, qty), bold=True)
+        if cost > 0:
+            row("成本", "¥{:,.2f}（毛利 ¥{:,.2f}/件）".format(cost, price - cost))
+        row("货架", r.get("shelf") or "—")
+        if int(r.get("sold_out") or 0):
+            row("状态", "已售完", color=CLR_MUTED)
+        else:
+            listed = int(r.get("listed") or 0)
+            row("状态", "已上架" if listed else "未上架",
+                color=CLR_OK if listed else CLR_MUTED)
+        remark = str(r.get("remark") or "")
+        if remark:
+            tk.Frame(self.detail_rows, bg=CLR_BORDER_LT, height=1).pack(fill="x")
+            line = tk.Frame(self.detail_rows, bg=CLR_CARD)
+            line.pack(fill="x", pady=4)
+            tk.Label(line, text="备注", bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(self.fam, 9)).pack(side="left")
+            tk.Label(line, text=remark, bg=CLR_CARD, fg=CLR_TEXT,
+                     font=(self.fam, 9), wraplength=wrap,
+                     justify="right").pack(side="right")
+
+    def _trend_stat_row(self, caption):
+        """动向区统计行（设计稿同款）：左灰字说明 + 右值，返回值 Label。"""
+        row = tk.Frame(self.detail_trend, bg=CLR_CARD)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text=caption, bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(self.fam, 8)).pack(side="left")
+        v = tk.Label(row, text="—", bg=CLR_CARD, fg=CLR_TEXT,
+                     font=(self.fam, 8, "bold"))
+        v.pack(side="right")
+        return v
+
+    def _model_recent_sales(self, model, days=30):
+        """同型号近 N 天出售：(日桶件数列表, 总件数, 总金额)；无型号/出错返回 None。"""
+        if not model:
+            return None
+        try:
+            start = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+            rows = self.store.conn.execute(
+                "SELECT sale_date, qty, total FROM sales "
+                "WHERE model = ? AND substr(sale_date, 1, 10) >= ?",
+                (str(model), start)).fetchall()
+        except Exception:
+            return None
+        buckets = [0] * days
+        tot_qty = 0
+        tot_amt = 0.0
+        d0 = datetime.strptime(start, "%Y-%m-%d")
+        for row in rows:
+            try:
+                idx = (datetime.strptime(str(row["sale_date"])[:10], "%Y-%m-%d")
+                       - d0).days
+            except (ValueError, TypeError):
+                continue
+            if 0 <= idx < days:
+                buckets[idx] += int(row["qty"] or 0)
+            tot_qty += int(row["qty"] or 0)
+            tot_amt += float(row["total"] or 0)
+        return buckets, tot_qty, tot_amt
+
+    def _render_card_trend(self, r):
+        """近 30 天同型号出售迷你折线 + 两行统计（v1.46.1，设计稿同款）。"""
+        cv = self.cv_trend
+        cv.delete("all")
+        data = self._model_recent_sales(r.get("model"))
+        w = cv.winfo_width()
+        if w <= 20:
+            w = int(264 * getattr(self, "ui_scale", 1.0))
+        h = int(cv.cget("height"))
+        if data is None:
+            cv.create_text(w // 2, h // 2, text="—", fill=CLR_MUTED)
+            self.lbl_trend_sale.configure(text="—")
+        else:
+            buckets, tot_qty, tot_amt = data
+            if tot_qty:
+                self.lbl_trend_sale.configure(
+                    text="{} 件 · ¥{:,.2f}".format(tot_qty, tot_amt))
+            else:
+                self.lbl_trend_sale.configure(text="暂无出售")
+            pad = 6
+            n = len(buckets)
+            mx = max(buckets) if buckets else 0
+            pts = []
+            for i, v in enumerate(buckets):
+                x = pad + i * (w - 2 * pad) / max(1, n - 1)
+                y = (h - pad) - (v / mx) * (h - 2 * pad) if mx else (h - pad)
+                pts.append((x, y))
+            if mx:
+                flat = [c for p in pts for c in p]
+                cv.create_polygon([pts[0][0], h - pad] + flat + [pts[-1][0], h - pad],
+                                  fill=CLR_ACCENT_LT, outline="")
+                cv.create_line(*flat, fill=CLR_ACCENT, width=2, smooth=True)
+            else:
+                cv.create_line(pad, h - pad, w - pad, h - pad, fill=CLR_BORDER)
+        # 同类均价：同品牌+品类在售商品的平均价（排除本条）
+        same = [float(x.get("price") or 0) for x in (self.records or [])
+                if x is not r
+                and not int(x.get("sold_out") or 0)
+                and (x.get("brand") or "") == (r.get("brand") or "")
+                and (x.get("category") or "") == (r.get("category") or "")]
+        if same:
+            self.lbl_trend_avg.configure(text="¥{:,.2f}".format(sum(same) / len(same)))
+        else:
+            self.lbl_trend_avg.configure(text="—")
+
+    def print_label(self):
+        """打印标签（v1.46.1）：PIL 画一张标签 PNG → 系统「打印」动词。"""
+        recs = self._selected_records()
+        if len(recs) != 1:
+            self._status("选中一条记录后再打印标签")
+            return
+        r = recs[0]
+        import tempfile
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+
+            def _font(sz):
+                for name in ("msyh.ttc", "simhei.ttf", "arial.ttf"):
+                    try:
+                        return ImageFont.truetype(name, sz)
+                    except Exception:
+                        continue
+                return ImageFont.load_default()
+
+            img = Image.new("RGB", (420, 300), "#FFFFFF")
+            d = ImageDraw.Draw(img)
+            f_big, f_mid, f_s = _font(30), _font(18), _font(15)
+            d.text((24, 20), r.get("code") or "无编号", font=f_big, fill="#1F2A37")
+            d.text((24, 68), "%s %s" % (r.get("brand") or "", r.get("model") or ""),
+                   font=f_mid, fill="#1F2A37")
+            d.text((24, 104), "成色：%s" % (r.get("condition") or "—"),
+                   font=f_s, fill="#6B7A8F")
+            d.text((24, 132), "价格：¥%s × %s" % (self.fmt("price", r),
+                                                  r.get("qty") or 0),
+                   font=f_s, fill="#1F2A37")
+            d.text((24, 160), "货架：%s" % (r.get("shelf") or "—"),
+                   font=f_s, fill="#6B7A8F")
+            d.line((24, 196, 396, 196), fill="#DCE3ED", width=1)
+            d.text((24, 210), datetime.now().strftime("%Y-%m-%d %H:%M"),
+                   font=f_s, fill="#6B7A8F")
+            d.text((24, 238), "仓管家 · 库存标签", font=f_s, fill="#94A3B8")
+            fd, path = tempfile.mkstemp(prefix="cgm_label_", suffix=".png")
+            os.close(fd)
+            img.save(path)
+        except Exception as e:
+            self._status("生成标签失败：%s" % e)
+            return
+        try:
+            os.startfile(path, "print")   # 走系统关联的「打印」动词
+            self._status("已发送打印：%s" % (r.get("code") or ""))
+        except Exception:
+            os.startfile(path)            # 兜底：打开图片手动打印
+            self._status("已打开标签图片（未找到默认打印机，可手动打印）")
+
+    def goto_workflow_back(self):
+        """退回制作（v1.46.1）：跳到制作流程页并按本条编号筛选出对应单据。"""
+        recs = self._selected_records()
+        if len(recs) != 1:
+            self._status("选中一条记录后再退回制作")
+            return
+        code = recs[0].get("code") or ""
+        try:
+            self.nb.select(self.tab_workflow)
+            self.tab_workflow.var_kw.set(code)
+            self.tab_workflow.refresh_rows()
+            self._status("已按编号「%s」筛出制作单，选中后点「◂ 退回」" % code)
+        except Exception as e:
+            self._status("打开制作流程失败：%s" % e)
+
+    def _detail_pack_apply(self):
+        """按开关现状 pack 抽屉或细条（建界面与切换共用）。"""
         if self.var_show_detail.get():
-            self.detail_card.pack(fill="x", pady=(10, 0))
-            self.detail_card.pack_configure(ipady=2)
+            self.detail_card.pack(side="right", fill="y", padx=(10, 0))
+        else:
+            self.detail_rail.pack(side="right", fill="y")
+
+    def _close_detail_drawer(self):
+        self.var_show_detail.set(False)
+        self._toggle_detail()
+
+    def _open_detail_drawer(self, _e=None):
+        if not self.var_show_detail.get():
+            self.var_show_detail.set(True)
+            self._toggle_detail()
+
+    def _rail_hover(self, on):
+        bg = CLR_SIDE_HV if on else CLR_CARD
+        try:
+            self.detail_rail.configure(bg=bg)
+            for c in self.detail_rail.winfo_children():
+                c.configure(bg=bg)
+        except Exception:
+            pass
 
     def _build_kpi(self, parent):
         """KPI 卡片行（v1.46.1）：条目/总量/货值/已上架/低库存五张卡。
@@ -1728,11 +2034,13 @@ class App(object):
                 self.photo_strip.set_code(None)
             except Exception:
                 pass
+            self._detail_mode_card(False)
             self.detail_txt.insert("end", "在上方表格中单击任意一行查看完整字段，内容可直接选中复制。\n",
                                    "k")
             self.detail_txt.insert("end", "在表格里按住鼠标左键划过若干单元格即可框选区块，"
                                           "松开鼠标自动复制，内容同时显示在这里。", "k")
         elif len(recs) == 1:
+            # v1.46.1：单条记录走卡片模式（字段卡 + 动作 + 30 天动向）
             r = recs[0]
             self.lbl_detail_title.configure(
                 text="%s  ·  %s" % (r.get("code") or "无编号", r.get("brand") or ""))
@@ -1740,11 +2048,18 @@ class App(object):
                 self.photo_strip.set_code(r.get("code") or None)
             except Exception:
                 pass
-            for k in FIELD_KEYS:
-                self.detail_txt.insert("end", "%s：" % FIELD_LABEL[k], "k")
-                self.detail_txt.insert("end", "%s\n" % self.fmt(k, r), "v")
+            try:
+                self._render_card_detail(r)
+                self._render_card_trend(r)
+                self._detail_mode_card(True)
+            except Exception:
+                self._detail_mode_card(False)
         else:
             self.lbl_detail_title.configure(text="已选中 %d 条记录" % len(recs))
+            try:
+                self._detail_mode_card(False)   # 多选走文本区
+            except Exception:
+                pass
             try:
                 self.photo_strip.set_code(None)
             except Exception:
@@ -1763,6 +2078,7 @@ class App(object):
         cols = self._cols()
         sel = cols[blk["c0"]:blk["c1"] + 1]
         recs = [self.by_id[i] for i in blk["rows"] if i in self.by_id]
+        self._detail_mode_card(False)   # v1.46.1：区块预览走文本区
         self.detail_txt.configure(state="normal")
         self.detail_txt.delete("1.0", "end")
         try:
@@ -2291,10 +2607,18 @@ class App(object):
         center_window(win, self.root, size=(360, 190), force=True)
 
     def _toggle_detail(self):
-        if self.var_show_detail.get():
-            self.detail_card.pack(fill="x", pady=(10, 0))
-        else:
-            self.detail_card.pack_forget()
+        # v1.46.1：详情抽屉 ⇄ 收起细条（右侧），替代原表格下方面板
+        self.detail_card.pack_forget()
+        self.detail_rail.pack_forget()
+        self._detail_pack_apply()
+        # 抽屉重新 pack 后会排到 expand 表格之后——表格请求宽度大时
+        # 会把抽屉饿死（宽度 1 不显示）。把表格挪回 pack 队尾：
+        # 顺序恢复为「抽屉先占位 → 表格吃剩余空间」
+        try:
+            self.table_card.pack_forget()
+            self.table_card.pack(side="left", fill="both", expand=True)
+        except Exception:
+            pass
         self.settings["show_detail"] = self.var_show_detail.get()
         self._save_settings()
 
