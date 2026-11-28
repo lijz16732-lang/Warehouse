@@ -40,7 +40,7 @@ from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
 from .gridlines import TreeDecor
-from .imgbtn import Chip, ImgBtn
+from .imgbtn import Chip, ImgBtn, RoundEntry
 from .importer import MODE_APPEND, MODE_MERGE, MODE_REPLACE, MODE_TEXT, ask_import
 from .xlsxio import normalize_record
 from .store import Store, dedupe_records
@@ -918,17 +918,18 @@ class App(object):
 
         # 右侧搜索先 pack（side=right）：窗口不够宽时优先保住搜索框，
         # 被挤掉的是最左侧后 pack 的按钮而不是搜索框。
+        # v1.46.3 圆角胶囊搜索框（设计稿同款）+ 占位灰字
         sbox = tk.Frame(inner, bg=CLR_CARD)
         sbox.pack(side="right")
-        tk.Label(sbox, text="搜索", bg=CLR_CARD, fg=CLR_MUTED,
-                 font=(self.fam, 9)).pack(side="left", padx=(0, 6))
         self.var_kw = tk.StringVar()
-        ent = ttk.Entry(sbox, textvariable=self.var_kw, width=18, font=(self.fam, 10))
+        ent = RoundEntry(sbox, self, textvariable=self.var_kw,
+                         width=220, height=30,
+                         placeholder="搜索编号 / 型号 / 品牌…",
+                         on_change=self._debounce_apply,
+                         on_return=self.apply_filters)
         ent.pack(side="left")
-        ent.bind("<KeyRelease>", lambda e: self._debounce_apply())
-        ent.bind("<Return>", lambda e: self.apply_filters())
-        ttk.Button(sbox, text="重置", style="Ghost.TButton", width=5,
-                   command=self.reset_filters).pack(side="left", padx=(8, 0))
+        ImgBtn(sbox, self, "重置", self.reset_filters, height=28).pack(
+            side="left", padx=(8, 0))
         self.entry_search = ent
 
         # 按钮统一给显式 width：不设 width 时 ttk 在本机会渲染成固定 ~118px，
@@ -942,27 +943,26 @@ class App(object):
         self.cb_wh["values"] = self.wh_names()
         self.cb_wh.pack(side="left")
         self.cb_wh.bind("<<ComboboxSelected>>", self._on_wh_selected)
-        ttk.Button(inner, text="管理", style="Ghost.TButton", width=5,
-                   command=self.manage_warehouses).pack(side="left", padx=(6, 0))
+        ImgBtn(inner, self, "管理", self.manage_warehouses, height=28).pack(
+            side="left", padx=(6, 0))
         self._sep(inner)
 
-        # v1.46.3 工具栏精简（对齐设计稿）：导入/导出/批量/刷新/新增录入
-        # 收进「库存明细」标题行右侧，这里只留高频业务动作
-        ttk.Button(inner, text="编辑", width=5,
-                   command=self.edit_selected).pack(side="left")
-        ttk.Button(inner, text="删除", style="Danger.TButton", width=5,
-                   command=self.delete_selected).pack(side="left", padx=(8, 0))
+        # v1.46.3 工具栏精简（对齐设计稿）：导入/导出/批量/刷新/新增入库
+        # 收进「库存明细」标题行右侧，这里只留高频业务动作；按钮统一换
+        # 抗锯齿圆角图按钮（带边框轮廓，设计稿同款）
+        ImgBtn(inner, self, "编辑", self.edit_selected, height=28).pack(side="left")
+        ImgBtn(inner, self, "删除", self.delete_selected, height=28).pack(
+            side="left", padx=(8, 0))
         self._sep(inner)
-        ttk.Button(inner, text="采购入库", width=9,
-                   command=self.purchase_in).pack(side="left")
-        ttk.Button(inner, text="登记出售", style="Accent.TButton", width=9,
-                   command=self.sell_selected).pack(side="left", padx=(8, 0))
+        ImgBtn(inner, self, "采购入库", self.purchase_in, height=28).pack(side="left")
+        ImgBtn(inner, self, "登记出售", self.sell_selected, kind="accent",
+               height=28).pack(side="left", padx=(8, 0))
         # 「登记出库」不进工具栏（空间不足会挤掉后面的按钮）：
         # 入口在「出库记录」页的「+ 登记出库」按钮、编辑菜单、右键菜单与 Ctrl+U
         # v1.46.3「筛选」开关：左侧筛选面板默认收起（对齐设计稿），点此展开/收起
         self._sep(inner)
-        ttk.Button(inner, text="筛选", style="Ghost.TButton", width=5,
-                   command=self._toggle_filter_panel).pack(side="left")
+        ImgBtn(inner, self, "筛选", self._toggle_filter_panel, height=28).pack(
+            side="left")
 
         # 侧栏筛选 + 表格
     def _build_body(self):
@@ -1077,19 +1077,19 @@ class App(object):
         self.frm_chips.pack(side="left", padx=(12, 0))
         self._chip_imgs = []
         # v1.46.3 标题行右侧动作组（设计稿 panel-head 同款）：
-        # ↥导入 ↧导出 批量修改 ⟳刷新 ＋新增录入 —— 先 pack 的在最右
+        # ↥导入 ↧导出 批量修改 ⟳刷新 ＋新增入库 —— 先 pack 的在最右；
+        # 统一用抗锯齿圆角图按钮（带边框轮廓）
         acts = tk.Frame(tbar, bg=CLR_CARD)
         acts.pack(side="right")
-        ttk.Button(acts, text="＋ 新增录入", style="Accent.TButton", width=10,
-                   command=self.add_record).pack(side="right")
-        ttk.Button(acts, text="刷新", style="Ghost.TButton", width=5,
-                   command=self.load_data).pack(side="right", padx=(8, 0))
-        ttk.Button(acts, text="批量修改", width=9,
-                   command=self.batch_edit).pack(side="right", padx=(8, 0))
-        ttk.Button(acts, text="导出", width=5,
-                   command=self.do_export).pack(side="right", padx=(8, 0))
-        ttk.Button(acts, text="导入", width=5,
-                   command=self.do_import).pack(side="right")
+        ImgBtn(acts, self, "＋ 新增入库", self.add_record, kind="accent",
+               height=28).pack(side="right")
+        ImgBtn(acts, self, "刷新", self.load_data, height=28).pack(
+            side="right", padx=(8, 0))
+        ImgBtn(acts, self, "批量修改", self.batch_edit, height=28).pack(
+            side="right", padx=(8, 0))
+        ImgBtn(acts, self, "导出", self.do_export, height=28).pack(
+            side="right", padx=(8, 0))
+        ImgBtn(acts, self, "导入", self.do_import, height=28).pack(side="right")
         self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · Ctrl+A 全选 · Ctrl/Shift 点选多行 · 拖选单元格即复制 · 右键可复制或「区域上色」",
                                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8))
         self.lbl_hint.pack(side="right", padx=(0, 12))
@@ -2146,7 +2146,7 @@ class App(object):
                     elif 0 < thr and q <= thr:
                         tags.append("low")   # 低库存：橙色底提醒补货
             self.tree.insert("", "end", iid=rid,
-                             values=(["☑" if rid in prev_sel else "☐"]
+                             values=([""]   # v1.46.3 复选框由覆盖层绘制
                                      + [("" if c == "listed" else self.fmt(c, rec))
                                         for c in cols]
                                      + ["📷" if (rec.get("code") or "")
@@ -2456,15 +2456,26 @@ class App(object):
 
     # ---- v1.46.2 复选框列（设计稿同款）----
     def _sync_chk(self):
-        """选中变化后只刷新勾选列的 ☑/☐（不动其他列，避免整表闪烁）。"""
+        """v1.46.3 复选框改覆盖层绘制，格子不再写字；这里只清旧字形。
+
+        选中态由 gridlines._chkbox 直接读 tree.selection()，选中变化时
+        <<TreeviewSelect>> 已挂 _decor_soon 触发重排。
+        """
         try:
-            sel = set(self.tree.selection())
             for iid in self.tree.get_children():
-                want = "☑" if iid in sel else "☐"
-                if self.tree.set(iid, "_chk") != want:
-                    self.tree.set(iid, "_chk", want)
+                if self.tree.set(iid, "_chk"):
+                    self.tree.set(iid, "_chk", "")
         except Exception:
             pass
+
+    def _chk_toggle_iid(self, iid):
+        """复选框贴片点击：切换该行选中，不清其他行（等价 Ctrl+点行）。"""
+        iid = str(iid)
+        if iid in self.tree.selection():
+            self.tree.selection_remove(iid)
+        else:
+            self.tree.selection_add(iid)
+            self.tree.focus(iid)
 
     def _toggle_check_all(self):
         """点表头复选框：全不选 ⇄ 全选（当前页全部行）。"""

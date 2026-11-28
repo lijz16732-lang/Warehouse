@@ -50,23 +50,30 @@ root.update()
 
 kids = list(app.tree.get_children())
 check("首列是复选框列", list(app.tree["columns"])[0] == "_chk")
-check("每行首格是 ☐", all(app.tree.set(k, "_chk") == "☐" for k in kids))
+# v1.46.3 复选框改覆盖层绘制：格内无字 + 每行都有复选框贴片
+check("每行首格无字且有贴片",
+      all(app.tree.set(k, "_chk") == "" for k in kids)
+      and all(k in app.decor._chks for k in kids))
 
-# ---- 复选框跟随选中 ----
+# ---- 复选框跟随选中（贴片 sig 末位 = 选中态）----
 app.tree.selection_set([kids[0]])
 root.update()
-check("选中行变 ☑", app.tree.set(kids[0], "_chk") == "☑"
-      and app.tree.set(kids[1], "_chk") == "☐")
+sig0 = getattr(app.decor._chks.get(kids[0]), "_sig", None)
+sig1 = getattr(app.decor._chks.get(kids[1]), "_sig", None)
+check("选中行勾选亮起", sig0 is not None and sig0[4] is True
+      and sig1 is not None and sig1[4] is False)
 
 # 表头全选 / 全不选
 app._toggle_check_all()
 root.update()
 check("表头全选", len(app.tree.selection()) == len(kids)
-      and all(app.tree.set(k, "_chk") == "☑" for k in kids))
+      and all(getattr(app.decor._chks[k], "_sig", (None,)*5)[4] is True
+              for k in kids))
 app._toggle_check_all()
 root.update()
 check("表头全不选", not app.tree.selection()
-      and all(app.tree.set(k, "_chk") == "☐" for k in kids))
+      and all(getattr(app.decor._chks[k], "_sig", (None,)*5)[4] is False
+              for k in kids))
 
 # _cell_at 不把复选框列当数据格（编码列开头也不误判）
 bb = app.tree.bbox(kids[0], column="_chk")

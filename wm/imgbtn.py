@@ -143,16 +143,24 @@ class ImgBtn(tk.Label):
         self.bind("<Button-1>", self._click)
 
     def _render(self):
+        from . import constants as C
         s = float(getattr(self._app, "ui_scale", 1.0) or 1.0)
-        w = int(self._bw_px * s) if self._bw_px else None
         h = int(self._bh_px * s)
-        if w:
-            self._imgs = make_button_pair(self._text, w, h,
-                                          10, s, **self._kw)
-            self.configure(image=self._imgs[0])
-        else:
-            # 未指定宽度时按文字宽度补 padding 先占位（图片后续再换）
-            self.configure(text=self._text)
+        if not self._bw_px:
+            # v1.46.3 自动宽度：按文字实宽 + 左右 padding（工具栏一批按钮统一用）
+            px = max(9, int(round(10 * 96 / 72 * s)))
+            f = _load_font(self._kind == "accent", px)
+            try:
+                box = ImageDraw.Draw(Image.new("RGB", (8, 8))).textbbox(
+                    (0, 0), self._text, font=f)
+                tw = box[2] - box[0]
+            except AttributeError:
+                tw = ImageDraw.Draw(Image.new("RGB", (8, 8))).textsize(
+                    self._text, font=f)[0]
+            self._bw_px = int((tw + 28) / s)
+        w = int(self._bw_px * s)
+        self._imgs = make_button_pair(self._text, w, h, 10, s, **self._kw)
+        self.configure(image=self._imgs[0])
 
     def _set(self, hover):
         if self._imgs:
@@ -161,3 +169,88 @@ class ImgBtn(tk.Label):
     def _click(self, _e=None):
         if self._cmd:
             self._cmd()
+
+    def invoke(self):
+        """探针/快捷路径用：模拟点击。"""
+        self._click()
+
+
+class RoundEntry(tk.Canvas):
+    """圆角搜索框（v1.46.3，设计稿同款）：胶囊边框 + 内嵌无边框 Entry。
+
+    空值且未聚焦时显示灰字 placeholder；聚焦时边框变品牌蓝。
+    """
+
+    def __init__(self, master, app, textvariable=None, width=230, height=30,
+                 placeholder="", bg=None, on_change=None, on_return=None):
+        from . import constants as C
+        self._app = app
+        self._on_change = on_change
+        self._on_return = on_return
+        s = float(getattr(app, "ui_scale", 1.0) or 1.0)
+        w = int(width * s)
+        h = int(height * s)
+        self._w_px, self._h_px = w, h
+        base = bg or C.CLR_CARD
+        tk.Canvas.__init__(self, master, width=w, height=h, bg=base,
+                           highlightthickness=0)
+        self._img_n = ImageTk.PhotoImage(
+            _rounded(w, h, h // 2, C.CLR_INPUT, C.CLR_BORDER, 1))
+        self._img_f = ImageTk.PhotoImage(
+            _rounded(w, h, h // 2, C.CLR_INPUT, C.CLR_ACCENT, 1))
+        self._border = self.create_image(0, 0, image=self._img_n, anchor="nw")
+        self.var = textvariable or tk.StringVar()
+        self.entry = tk.Entry(self, textvariable=self.var, bd=0,
+                              bg=C.CLR_INPUT, fg=C.CLR_TEXT,
+                              insertbackground=C.CLR_TEXT,
+                              selectbackground=C.CLR_ACCENT,
+                              selectforeground="#FFFFFF",
+                              font=(app.fam, 10), highlightthickness=0)
+        pad = int(14 * s)
+        self.create_window(pad, h // 2, window=self.entry, anchor="w",
+                           width=w - 2 * pad)
+        # 占位灰字：Tk 的内嵌窗口永远盖住 canvas 图形项，所以占位要用
+        # Label 窗口 + lift 到 Entry 之上（点它时把焦点交给输入框）
+        self._ph_lbl = tk.Label(self, text=placeholder, bg=C.CLR_INPUT,
+                                fg=C.CLR_MUTED, font=(app.fam, 9),
+                                cursor="xterm")
+        self._ph_lbl.place(x=pad, y=h // 2, anchor="w")
+        self._ph_lbl.lift(self.entry)
+        self._ph_lbl.bind("<Button-1>", lambda e: self.entry.focus_set())
+        self._sync_ph()
+        self.entry.bind("<KeyRelease>", self._on_key)
+        self.entry.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.entry.bind("<FocusOut>", lambda e: self._set_focus(False))
+        self.entry.bind("<Return>", self._on_ret)
+
+    # ---- 对外接口（与 ttk.Entry 兼容的最小集）----
+    def focus_set(self):
+        self.entry.focus_set()
+
+    def select_range(self, a, b):
+        self.entry.select_range(a, b)
+
+    def _on_key(self, _e=None):
+        self._sync_ph()
+        if self._on_change:
+            self._on_change()
+
+    def _on_ret(self, _e=None):
+        if self._on_return:
+            self._on_return()
+
+    def _set_focus(self, on):
+        self.itemconfigure(self._border, image=self._img_f if on else self._img_n)
+        if not on:
+            self._sync_ph()
+
+    def _sync_ph(self):
+        has = bool(self.var.get())
+        focused = self.entry is self.focus_get()
+        if has or focused:
+            self._ph_lbl.place_forget()
+        else:
+            self._ph_lbl.place(x=int(14 / max(0.1, float(
+                getattr(self._app, "ui_scale", 1.0) or 1.0))), y=0,
+                anchor="w", rely=0.5)
+            self._ph_lbl.lift(self.entry)

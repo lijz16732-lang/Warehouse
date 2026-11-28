@@ -53,8 +53,9 @@ def chk(name, ok, detail=""):
 
 def find_button(widget, text):
     for w in widget.winfo_children():
-        if isinstance(w, tk.Misc) and str(w.winfo_class()) == "TButton" \
-                and w.cget("text") == text:
+        if isinstance(w, tk.Misc) and (
+                (str(w.winfo_class()) == "TButton" and w.cget("text") == text)
+                or (hasattr(w, "_text") and getattr(w, "_text", "") == text)):
             return w
         got = find_button(w, text) if hasattr(w, "winfo_children") else None
         if got:

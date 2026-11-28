@@ -65,8 +65,10 @@ class TreeDecor(object):
         self._h = []            # 正在显示的横线
         self._vpool = []        # 回收池（已隐藏，可复用）
         self._hpool = []
-        self._pills = {}        # iid -> Canvas（开关）
+        self._pills = {}        # iid -> Canvas（上架徽章）
         self._pill_pool = []    # 回收复用
+        self._chks = {}         # iid -> Canvas（首列复选框，v1.46.3）
+        self._chk_pool = []     # 回收复用
         self._imgs = {}         # (pw, ph, fill, on) -> PhotoImage（抗锯齿胶囊）
         self._drag_t = 0.0      # 拖动列头时节流
         tree.bind("<Configure>", lambda e: self.redraw(), add="+")
@@ -115,6 +117,7 @@ class TreeDecor(object):
         xoff = float(xv[0]) * total
         cols = self.app._cols()
         has_listed = "listed" in cols
+        has_chk = "_chk" in disp
         # 先收集位置：开关必须先放、网格线后放（后 place 的在上层，
         # 否则开关整格铺底会把列边界和行分隔线盖出一个洞）
         vpos = []
@@ -125,6 +128,7 @@ class TreeDecor(object):
                 vpos.append(int(x))
         hpos = []
         pills = []
+        chks = []
         # 只扫视口内的行：整页 2000+ 行时逐行问 bbox 要 10ms，滚动会发涩
         kids = t.get_children()
         try:
@@ -145,6 +149,12 @@ class TreeDecor(object):
             y = int(bb[1]) + int(bb[3])
             if head_h < y < vh - 1:
                 hpos.append(y)
+            # 行被裁掉一半以上就不画徽章/复选框：避免表格底部出现
+            # 「只有一颗徽章、没有行内容」的游离贴片（v1.46.3 用户反馈）
+            if int(bb[1]) + int(bb[3]) // 2 > vh:
+                continue
+            if iid not in getattr(self.app, "by_id", {}):
+                continue
             if has_listed:
                 try:
                     pb = t.bbox(str(iid), column="listed")
@@ -152,12 +162,25 @@ class TreeDecor(object):
                     pb = None
                 if pb and int(pb[1]) >= head_h:
                     pills.append((str(iid), pb))
+            if has_chk:
+                try:
+                    cb = t.bbox(str(iid), column="_chk")
+                except Exception:
+                    cb = None
+                if cb and int(cb[1]) >= head_h:
+                    chks.append((str(iid), cb))
         live = set()
         for iid, pb in pills:
             live.add(iid)
         self._recycle_pills(live)      # 先把滚出视口的收进池，新行才能复用同一批对象
         for iid, pb in pills:
             self._pill(iid, pb)
+        live = set()
+        for iid, cb in chks:
+            live.add(iid)
+        self._recycle_chks(live)
+        for iid, cb in chks:
+            self._chkbox(iid, cb)
         for x in vpos:
             self._vline(x, head_h, vh)
         for y in hpos:
@@ -374,16 +397,20 @@ class TreeDecor(object):
             cv.create_text(w // 2, h // 2, text=txt, fill=fgc)
 
     def _badge_image(self, on, cw, ch):
-        """抗锯齿徽章 PNG（PIL 渲染，按 (on,宽,高,主题) 缓存）。"""
-        if not HAS_PIL or cw < 40 or ch < 16:
+        """抗锯齿徽章 PNG（PIL 渲染，按 (on,宽,高,主题) 缓存）。
+
+        v1.46.3 收小一档（设计稿 pill 高约 18px、8.5pt 字），避免整格
+        被大徽章撑满显得笨重。
+        """
+        if not HAS_PIL or cw < 36 or ch < 14:
             return None
         theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
         bgc, fgc = (_BADGE_ON if on else _BADGE_OFF)[theme]
         scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
-        bh = min(int(22 * scale), ch - int(8 * scale))
-        if bh < 12:
-            bh = ch - 2
-        px = max(9, int(round(10 * 96.0 / 72 * scale)))
+        bh = min(int(18 * scale), ch - int(10 * scale))
+        if bh < 11:
+            bh = ch - 4
+        px = max(9, int(round(8.5 * 96.0 / 72 * scale)))
         f = _badge_font(True, px)
         txt = "已上架" if on else "下架"
         meas = ImageDraw.Draw(Image.new("RGB", (8, 8)))
@@ -392,12 +419,12 @@ class TreeDecor(object):
             tw2, th2 = box[2] - box[0], box[3] - box[1]
         except AttributeError:
             tw2, th2 = meas.textsize(txt, font=f)
-        dot = max(3, int(3 * scale))
-        pad = max(4, int(8 * scale))
-        gap = max(3, int(4 * scale))
+        dot = max(3, int(2.5 * scale))
+        pad = max(4, int(7 * scale))
+        gap = max(3, int(3.5 * scale))
         bw = pad * 2 + dot + gap + tw2
-        if bw > cw - int(4 * scale):
-            bw = cw - int(4 * scale)
+        if bw > cw - int(8 * scale):
+            bw = cw - int(8 * scale)
         key = (bool(on), int(bw), int(bh), theme)
         img = self._imgs.get(key)
         if img is not None:
@@ -430,6 +457,107 @@ class TreeDecor(object):
                 return "break"
         return "break"
 
+    # ------------------------------------------------ 复选框列（v1.46.3）
+    def _recycle_chks(self, live_iids):
+        """收起本轮不可见的复选框贴片（放回池里复用）。"""
+        for iid in list(self._chks):
+            if iid in live_iids:
+                continue
+            cv = self._chks.pop(iid)
+            try:
+                cv.place_forget()
+            except Exception:
+                pass
+            cv._sig = None
+            if len(self._chk_pool) < 96:
+                self._chk_pool.append(cv)
+            else:
+                try:
+                    cv.destroy()
+                except Exception:
+                    pass
+
+    def _chkbox(self, iid, bbox):
+        """首列复选框贴片：小圆角方块，选中=品牌蓝底白勾（设计稿同款）。"""
+        cv = self._chks.get(iid)
+        if cv is None:
+            if self._chk_pool:
+                cv = self._chk_pool.pop()
+            else:
+                cv = tk.Canvas(self.tree, bd=0, highlightthickness=0,
+                               cursor="hand2")
+                cv.bind("<MouseWheel>", self.app._on_wheel)
+                cv.bind("<Button-3>", lambda e: self.tree.event_generate(
+                    "<Button-3>", x=e.x, y=e.y, rootx=e.x_root, rooty=e.y_root))
+            self._chks[iid] = cv
+        cv.bind("<Button-1>", self._on_chk_click)
+        x, y, w, h = (int(v) for v in bbox)
+        scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
+        px = min(int(16 * scale), h - int(8 * scale), w - int(12 * scale))
+        if px < 10:
+            return
+        try:
+            checked = str(iid) in self.tree.selection()
+        except Exception:
+            checked = False
+        bg = self._row_bg(iid)
+        sig = (bg, w, h, px, checked)
+        if getattr(cv, "_sig", None) != sig:
+            self._draw_chk(cv, bg, w, h, px, checked)
+            cv._sig = sig
+        try:
+            cv.place(x=x, y=y, width=w, height=h)
+        except Exception:
+            pass
+
+    def _draw_chk(self, cv, bg, w, h, px, checked):
+        cv.delete("all")
+        cv.configure(bg=bg)
+        img = self._chk_image(checked, px)
+        if img is not None:
+            cv.create_image(w // 2, h // 2, image=img)
+
+    def _chk_image(self, checked, px):
+        """抗锯齿复选框：未选=白底灰边圆角方块；选中=蓝底白勾。"""
+        if not HAS_PIL:
+            return None
+        key = ("chk", bool(checked), int(px))
+        img = self._imgs.get(key)
+        if img is not None:
+            return img
+        SS = 4
+        W = px * SS
+        if checked:
+            fill, outline = CLR_ACCENT, CLR_ACCENT
+        else:
+            fill, outline = "#FFFFFF", "#C9D2DE"
+        im = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle([0, 0, W - 1, W - 1], radius=int(2.5 * SS),
+                            fill=fill, outline=outline, width=SS)
+        if checked:
+            # 白勾：圆头折线（相对坐标，居中）
+            lw = max(2, int(1.8 * SS))
+            pts = [(0.26 * W, 0.53 * W), (0.43 * W, 0.70 * W), (0.74 * W, 0.32 * W)]
+            d.line(pts, fill="#FFFFFF", width=lw, joint="curve")
+            for p in (pts[0], pts[2]):
+                r = lw / 2.0
+                d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill="#FFFFFF")
+        img = ImageTk.PhotoImage(im.resize((px, px), Image.LANCZOS))
+        self._imgs[key] = img
+        return img
+
+    def _on_chk_click(self, e):
+        """点复选框贴片：只切换该行选中（不清其他行），同 Ctrl+点行。"""
+        for iid, cv in list(self._chks.items()):
+            if cv is e.widget:
+                try:
+                    self.app._chk_toggle_iid(iid)
+                except Exception:
+                    pass
+                return "break"
+        return "break"
+
     # ------------------------------------------------------------ 隐藏
     def _hide(self):
         for f in self._v + self._h:
@@ -448,3 +576,10 @@ class TreeDecor(object):
                 pass
         self._pill_pool.extend(self._pills.values())
         self._pills.clear()
+        for cv in self._chks.values():
+            try:
+                cv.place_forget()
+            except Exception:
+                pass
+        self._chk_pool.extend(self._chks.values())
+        self._chks.clear()
