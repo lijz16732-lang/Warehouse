@@ -306,9 +306,11 @@ class TreeDecor(object):
     def _row_bg(self, iid):
         """行底色：与 tree 的实际绘制顺序一致。
 
-        优先级：用户上色（开关替贴片扛住该格，底色必须跟上）>
-        划过（hover tag 最高）> 下架灰/低库存橙/斑马纹 > 选中蓝 > 默认。
-        开关铺满整格，底色取错就会露出一个方框，所以必须逐层对齐。
+        优先级：用户上色 > 选中蓝 > 下架灰/低库存橙/斑马纹 > 默认。
+        v1.46.9：选中态必须排在 unlisted/low/odd 之前——Treeview 自身把
+        选中蓝画在整行上（盖过下架灰/斑马），覆盖层贴片若还按下架灰取色，
+        就会出现「复选框/徽章格底色和整行不一样」的两色割裂（用户红框反馈）。
+        只有用户手动上色格仍最高优先（贴片替它扛住该格底色）。
         """
         try:
             cc = getattr(self.app, "cell_colors", None)
@@ -316,6 +318,12 @@ class TreeDecor(object):
                 c = cc.get(str(iid), {}).get("listed")
                 if c:
                     return c
+        except Exception:
+            pass
+        # Treeview 选中蓝盖过其它行 tag：贴片底色必须跟随
+        try:
+            if str(iid) in self.tree.selection():
+                return CLR_SEL
         except Exception:
             pass
         # 划过整行高亮已移除（v1.45.1）：开关底色只跟用户上色 / 下架灰
@@ -329,11 +337,6 @@ class TreeDecor(object):
             return CLR_LOW_BG
         if "odd" in tags:
             return CLR_ROW_ALT
-        try:
-            if str(iid) in self.tree.selection():
-                return CLR_SEL          # 无色块的行，选中色才真的画得出来
-        except Exception:
-            pass
         return CLR_INPUT
 
     def _pill(self, iid, bbox):
@@ -400,29 +403,34 @@ class TreeDecor(object):
             on = bool(rec and rec.get("listed"))
         except Exception:
             on = False
-        img = self._badge_image(on, w, h)
+        img = self._badge_image(on, w, h, bg)
         if img is not None:
             cv.create_image(w // 2, h // 2, image=img)
         else:
             # 兜底矢量徽章（图片加载失败时）
             txt = "已上架" if on else "下架"
             theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
-            bgc, fgc = (_BADGE_ON if on else _BADGE_OFF)[theme]
+            fgc = (_BADGE_ON if on else _BADGE_OFF)[theme][1]
+            bgc = bg or (_BADGE_ON if on else _BADGE_OFF)[theme][0]
             bh = max(12, min(int(22 * float(getattr(self.app, "ui_scale", 1.0) or 1.0)), h - 8))
             cv.create_rectangle(w // 2 - 30, h // 2 - bh // 2, w // 2 + 30,
                                 h // 2 - bh // 2 + bh, fill=bgc, outline=bgc)
             cv.create_text(w // 2, h // 2, text=txt, fill=fgc)
 
-    def _badge_image(self, on, cw, ch):
-        """抗锯齿徽章 PNG（PIL 渲染，按 (on,宽,高,主题) 缓存）。
+    def _badge_image(self, on, cw, ch, bg=None):
+        """抗锯齿徽章 PNG（PIL 渲染，按 (on,宽,高,主题,底色) 缓存）。
 
         v1.46.3 收小一档（设计稿 pill 高约 18px、8.5pt 字），避免整格
         被大徽章撑满显得笨重。
+        v1.46.9：徽章胶囊底色跟随所在行底色（选中蓝/下架灰/斑马白…），
+        不再固定浅灰，否则选中行上徽章与行底两色割裂（用户红框反馈）。
         """
         if not HAS_PIL or cw < 36 or ch < 14:
             return None
         theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
-        bgc, fgc = (_BADGE_ON if on else _BADGE_OFF)[theme]
+        fgc = (_BADGE_ON if on else _BADGE_OFF)[theme][1]
+        # 底色跟随行底色；无底色传入时退回主题默认胶囊色
+        bgc = bg or (_BADGE_ON if on else _BADGE_OFF)[theme][0]
         scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
         bh = min(int(18 * scale), ch - int(10 * scale))
         if bh < 11:
@@ -442,7 +450,7 @@ class TreeDecor(object):
         bw = pad * 2 + dot + gap + tw2
         if bw > cw - int(8 * scale):
             bw = cw - int(8 * scale)
-        key = (bool(on), int(bw), int(bh), theme)
+        key = (bool(on), int(bw), int(bh), theme, str(bgc))
         img = self._imgs.get(key)
         if img is not None:
             return img
