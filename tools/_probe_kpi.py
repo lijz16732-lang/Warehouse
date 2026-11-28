@@ -124,6 +124,21 @@ check("再点一次 → 取消", app.var_low_only.get() is False
 check("汇总条命中 5 / 5", "5 / 5" in app.lbl_sum_hit.cget("text"))
 check("汇总条货值 2,313.25", "2,313.25" in app.lbl_sum_val.cget("text"))
 
+# ---- 6 侧栏「设置」入口（v1.46.1 补，系统组命令项）----
+check("导航注册设置命令", "设置" in app.nav._cmds
+      and callable(app.nav._cmds["设置"]))
+sysgrp = dict((g[0], g[1]) for g in app.nav.groups)["系统"]
+check("设置项挂在系统组", (None, "设置") in sysgrp)
+app.open_appearance()
+root.update()
+win = getattr(app, "_settings_win", None)
+check("设置窗口能打开", win is not None and win.winfo_exists()
+      and win.title() == "设置")
+try:
+    win.destroy()
+except Exception:
+    pass
+
 root.destroy()
 print("%d/%d 项通过" % (ok[1], ok[0]))
 sys.exit(0 if ok[1] == ok[0] else 1)

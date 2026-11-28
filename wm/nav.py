@@ -26,10 +26,10 @@ from .constants import APP_VERSION, CLR_ACCENT, CLR_SIDE_BG, CLR_SIDE_GRP, \
 
 # 导航项图标（按显示名映射；未登记的用实心小方点，视觉不突兀）
 ICONS = {
-    "库存列表": "▤", "盘点单": "☑", "制作流程": "⚙",
+    "库存列表": "▤", "盘点单": "☑", "制作流程": "⚒",
     "出售记录": "¥", "出库记录": "➤", "客户管理": "☺", "销售退货": "↩",
     "数据分析": "▨", "销售利润表": "∑",
-    "手机数据": "✆", "操作日志": "☰",
+    "手机数据": "✆", "操作日志": "☰", "设置": "⚙",
 }
 
 
@@ -54,6 +54,7 @@ class FunctionNav(tk.Frame):
         self.pack_propagate(False)
 
         # 分组定义：(组名, [(页码, 显示名), ...])；页码 = Notebook 页序
+        # 页码为 None 的项是「命令项」（如设置弹窗），不占 Notebook 页码
         self.groups = [
             ("库存管理", [(0, "库存列表")]),
             ("销售管理", [(1, "出售记录"), (2, "出库记录")]),
@@ -66,6 +67,7 @@ class FunctionNav(tk.Frame):
         self._item_rows = {}     # page_idx -> 整行 Frame（配色用）
         self._badge_lbls = {}    # page_idx -> 角标 Label
         self._badges = {}        # page_idx -> 文本
+        self._cmds = {}          # 命令项显示名 -> 回调（add_command 注册）
         self._lbl_lan = None
         self._render()
 
@@ -81,6 +83,24 @@ class FunctionNav(tk.Frame):
             self.expanded.add(group)
         self.expanded.add(group)
         self._render()
+        self._style_items()
+
+    def add_command(self, group, label, cb):
+        """注册命令项（v1.46.1）：如「设置」弹窗，不占 Notebook 页码。
+
+        渲染上与普通导航项一致；点击直接调 cb，不参与高亮/角标。
+        """
+        self._cmds[label] = cb
+        for g in self.groups:
+            if g[0] == group:
+                g[1].append((None, label))
+                break
+        else:
+            self.groups.append((group, [(None, label)]))
+            self.expanded.add(group)
+        self.expanded.add(group)
+        self._render()
+        self._style_items()
 
     # ------------------------------------------------------------ 对外接口
     def set_active(self, idx):
@@ -111,6 +131,14 @@ class FunctionNav(tk.Frame):
     def _open(self, idx):
         try:
             self.app.show_page(idx)
+        except Exception:
+            pass
+
+    def _run_cmd(self, cb):
+        """命令项点击（设置弹窗等）；失败不打断导航。"""
+        try:
+            if callable(cb):
+                cb()
         except Exception:
             pass
 
@@ -199,6 +227,26 @@ class FunctionNav(tk.Frame):
                 bdg = tk.Label(row, text="", bg=CLR_SIDE_BG, fg=CLR_SIDE_TXT,
                                font=(self.fam, 8))
                 bdg.pack(side="right", padx=(0, 6))
+
+                if idx is None:
+                    # 命令项（设置等弹窗入口）：点击调回调，悬停只做行高亮
+                    cb = self._cmds.get(label)
+
+                    def _hv2(f, on):
+                        bg = CLR_SIDE_HV if on else CLR_SIDE_BG
+                        f.configure(bg=bg)
+                        for c in f.winfo_children():
+                            try:
+                                c.configure(bg=bg)
+                            except Exception:
+                                pass
+
+                    for w in (row, ic, lbl, bdg):
+                        w.bind("<Button-1>", lambda e, c=cb: self._run_cmd(c))
+                        w.bind("<Enter>", lambda e, f=row: _hv2(f, True))
+                        w.bind("<Leave>", lambda e, f=row: _hv2(f, False))
+                    continue
+
                 self._apply_badge(bdg, idx)
                 for w in (row, ic, lbl, bdg):
                     w.bind("<Button-1>", lambda e, i=idx: self._open(i))

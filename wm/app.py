@@ -887,6 +887,9 @@ class App(object):
         self.nav_add("库存管理", self.tab_stocktake, "盘点单")
         self.tab_workflow = WorkflowTab(self.nb, self, self.fam)
         self.nav_add("库存管理", self.tab_workflow, "制作流程")
+        # v1.46.1：侧栏「系统」组补「设置」入口（设置一直是弹窗，换新侧栏后
+        # 没有可见入口，用户找不到了）——点击打开设置窗口，不占 Notebook 页码
+        self.nav.add_command("系统", "设置", self.open_appearance)
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         self._build_toolbar()
