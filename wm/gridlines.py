@@ -34,6 +34,22 @@ except Exception:
 _BADGE_ON = {"light": ("#DCFCE7", "#15803D"), "dark": ("#0E2A18", "#4ADE80")}
 _BADGE_OFF = {"light": ("#E2E8F0", "#64748B"), "dark": ("#233049", "#94A3B8")}
 
+
+def _shade(css, k):
+    """hex 颜色加深(k<1)/提亮(k>1)：让胶囊与行底同色系但保留可见轮廓。"""
+    try:
+        s = str(css).lstrip("#")
+        if len(s) != 6:
+            return css
+        ch = [int(s[i:i + 2], 16) for i in (0, 2, 4)]
+        if k < 1:
+            out = [int(v * k) for v in ch]
+        else:
+            out = [min(255, int(v + (255 - v) * (k - 1))) for v in ch]
+        return "#%02X%02X%02X" % tuple(out)
+    except Exception:
+        return css
+
 _FONT_FILES = [(False, "C:/Windows/Fonts/msyh.ttc"),
                (True, "C:/Windows/Fonts/msyhbd.ttc"),
                (False, "C:/Windows/Fonts/simhei.ttf")]
@@ -422,8 +438,9 @@ class TreeDecor(object):
 
         v1.46.3 收小一档（设计稿 pill 高约 18px、8.5pt 字），避免整格
         被大徽章撑满显得笨重。
-        v1.46.9：徽章胶囊底色跟随所在行底色（选中蓝/下架灰/斑马白…），
-        不再固定浅灰，否则选中行上徽章与行底两色割裂（用户红框反馈）。
+        v1.46.9：徽章胶囊底色跟随所在行底色（选中蓝/下架灰/斑马白…）。
+        v1.46.10：纯用行底色会让胶囊轮廓消失（用户「框怎么没了」），改为
+        同色系略深一档填充 + 一圈细描边——颜色协调但框清晰可见。
         """
         if not HAS_PIL or cw < 36 or ch < 14:
             return None
@@ -431,6 +448,9 @@ class TreeDecor(object):
         fgc = (_BADGE_ON if on else _BADGE_OFF)[theme][1]
         # 底色跟随行底色；无底色传入时退回主题默认胶囊色
         bgc = bg or (_BADGE_ON if on else _BADGE_OFF)[theme][0]
+        # 同色系略深填充 + 细描边，保住胶囊轮廓（light 加深 / dark 提亮）
+        fill_c = _shade(bgc, 0.88 if theme == "light" else 1.18)
+        edge_c = _shade(bgc, 0.78 if theme == "light" else 1.30)
         scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
         bh = min(int(18 * scale), ch - int(10 * scale))
         if bh < 11:
@@ -457,7 +477,7 @@ class TreeDecor(object):
         im = Image.new("RGBA", (int(bw), int(bh)), (0, 0, 0, 0))
         d = ImageDraw.Draw(im)
         d.rounded_rectangle([0, 0, bw - 1, bh - 1], radius=bh // 2,
-                            fill=bgc, outline=bgc)
+                            fill=fill_c, outline=edge_c, width=1)
         cy = bh / 2.0
         d.ellipse([pad, cy - dot / 2, pad + dot, cy + dot / 2], fill=fgc)
         try:
