@@ -1056,6 +1056,9 @@ class App(object):
         main = tk.Frame(body, bg=CLR_BG)
         main.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
+        # v1.46.1：KPI 卡片行（当前筛选口径下的核心指标，低库存卡可点击筛选）
+        self._build_kpi(main)
+
         table_card = tk.Frame(main, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                               highlightthickness=1)
         table_card.pack(fill="both", expand=True)
@@ -1252,6 +1255,64 @@ class App(object):
         if self.var_show_detail.get():
             self.detail_card.pack(fill="x", pady=(10, 0))
             self.detail_card.pack_configure(ipady=2)
+
+    def _build_kpi(self, parent):
+        """KPI 卡片行（v1.46.1）：条目/总量/货值/已上架/低库存五张卡。
+
+        口径与左侧筛选统计一致（跟随当前筛选）；「低库存预警」卡可点击，
+        一键勾选/取消「只看低库存」。颜色在 build 时读取常量即可——外观
+        热切换是整窗重建，不存在旧色残留问题。
+        """
+        row = tk.Frame(parent, bg=CLR_BG)
+        row.pack(fill="x", pady=(0, 8))
+        self._kpi_row = row
+        self.kpi_vals = {}
+        specs = [("count", "库存条目"), ("qty", "库存总量"), ("val", "库存货值"),
+                 ("listed", "已上架"), ("low", "低库存预警")]
+        for i, (key, cap) in enumerate(specs):
+            card = tk.Frame(row, bg=CLR_CARD, highlightbackground=CLR_BORDER,
+                            highlightthickness=1, cursor="hand2" if key == "low" else "arrow")
+            card.pack(side="left", fill="both", expand=True,
+                      padx=(0 if i == 0 else 8, 0))
+            tk.Label(card, text=cap, bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(self.fam, 8)).pack(anchor="w", padx=14, pady=(9, 0))
+            val = tk.Label(card, text="—", bg=CLR_CARD, fg=CLR_TEXT,
+                           font=(self.fam, 13, "bold"))
+            val.pack(anchor="w", padx=14, pady=(1, 9))
+            self.kpi_vals[key] = val
+        # 低库存卡整卡可点 → 切换「只看低库存」（顺手绑在三个子件上）
+        low_card = self.kpi_vals["low"].master
+        for w in (low_card,) + tuple(low_card.winfo_children()):
+            w.bind("<Button-1>", self._kpi_low_click)
+
+    def _kpi_low_click(self, _e=None):
+        """点 KPI「低库存预警」卡 ⇄ 勾选「只看低库存」并重筛。"""
+        self.var_low_only.set(not bool(self.var_low_only.get()))
+        self.apply_filters()
+
+    def _update_kpi(self):
+        """刷新 KPI 卡片（数据源与 _update_side_stats 相同：self.filtered）。"""
+        if not getattr(self, "kpi_vals", None):
+            return
+        shown = len(getattr(self, "filtered", None) or [])
+        total = len(getattr(self, "records", None) or [])
+        qty = sum(int(r.get("qty") or 0) for r in (self.filtered or []))
+        val = sum(float(r.get("price") or 0) * int(r.get("qty") or 0)
+                  for r in (self.filtered or []))
+        listed = sum(1 for r in (self.filtered or []) if int(r.get("listed") or 0))
+        thr = int(getattr(self, "low_threshold", 0) or 0)
+        low = sum(1 for r in (self.filtered or [])
+                  if not int(r.get("sold_out") or 0)
+                  and int(r.get("qty") or 0) <= thr) if thr > 0 else 0
+        self.kpi_vals["count"].configure(text="{:,} / {:,}".format(shown, total))
+        self.kpi_vals["qty"].configure(text="{:,} 件".format(qty))
+        self.kpi_vals["val"].configure(text="¥{:,.2f}".format(val))
+        self.kpi_vals["listed"].configure(text="{:,} 条".format(listed))
+        lv = self.kpi_vals["low"]
+        if low:
+            lv.configure(text="{:,} 条".format(low), fg=CLR_WARN)
+        else:
+            lv.configure(text="0 条", fg=CLR_MUTED)
 
     def _build_summary_bar(self, parent):
         """表尾汇总条（v1.46.0）：已选行数 + 命中/总数 + 数量/货值合计。
@@ -1613,6 +1674,11 @@ class App(object):
         # v1.46.0：表尾汇总条 + 侧栏「库存列表」低库存角标
         try:
             self._update_summary()
+        except Exception:
+            pass
+        # v1.46.1：KPI 卡片行
+        try:
+            self._update_kpi()
         except Exception:
             pass
         try:
