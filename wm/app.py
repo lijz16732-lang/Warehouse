@@ -946,22 +946,12 @@ class App(object):
                    command=self.manage_warehouses).pack(side="left", padx=(6, 0))
         self._sep(inner)
 
-        ttk.Button(inner, text="导入 XLSX", style="Accent.TButton", width=9,
-                   command=self.do_import).pack(side="left")
-        ttk.Button(inner, text="导出", width=5,
-                   command=self.do_export).pack(side="left", padx=(8, 0))
-        self._sep(inner)
-        ttk.Button(inner, text="＋ 新增", width=7,
-                   command=self.add_record).pack(side="left")
+        # v1.46.3 工具栏精简（对齐设计稿）：导入/导出/批量/刷新/新增录入
+        # 收进「库存明细」标题行右侧，这里只留高频业务动作
         ttk.Button(inner, text="编辑", width=5,
-                   command=self.edit_selected).pack(side="left", padx=(8, 0))
+                   command=self.edit_selected).pack(side="left")
         ttk.Button(inner, text="删除", style="Danger.TButton", width=5,
                    command=self.delete_selected).pack(side="left", padx=(8, 0))
-        self._sep(inner)
-        ttk.Button(inner, text="批量上架", style="Ok.TButton", width=9,
-                   command=lambda: self.set_listed(1)).pack(side="left")
-        ttk.Button(inner, text="批量下架", width=9,
-                   command=lambda: self.set_listed(0)).pack(side="left", padx=(8, 0))
         self._sep(inner)
         ttk.Button(inner, text="采购入库", width=9,
                    command=self.purchase_in).pack(side="left")
@@ -969,14 +959,6 @@ class App(object):
                    command=self.sell_selected).pack(side="left", padx=(8, 0))
         # 「登记出库」不进工具栏（空间不足会挤掉后面的按钮）：
         # 入口在「出库记录」页的「+ 登记出库」按钮、编辑菜单、右键菜单与 Ctrl+U
-        self._sep(inner)
-        ttk.Button(inner, text="批量修改", width=9,
-                   command=self.batch_edit).pack(side="left")
-        # v1.45.6：主库存工具栏补「刷新」按钮（原来只有 数据菜单/F5 入口）——
-        # 局域网多工位场景要能随手重读电脑端数据库，不必记快捷键。
-        self._sep(inner)
-        ttk.Button(inner, text="刷新", style="Ghost.TButton", width=5,
-                   command=self.load_data).pack(side="left")
         # v1.46.3「筛选」开关：左侧筛选面板默认收起（对齐设计稿），点此展开/收起
         self._sep(inner)
         ttk.Button(inner, text="筛选", style="Ghost.TButton", width=5,
@@ -1094,12 +1076,26 @@ class App(object):
         self.frm_chips = tk.Frame(tbar, bg=CLR_CARD)
         self.frm_chips.pack(side="left", padx=(12, 0))
         self._chip_imgs = []
+        # v1.46.3 标题行右侧动作组（设计稿 panel-head 同款）：
+        # ↥导入 ↧导出 批量修改 ⟳刷新 ＋新增录入 —— 先 pack 的在最右
+        acts = tk.Frame(tbar, bg=CLR_CARD)
+        acts.pack(side="right")
+        ttk.Button(acts, text="＋ 新增录入", style="Accent.TButton", width=10,
+                   command=self.add_record).pack(side="right")
+        ttk.Button(acts, text="刷新", style="Ghost.TButton", width=5,
+                   command=self.load_data).pack(side="right", padx=(8, 0))
+        ttk.Button(acts, text="批量修改", width=9,
+                   command=self.batch_edit).pack(side="right", padx=(8, 0))
+        ttk.Button(acts, text="导出", width=5,
+                   command=self.do_export).pack(side="right", padx=(8, 0))
+        ttk.Button(acts, text="导入", width=5,
+                   command=self.do_import).pack(side="right")
         self.lbl_hint = tk.Label(tbar, text="提示：双击编辑 · Ctrl+A 全选 · Ctrl/Shift 点选多行 · 拖选单元格即复制 · 右键可复制或「区域上色」",
                                  bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 8))
-        self.lbl_hint.pack(side="right")
+        self.lbl_hint.pack(side="right", padx=(0, 12))
         dot_check(tbar, "拖选即复制", self.var_drag_copy,
                   command=self._save_drag_copy, bg=CLR_CARD,
-                  fam=self.fam, size=9).pack(side="right", padx=(0, 12))
+                  fam=self.fam, size=9).pack(side="right")
 
         tw = tk.Frame(table_card, bg=CLR_CARD)
         self._tw = tw
