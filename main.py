@@ -103,6 +103,14 @@ def main():
         # 直接显示会在左上角闪现一个空白小框，等 _apply_geometry 设好
         # 尺寸/最大化后再显示（deiconify）
         root.withdraw()
+        # 禁用本窗口的 DWM 最大化/还原动画：动画期间位图缩放会让 Tk 覆盖层
+        # （网格线/徽章/复选框）与新尺寸对不上，叠出两个窗口的重影（用户反馈
+        # 「最大化/最小化卡一下」）。只作用于本窗口，不改系统设置。
+        try:
+            from wm.screen import disable_window_animation
+            disable_window_animation(root)
+        except Exception:
+            pass
         try:
             # 先设图标再构建界面，避免窗口/任务栏闪现默认图标
             try:

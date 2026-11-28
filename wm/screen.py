@@ -203,3 +203,32 @@ def apply_tk_scaling(root, scale=None):
         root.tk.call("tk", "scaling", max(1.0, min(MAX_SCALE, sc)) * 96.0 / 72.0)
     except Exception:
         pass
+
+
+def disable_window_animation(root):
+    """禁用本程序窗口的 DWM 过渡动画（v1.47.2）。
+
+    Windows 的「最大化/还原动画」会把旧尺寸窗口的位图缩放过渡到新尺寸；
+    Tk 的覆盖层（网格线/徽章/复选框）是独立控件，动画期间 DWM 缩放的是
+    位图快照，Tk 新画的贴片坐标对不上，画面上就会叠出两个尺寸的窗口重影
+    （用户截图反馈的「最大化/最小化卡一下」）。
+
+    用 DWMWA_TRANSITIONS_FORCEDISABLED 只关本窗口的动画，不影响其他程序，
+    也不改用户系统设置。微软官方推荐的单窗口做法。任何异常静默降级。
+    """
+    try:
+        hwnd = int(root.frame(), 16) if isinstance(root.frame(), str) \
+            else root.winfo_id()
+        # winfo_id 在 Windows 上就是顶层 HWND，但保险起见取根祖先
+        user32 = ctypes.windll.user32
+        GA_ROOT = 2
+        try:
+            hwnd = user32.GetAncestor(hwnd, GA_ROOT) or hwnd
+        except Exception:
+            pass
+        val = ctypes.c_int(1)                 # TRUE = 禁用过渡
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 3, ctypes.byref(val), ctypes.sizeof(val))
+        return True
+    except Exception:
+        return False

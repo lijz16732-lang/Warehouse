@@ -6873,6 +6873,11 @@ class App(object):
 def main():
     while True:
         root = tk.Tk()
+        try:
+            from .screen import disable_window_animation
+            disable_window_animation(root)
+        except Exception:
+            pass
         app = App(root)
         root.mainloop()
         reboot = bool(getattr(app, "_reboot", False))
