@@ -1276,7 +1276,8 @@ class App(object):
         self.detail_rows.pack(fill="x", padx=10, pady=(2, 4))
 
         # 记录照片条（v1.25.0）：缩略图一排，点开大图，可添加/删除
-        self.photo_strip = PhotoStrip(self.detail_card, self, kind="item")
+        self.photo_strip = PhotoStrip(self.detail_card, self, kind="item",
+                                      thumb=64)
         self.photo_strip.pack(fill="x", padx=6)
 
         self.detail_actions = tk.Frame(self.detail_card, bg=CLR_CARD)

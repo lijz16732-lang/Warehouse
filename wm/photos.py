@@ -32,9 +32,11 @@ class PhotoStrip(tk.Frame):
     保存后由调用方取出逐张落盘（store.photo_add）。
     """
 
-    def __init__(self, master, app, kind="item", pending=False, on_change=None):
+    def __init__(self, master, app, kind="item", pending=False, on_change=None,
+                 thumb=None):
         tk.Frame.__init__(self, master, bg=CLR_CARD)
         self.app = app
+        self._tsize = int(thumb) if thumb else THUMB
         self.kind = kind
         self.pending = bool(pending)
         self.on_change = on_change    # 照片增删后回调（弹窗用来重算高度）
@@ -159,7 +161,7 @@ class PhotoStrip(tk.Frame):
         if im is not None:
             fg = ImageTk.PhotoImage(self._plate(im))
             self._imgs[name] = fg
-            lbl.configure(image=fg, width=THUMB, height=THUMB)
+            lbl.configure(image=fg, width=self._tsize, height=self._tsize)
         else:
             lbl.configure(text="🖼\n%s" % name[:8], fg=CLR_MUTED, width=8, height=3,
                           font=(self.app.fam, 7), justify="center")
@@ -167,18 +169,29 @@ class PhotoStrip(tk.Frame):
         lbl.bind("<Button-1>", lambda e, n=name: self.view(n))
 
     def _plate(self, im):
-        """缩略图统一装进圆角底板（v1.46.1）：白底 + 8px 圆角 + 1px 细边框。"""
-        th = im.copy()
-        th.thumbnail((THUMB - 6, THUMB - 6))
-        if th.mode not in ("RGB", "RGBA"):
-            th = th.convert("RGB")
-        plate = Image.new("RGB", (THUMB, THUMB), "#FFFFFF")
-        mask = Image.new("L", th.size, 0)
+        """缩略图统一封面式裁切（v1.46.1）：照片铺满圆角方块 + 1px 细边框。
+
+        等比缩到铺满再居中裁掉多余部分——白底工业照留白会显得像文件
+        卡片，铺满才有"照片墙"的观感。
+        """
+        if im.mode not in ("RGB", "RGBA"):
+            im = im.convert("RGB")
+        TH = self._tsize
+        side = TH - 2                          # 留 1px 给边框
+        w, h = im.size
+        scale = max(side / w, side / h)
+        im = im.resize((max(1, int(w * scale + 0.5)),
+                        max(1, int(h * scale + 0.5))), Image.LANCZOS)
+        left = (im.width - side) // 2
+        top = (im.height - side) // 2
+        im = im.crop((left, top, left + side, top + side))
+        plate = Image.new("RGB", (TH, TH), "#FFFFFF")
+        mask = Image.new("L", (side, side), 0)
         ImageDraw.Draw(mask).rounded_rectangle(
-            [0, 0, th.width - 1, th.height - 1], radius=6, fill=255)
-        plate.paste(th, ((THUMB - th.width) // 2, (THUMB - th.height) // 2), mask)
+            [0, 0, side - 1, side - 1], radius=7, fill=255)
+        plate.paste(im, (1, 1), mask)
         ImageDraw.Draw(plate).rounded_rectangle(
-            [0, 0, THUMB - 1, THUMB - 1], radius=8, outline="#D5DCE6", width=1)
+            [0, 0, TH - 1, TH - 1], radius=8, outline="#C9D2DE", width=1)
         return plate
 
     # ------------------------------------------------------------ 操作
