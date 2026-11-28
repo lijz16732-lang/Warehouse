@@ -492,6 +492,10 @@ class CellHover:
         if not row or cidx < 0:
             self.hide()
             return
+        # v1.46.2 主库存表首列是复选框（☑/☐），悬浮放大没意义
+        if cidx == 0 and str(t["columns"][0]) == "_chk":
+            self.hide()
+            return
         vals = t.item(row, "values")
         if cidx >= len(vals) or not str(vals[cidx]):
             self.hide()

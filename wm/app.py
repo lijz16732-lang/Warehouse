@@ -40,7 +40,7 @@ from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
 from .gridlines import TreeDecor
-from .imgbtn import ImgBtn
+from .imgbtn import Chip, ImgBtn
 from .importer import MODE_APPEND, MODE_MERGE, MODE_REPLACE, MODE_TEXT, ask_import
 from .xlsxio import normalize_record
 from .store import Store, dedupe_records
@@ -1090,7 +1090,13 @@ class App(object):
                   fam=self.fam, size=9).pack(side="right", padx=(0, 12))
 
         tw = tk.Frame(table_card, bg=CLR_CARD)
+        # v1.46.2 筛选回显条占位（真实 pack 在 tw 之后用 before=tw 挪到中间）
+        self.frm_chips = tk.Frame(table_card, bg=CLR_CARD)
+        self._chip_imgs = []
+
         tw.pack(fill="both", expand=True, padx=10)
+        self._tw = tw                # 筛选回显条 pack before 用
+        self.frm_chips.pack(fill="x", padx=10, pady=(0, 4), before=tw)
         self.tree = ttk.Treeview(tw, show="headings", selectmode="extended")
         vs = ttk.Scrollbar(tw, orient="vertical", style="Vertical.TScrollbar",
                            command=self._tree_yview)
@@ -1117,6 +1123,7 @@ class App(object):
         self.tree.tag_configure("odd", background=CLR_ROW_ALT)
 
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._sync_chk(), add="+")
         self.tree.bind("<Double-1>", self.on_double)
         self.tree.bind("<Button-1>", self._on_click)
         self.tree.bind("<B1-Motion>", self._on_drag)
@@ -1832,6 +1839,54 @@ class App(object):
             self.page = 1
         self.render_page()
         self._update_side_stats()
+        self._update_filter_chips()
+
+    def _update_filter_chips(self):
+        """筛选回显条（v1.46.2，设计稿 fchip 同款）：列出激活筛选，点胶囊移除。"""
+        if not getattr(self, "frm_chips", None):
+            return
+        for w in self.frm_chips.winfo_children():
+            w.destroy()
+        self._chip_imgs = []
+        chips = []                                   # (文字, 清除函数)
+
+        def add(label, var, default):
+            chips.append((label, lambda v=var, d=default: (v.set(d), self.apply_filters())))
+
+        kw = (self.var_kw.get() or "").strip()
+        if kw:
+            add("关键词：" + kw, self.var_kw, "")
+        names = {"brand": "品牌", "category": "品类",
+                 "condition": "成色", "shelf": "货架"}
+        for key, cname in names.items():
+            v = (self.f_vars[key].get() or "").strip()
+            if v and v != "全部":
+                add("%s：%s" % (cname, v), self.f_vars[key], "全部")
+        lv = self.f_vars["listed"].get()
+        if lv != "全部":
+            add("状态：" + lv, self.f_vars["listed"], "全部")
+        try:
+            if self.var_pmin.get().strip():
+                add("价格 ≥ " + self.var_pmin.get().strip(), self.var_pmin, "")
+        except Exception:
+            pass
+        try:
+            if self.var_pmax.get().strip():
+                add("价格 ≤ " + self.var_pmax.get().strip(), self.var_pmax, "")
+        except Exception:
+            pass
+        if getattr(self, "var_low_only", None) and self.var_low_only.get():
+            chips.append(("只看低库存", lambda: (self.var_low_only.set(False),
+                                                 self.apply_filters())))
+        if not chips:
+            self.frm_chips.pack_forget()
+            return
+        for text, fn in chips:
+            chip = Chip(self.frm_chips, self, text, fn)
+            chip.pack(side="left", padx=(0, 6))
+            self._chip_imgs.append(chip)
+        # 空间不够宽时全部挪到第二行也行——先简单左流式排列
+        self.frm_chips.pack(fill="x", padx=10, pady=(0, 4), before=self._tw)
 
     def _sort(self, rows):
         key = self.sort_key
@@ -1897,10 +1952,15 @@ class App(object):
 
     def _setup_columns(self):
         cols = self._cols()
-        tree_cols = cols + ["_photos"]        # 末尾：照片指示列（📷）
+        # v1.46.2：首列复选框（设计稿同款），镜像/点选行选中状态
+        tree_cols = ["_chk"] + cols + ["_photos"]   # 末尾：照片指示列（📷）
         if list(self.tree["columns"]) != tree_cols:
             self.tree["columns"] = tree_cols
         titles = self.store.col_titles()      # 手机端/电脑端共享的自定义列题
+        self.tree.heading("_chk", text="☑", command=self._toggle_check_all)
+        self.tree.column("_chk", width=int(36 * self.ui_scale),
+                         minwidth=int(30 * self.ui_scale),
+                         anchor="center", stretch=False)
         for c in cols:
             arrow = ""
             if self.sort_key == c:
@@ -1940,6 +2000,7 @@ class App(object):
         # 行全部重建（划过高亮已移除，出售页仍有各自的重置逻辑）
         if self.hover:
             self.hover.reset()
+        prev_sel = set(self.tree.selection())   # 重建后尽量保住选中（复选框列）
         self.tree.delete(*self.tree.get_children())
         total = len(self.filtered)
         size = self.page_size or total or 1
@@ -1970,11 +2031,14 @@ class App(object):
                     elif 0 < thr and q <= thr:
                         tags.append("low")   # 低库存：橙色底提醒补货
             self.tree.insert("", "end", iid=rid,
-                             values=[(("" if c == "listed" else self.fmt(c, rec)))
-                                     for c in cols]
-                             + ["📷" if (rec.get("code") or "")
-                                in getattr(self, "_photo_codes", ()) else ""],
+                             values=(["☑" if rid in prev_sel else "☐"]
+                                     + [("" if c == "listed" else self.fmt(c, rec))
+                                        for c in cols]
+                                     + ["📷" if (rec.get("code") or "")
+                                        in getattr(self, "_photo_codes", ()) else ""]),
                              tags=tuple(tags))
+        if prev_sel:
+            self.tree.selection_set([r for r in prev_sel if r in self.by_id])
         self.lbl_page.configure(
             text="共 %d 条记录 · 第 %d/%d 页 · 本页 %d 条（勾选/多选后可批量操作）"
                  % (total, self.page, pages, max(0, end - start)))
@@ -2254,19 +2318,73 @@ class App(object):
 
     # ============================================================ 事件
     def _cell_at(self, x, y):
-        """把鼠标坐标换算成 (行 iid, 列下标)；不在数据单元格上则返回 (None, None)。"""
+        """把鼠标坐标换算成 (行 iid, 数据列下标)；不在数据单元格上则返回 (None, None)。
+
+        v1.46.2 起用逐列 bbox 精确判定：identify_column 的列边界含分隔符
+        （比列宽多约 10px），加了窄的复选框列后会把编码列开头误判过去。
+        """
         if self.tree.identify_region(x, y) != "cell":
             return None, None
         iid = self.tree.identify_row(y)
-        col = self.tree.identify_column(x)
-        try:
-            idx = int(str(col).replace("#", "")) - 1
-        except (TypeError, ValueError):
+        if not iid:
             return None, None
-        cols = self._cols()
-        if iid and 0 <= idx < len(cols):
-            return str(iid), idx
+        for i, c in enumerate(["_chk"] + self._cols()):
+            try:
+                bb = self.tree.bbox(str(iid), column=c)
+            except Exception:
+                bb = None
+            if bb and bb[0] <= x < bb[0] + bb[2]:
+                if c == "_chk":          # 复选框列不算数据格
+                    return None, None
+                return str(iid), i - 1
         return None, None
+
+    # ---- v1.46.2 复选框列（设计稿同款）----
+    def _sync_chk(self):
+        """选中变化后只刷新勾选列的 ☑/☐（不动其他列，避免整表闪烁）。"""
+        try:
+            sel = set(self.tree.selection())
+            for iid in self.tree.get_children():
+                want = "☑" if iid in sel else "☐"
+                if self.tree.set(iid, "_chk") != want:
+                    self.tree.set(iid, "_chk", want)
+        except Exception:
+            pass
+
+    def _toggle_check_all(self):
+        """点表头复选框：全不选 ⇄ 全选（当前页全部行）。"""
+        kids = list(self.tree.get_children())
+        if not kids:
+            return
+        if len(self.tree.selection()) >= len(kids):
+            self.tree.selection_remove(*self.tree.selection())
+        else:
+            self.tree.selection_set(kids)
+
+    def _on_chk_click(self, event):
+        """点复选框格：只切换该行选中，不清空其他行（等价 Ctrl+点行）。
+
+        用复选框单元格的实际 bbox 判定（identify_column 边界偏宽，见
+        _cell_at 注释），点编码列开头不会误触。
+        """
+        try:
+            if self.tree.identify_region(event.x, event.y) != "cell":
+                return False
+            iid = self.tree.identify_row(event.y)
+            if not iid:
+                return False
+            bb = self.tree.bbox(str(iid), column="_chk")
+        except Exception:
+            return False
+        if not bb or not (bb[0] <= event.x < bb[0] + bb[2]):
+            return False
+        iid = str(iid)
+        if iid in self.tree.selection():
+            self.tree.selection_remove(iid)
+        else:
+            self.tree.selection_add(iid)
+            self.tree.focus(iid)
+        return True
 
     def _row_span(self, iid_a, iid_b):
         """按表格当前显示顺序返回 a、b 两行之间的全部行 iid。"""
@@ -2286,6 +2404,9 @@ class App(object):
             self._drag_anchor = None
             self._drag_block = None
             self._block_preview = None
+        # v1.46.2 复选框列：点勾选格只切换该行选中（break 拦掉原生选择行为）
+        if self._on_chk_click(event):
+            return "break"
         iid, idx = self._cell_at(event.x, event.y)
         if iid is not None:
             self._drag_anchor = (iid, idx)
@@ -2295,11 +2416,11 @@ class App(object):
                 self._cell_col = cols[idx]
             elif iid is None and idx is None:
                 # 📷 指示列（_cell_at 对越界列统一返回 None）：单击选中该行
-                # 并直接打开照片查看
+                # 并直接打开照片查看（#1 是复选框列，📷 在 len(cols)+2）
                 row = self.tree.identify_row(event.y)
                 try:
                     cidx = int(str(self.tree.identify_column(event.x))
-                               .replace("#", "")) - 1
+                               .replace("#", "")) - 1 - 1   # 去掉复选框列偏移
                 except (TypeError, ValueError):
                     cidx = None
                 if row and cidx == len(cols):
@@ -2506,15 +2627,17 @@ class App(object):
             m.grab_release()
 
     def _heading_col_at(self, x):
-        """表头 x 坐标 → 数据列名（点在照片列/空白返回 None）。"""
+        """表头 x 坐标 → 数据列名（点在复选框列/照片列/空白返回 None）。"""
         try:
             cid = self.tree.identify_column(x)
         except Exception:
             return None
-        cols = self._cols() + ["_photos"]
+        cols = ["_chk"] + self._cols() + ["_photos"]
         if str(cid).startswith("#"):
             i = int(str(cid)[1:]) - 1
-            return cols[i] if 0 <= i < len(cols) else None
+            if not (0 <= i < len(cols)) or cols[i] == "_chk":
+                return None
+            return cols[i]
         return cid if cid in FIELD_KEYS else None
 
     def _show_col_menu(self, x, y, col=None):

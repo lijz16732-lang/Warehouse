@@ -71,6 +71,55 @@ def make_button_pair(text, w, h, fam_pt, scale, kind,
             ImageTk.PhotoImage(_with_text(hov, text, fg, bold, px)))
 
 
+def make_chip(text, bg, border, fg, fam_pt, scale):
+    """筛选回显小胶囊（设计稿 fchip 同款）：文字 + ✕，整张点击可移除筛选。"""
+    px = max(9, int(round(fam_pt * 96 / 72 * scale)))
+    f = _load_font(False, px)
+    label = text + "  ✕"
+    try:
+        box = ImageDraw.Draw(Image.new("RGB", (8, 8))).textbbox((0, 0), label, font=f)
+        tw, th = box[2] - box[0], box[3] - box[1]
+        ox, oy = box[0], box[1]
+    except AttributeError:
+        tw, th = ImageDraw.Draw(Image.new("RGB", (8, 8))).textsize(label, font=f)
+        ox = oy = 0
+    h = max(int(26 * scale), th + int(8 * scale))
+    w = tw + int(24 * scale)
+    im = _rounded(w, h, h // 2, bg, border, 1)
+    d = ImageDraw.Draw(im)
+    d.text((int(12 * scale) - ox, (h - th) / 2 - oy), label, font=f, fill=fg)
+    return ImageTk.PhotoImage(im)
+
+
+class Chip(tk.Label):
+    """筛选回显胶囊。command 在点击整颗时触发（通常是移除该筛选）。"""
+
+    def __init__(self, master, app, text, command):
+        from . import constants as C
+        self._cmd = command
+        self._app = app
+        self._text = text
+        self._img = None
+        tk.Label.__init__(self, master, bg=C.CLR_CARD, cursor="hand2")
+        self._render()
+        self.bind("<Button-1>", lambda e: self._cmd())
+
+    def _render(self):
+        from . import constants as C
+        s = float(getattr(self._app, "ui_scale", 1.0) or 1.0)
+        self._img = make_chip(self._text, C.CLR_ACCENT_LT, C.CLR_BORDER,
+                              C.CLR_ACCENT, 9, s)
+        self.configure(image=self._img)
+
+    def refresh(self):
+        """换行/重排后重建（颜色可能随主题变）。"""
+        self._render()
+
+    def _click(self):
+        if self._cmd:
+            self._cmd()
+
+
 class ImgBtn(tk.Label):
     """图片按钮：悬停换 hover 图，点击触发 command。"""
 

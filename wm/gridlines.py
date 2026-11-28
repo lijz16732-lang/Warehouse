@@ -21,8 +21,33 @@ import tkinter as tk
 
 from .constants import (CLR_ACCENT, CLR_ACCENT_LT, CLR_BORDER_LT,
                         CLR_INPUT, CLR_LOW_BG, CLR_ROW_ALT, CLR_SEL,
-                        CLR_UNLISTED_BG)
+                        CLR_UNLISTED_BG, UI_THEME)
 from .pillimg import capsule_b64
+
+try:
+    from PIL import Image, ImageDraw, ImageTk, ImageFont
+    HAS_PIL = True
+except Exception:
+    HAS_PIL = False
+
+# 设计稿同款徽章配色（light / dark）
+_BADGE_ON = {"light": ("#DCFCE7", "#15803D"), "dark": ("#0E2A18", "#4ADE80")}
+_BADGE_OFF = {"light": ("#E2E8F0", "#64748B"), "dark": ("#233049", "#94A3B8")}
+
+_FONT_FILES = [(False, "C:/Windows/Fonts/msyh.ttc"),
+               (True, "C:/Windows/Fonts/msyhbd.ttc"),
+               (False, "C:/Windows/Fonts/simhei.ttf")]
+
+
+def _badge_font(bold, px):
+    for want_bold, path in _FONT_FILES:
+        if want_bold != bold:
+            continue
+        try:
+            return ImageFont.truetype(path, px)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 class TreeDecor(object):
@@ -324,6 +349,10 @@ class TreeDecor(object):
             "<Button-3>", x=e.x, y=e.y, rootx=e.x_root, rooty=e.y_root))
 
     def _draw_pill(self, cv, bg, w, h, pw, ph, iid):
+        """「上架状态」列徽章（v1.46.2，设计稿同款 pill：圆点+文字）。
+
+        点击整格仍可切换上架状态（原开关行为保留）。
+        """
         cv.delete("all")
         cv.configure(bg=bg)
         try:
@@ -331,61 +360,64 @@ class TreeDecor(object):
             on = bool(rec and rec.get("listed"))
         except Exception:
             on = False
-        fill = CLR_ACCENT if on else "#C4CBDA"
-        img = self._pill_image(pw, ph, fill, on)
+        img = self._badge_image(on, w, h)
         if img is not None:
-            # 抗锯齿胶囊（Tk 的 oval 是硬边，看着不圆润）
             cv.create_image(w // 2, h // 2, image=img)
         else:
-            self._draw_pill_vector(cv, w, h, pw, ph, fill, on)
-        # 「是/否」字样：画在滑块对侧的空半边（像素字号 + 粗体，小字才清楚）
-        try:
-            fam = self.app.fam
-        except Exception:
-            fam = "Microsoft YaHei"
-        fs = -max(10, ph - 6)                # 负数 = 像素字号
-        px = (w - pw) // 2
-        m = 2
-        d = ph - 2 * m
-        if on:
-            tx, tc = px + (pw - d) / 2.0, "#FFFFFF"
-            txt = "是"
-        else:
-            tx, tc = px + d + (pw - d) / 2.0, "#39445C"
-            txt = "否"
-        if pw - d >= 12:
-            cv.create_text(tx, h / 2.0, text=txt, fill=tc,
-                           font=(fam, fs, "bold"))
+            # 兜底矢量徽章（图片加载失败时）
+            txt = "已上架" if on else "下架"
+            theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
+            bgc, fgc = (_BADGE_ON if on else _BADGE_OFF)[theme]
+            bh = max(12, min(int(22 * float(getattr(self.app, "ui_scale", 1.0) or 1.0)), h - 8))
+            cv.create_rectangle(w // 2 - 30, h // 2 - bh // 2, w // 2 + 30,
+                                h // 2 - bh // 2 + bh, fill=bgc, outline=bgc)
+            cv.create_text(w // 2, h // 2, text=txt, fill=fgc)
 
-    def _pill_image(self, pw, ph, fill, on):
-        """抗锯齿胶囊图片（按尺寸/颜色缓存，PhotoImage 必须留引用）。"""
-        key = (int(pw), int(ph), fill, bool(on))
+    def _badge_image(self, on, cw, ch):
+        """抗锯齿徽章 PNG（PIL 渲染，按 (on,宽,高,主题) 缓存）。"""
+        if not HAS_PIL or cw < 40 or ch < 16:
+            return None
+        theme = UI_THEME if UI_THEME in ("light", "dark") else "light"
+        bgc, fgc = (_BADGE_ON if on else _BADGE_OFF)[theme]
+        scale = float(getattr(self.app, "ui_scale", 1.0) or 1.0)
+        bh = min(int(22 * scale), ch - int(8 * scale))
+        if bh < 12:
+            bh = ch - 2
+        px = max(9, int(round(10 * 96.0 / 72 * scale)))
+        f = _badge_font(True, px)
+        txt = "已上架" if on else "下架"
+        meas = ImageDraw.Draw(Image.new("RGB", (8, 8)))
+        try:
+            box = meas.textbbox((0, 0), txt, font=f)
+            tw2, th2 = box[2] - box[0], box[3] - box[1]
+        except AttributeError:
+            tw2, th2 = meas.textsize(txt, font=f)
+        dot = max(3, int(3 * scale))
+        pad = max(4, int(8 * scale))
+        gap = max(3, int(4 * scale))
+        bw = pad * 2 + dot + gap + tw2
+        if bw > cw - int(4 * scale):
+            bw = cw - int(4 * scale)
+        key = (bool(on), int(bw), int(bh), theme)
         img = self._imgs.get(key)
         if img is not None:
             return img
+        im = Image.new("RGBA", (int(bw), int(bh)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.rounded_rectangle([0, 0, bw - 1, bh - 1], radius=bh // 2,
+                            fill=bgc, outline=bgc)
+        cy = bh / 2.0
+        d.ellipse([pad, cy - dot / 2, pad + dot, cy + dot / 2], fill=fgc)
         try:
-            b64 = capsule_b64(pw, ph, fill, on)
-            if not b64:
-                return None
-            img = tk.PhotoImage(data=b64)
-        except Exception:
-            return None
+            box = d.textbbox((0, 0), txt, font=f)
+            ox, oy = box[0], box[1]
+            th2 = box[3] - box[1]
+        except AttributeError:
+            ox = oy = 0
+        d.text((pad + dot + gap - ox, cy - th2 / 2 - oy), txt, font=f, fill=fgc)
+        img = ImageTk.PhotoImage(im)
         self._imgs[key] = img
         return img
-
-    def _draw_pill_vector(self, cv, w, h, pw, ph, fill, on):
-        """兜底矢量画法（图片加载失败时用，边缘有锯齿）。"""
-        px, py = (w - pw) // 2, (h - ph) // 2
-        m = 2
-        d = ph - 2 * m
-        cv.create_oval(px, py + m, px + d, py + m + d, fill=fill, outline=fill)
-        cv.create_oval(px + pw - d, py + m, px + pw, py + m + d,
-                       fill=fill, outline=fill)
-        cv.create_rectangle(px + d / 2, py + m, px + pw - d / 2, py + m + d,
-                            fill=fill, outline=fill)
-        kx = px + pw - m - d if on else px + m
-        cv.create_oval(kx, py + m, kx + d, py + m + d, fill="#FFFFFF",
-                       outline=CLR_ACCENT_LT if on else "#9AA3B2")
 
     def _on_pill_click(self, e):
         # 点中的开关：找到 place 时的 iid（canvas 挂在 _pills 里反查）
