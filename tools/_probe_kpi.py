@@ -75,17 +75,19 @@ kv = app.kpi_vals
 # ---- 1 五张卡 ----
 check("五张 KPI 卡齐", len(kv) == 5
       and all(v.winfo_exists() for v in kv.values()))
-low_card = kv["low"].master
+low_card = kv["low"].master.master.master
 check("低库存卡带手型光标", str(low_card.cget("cursor")) == "hand2")
 
 # ---- 2 数值 ----
 check("条目数 5 / 5", kv["count"].cget("text") == "5 / 5")
-check("总量 19 件", kv["qty"].cget("text") == "19 件")
+check("总量 19 件", kv["qty"].cget("text") == "19"
+      and app.kpi_units["qty"].cget("text") == "件")
 check("货值 ¥2,313.25", kv["val"].cget("text") == "¥2,313.25")
-check("已上架 4 条", kv["listed"].cget("text") == "4 条")
+check("已上架 4 条", kv["listed"].cget("text") == "4"
+      and app.kpi_units["listed"].cget("text") == "条")
 
 # ---- 3 低库存 ----
-check("低库存 2 条 且警示橙", kv["low"].cget("text") == "2 条"
+check("低库存 2 条 且警示橙", kv["low"].cget("text") == "2"
       and kv["low"].cget("fg") == C.CLR_WARN)
 # 筛到没有低库存 → 灰显
 app.var_low_only.set(True)
@@ -102,8 +104,8 @@ app.var_kw.set("WL-00003")
 app.apply_filters()
 root.update()
 check("筛选后 KPI 跟随（1 / 5、10 件）", kv["count"].cget("text") == "1 / 5"
-      and kv["qty"].cget("text") == "10 件")
-check("无低库存时灰显", kv["low"].cget("text") == "0 条"
+      and kv["qty"].cget("text") == "10")
+check("无低库存时灰显", kv["low"].cget("text") == "0"
       and kv["low"].cget("fg") == C.CLR_MUTED)
 app.var_kw.set("")
 app.apply_filters()

@@ -40,6 +40,7 @@ from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
 from .gridlines import TreeDecor
+from .imgbtn import ImgBtn
 from .importer import MODE_APPEND, MODE_MERGE, MODE_REPLACE, MODE_TEXT, ask_import
 from .xlsxio import normalize_record
 from .store import Store, dedupe_records
@@ -1243,13 +1244,9 @@ class App(object):
         head.pack(fill="x", padx=10, pady=(8, 4))
         tk.Label(head, text="记录详情", bg=CLR_CARD, fg=CLR_TEXT,
                  font=(self.fam, 10, "bold")).pack(side="left")
-        # 关闭按钮先 pack（side=right 顺序：✕ 最右，往左排复制按钮）
+        # 关闭按钮（复制走文本区右键菜单即可，v1.46.1 应用户要求去掉顶排按钮）
         ttk.Button(head, text="✕", style="Ghost.TButton", width=3,
                    command=self._close_detail_drawer).pack(side="right")
-        ttk.Button(head, text="JSON", style="Ghost.TButton", width=5,
-                   command=self.copy_detail_json).pack(side="right", padx=(0, 4))
-        ttk.Button(head, text="复制", style="Ghost.TButton", width=5,
-                   command=self.copy_detail).pack(side="right", padx=(0, 4))
         self.lbl_detail_title = tk.Label(head, text="未选中记录", bg=CLR_CARD, fg=CLR_MUTED,
                                          font=(self.fam, 9))
         self.lbl_detail_title.pack(side="left", padx=8)
@@ -1285,22 +1282,22 @@ class App(object):
         self.detail_actions = tk.Frame(self.detail_card, bg=CLR_CARD)
         self.detail_actions.pack(fill="x", padx=10, pady=(8, 0))
         # 设计稿同款 2×2 动作区：¥出售 / 编辑 / 打印标签 / 退回制作
-        self.detail_actions.columnconfigure((0, 1), weight=1, uniform="act")
-        ttk.Button(self.detail_actions, text="¥ 出售", style="Accent.TButton",
-                   command=self.sell_selected).grid(row=0, column=0,
-                                                    sticky="ew", ipady=2)
-        ttk.Button(self.detail_actions, text="编辑",
-                   command=self.edit_selected).grid(row=0, column=1,
-                                                    sticky="ew", padx=(8, 0),
-                                                    ipady=2)
-        ttk.Button(self.detail_actions, text="打印标签",
-                   command=self.print_label).grid(row=1, column=0, sticky="ew",
-                                                  pady=(8, 0), ipady=2)
-        ttk.Button(self.detail_actions, text="退回制作",
-                   command=self.goto_workflow_back).grid(row=1, column=1,
-                                                         sticky="ew",
-                                                         padx=(8, 0),
-                                                         pady=(8, 0), ipady=2)
+        # 用抗锯齿圆角图片按钮（ttk 方角细边框跟设计稿差距大，v1.46.1 换 ImgBtn）
+        _bw = int((300 - 20 - 8) / 2)          # 抽屉内宽 280，列间距 8 → 每列 136
+        act_specs = [(0, 0, "¥ 出售", self.sell_selected, "accent"),
+                     (0, 1, "编辑", self.edit_selected, "outline"),
+                     (1, 0, "打印标签", self.print_label, "outline"),
+                     (1, 1, "退回制作", self.goto_workflow_back, "outline")]
+        self._act_btns = []
+        for r, c, cap, cb, kind in act_specs:
+            btn = ImgBtn(self.detail_actions, self, cap, cb, kind=kind,
+                         width=_bw, height=int(30 * s))
+            kw = {"pady": (8, 0)} if r else {}
+            if c:
+                kw["padx"] = (8, 0)
+            btn.grid(row=r, column=c, sticky="ew", **kw)
+            self.detail_actions.columnconfigure(c, weight=1, uniform="act")
+            self._act_btns.append(btn)
 
         self.detail_trend = tk.Frame(self.detail_card, bg=CLR_CARD)
         self.detail_trend.pack(fill="x", padx=10, pady=(10, 0))
@@ -1577,23 +1574,44 @@ class App(object):
         row.pack(fill="x", pady=(0, 8))
         self._kpi_row = row
         self.kpi_vals = {}
-        specs = [("count", "库存条目"), ("qty", "库存总量"), ("val", "库存货值"),
-                 ("listed", "已上架"), ("low", "低库存预警")]
-        for i, (key, cap) in enumerate(specs):
+        self.kpi_units = {}
+        # (key, 标题, 左侧色条颜色, 大值字号)——色条配色对齐设计稿
+        specs = [("count", "库存条目", "#2563EB", 15),
+                 ("qty", "库存总量", "#0E9F8A", 15),
+                 ("val", "库存货值", "#7C3AED", 15),
+                 ("listed", "已上架", "#059669", 15),
+                 ("low", "低库存预警", "#D97706", 15)]
+        for i, (key, cap, kc, vsize) in enumerate(specs):
             card = tk.Frame(row, bg=CLR_CARD, highlightbackground=CLR_BORDER,
                             highlightthickness=1, cursor="hand2" if key == "low" else "arrow")
             card.pack(side="left", fill="both", expand=True,
                       padx=(0 if i == 0 else 8, 0))
-            tk.Label(card, text=cap, bg=CLR_CARD, fg=CLR_MUTED,
-                     font=(self.fam, 8)).pack(anchor="w", padx=14, pady=(9, 0))
-            val = tk.Label(card, text="—", bg=CLR_CARD, fg=CLR_TEXT,
-                           font=(self.fam, 13, "bold"))
-            val.pack(anchor="w", padx=14, pady=(1, 9))
+            # 设计稿同款：左缘 3px 彩色竖条
+            bar = tk.Frame(card, bg=kc, width=3)
+            bar.pack(side="left", fill="y")
+            body = tk.Frame(card, bg=CLR_CARD)
+            body.pack(side="left", fill="both", expand=True)
+            vrow = tk.Frame(body, bg=CLR_CARD)
+            tk.Label(body, text=cap, bg=CLR_CARD, fg=CLR_MUTED,
+                     font=(self.fam, 9)).pack(anchor="w", padx=14, pady=(9, 0))
+            vrow.pack(anchor="w", padx=14, pady=(2, 9))
+            val = tk.Label(vrow, text="—", bg=CLR_CARD, fg=CLR_TEXT,
+                           font=(self.fam, vsize, "bold"))
+            val.pack(side="left")
+            unit = tk.Label(vrow, text="", bg=CLR_CARD, fg=CLR_MUTED,
+                            font=(self.fam, 9))
+            unit.pack(side="left", padx=(3, 0), pady=(4, 0))
             self.kpi_vals[key] = val
-        # 低库存卡整卡可点 → 切换「只看低库存」（顺手绑在三个子件上）
-        low_card = self.kpi_vals["low"].master
-        for w in (low_card,) + tuple(low_card.winfo_children()):
+            self.kpi_units[key] = unit
+        # 低库存卡整卡可点 → 切换「只看低库存」（递归挂绑全部子件）
+        low_card = self.kpi_vals["low"].master.master.master
+
+        def _bind_all(w):
             w.bind("<Button-1>", self._kpi_low_click)
+            for c in w.winfo_children():
+                _bind_all(c)
+
+        _bind_all(low_card)
 
     def _kpi_low_click(self, _e=None):
         """点 KPI「低库存预警」卡 ⇄ 勾选「只看低库存」并重筛。"""
@@ -1615,14 +1633,20 @@ class App(object):
                   if not int(r.get("sold_out") or 0)
                   and int(r.get("qty") or 0) <= thr) if thr > 0 else 0
         self.kpi_vals["count"].configure(text="{:,} / {:,}".format(shown, total))
-        self.kpi_vals["qty"].configure(text="{:,} 件".format(qty))
+        self.kpi_units["count"].configure(text="")
+        self.kpi_vals["qty"].configure(text="{:,}".format(qty))
+        self.kpi_units["qty"].configure(text="件")
         self.kpi_vals["val"].configure(text="¥{:,.2f}".format(val))
-        self.kpi_vals["listed"].configure(text="{:,} 条".format(listed))
-        lv = self.kpi_vals["low"]
+        self.kpi_units["val"].configure(text="")
+        self.kpi_vals["listed"].configure(text="{:,}".format(listed))
+        self.kpi_units["listed"].configure(text="条")
+        lv, lu = self.kpi_vals["low"], self.kpi_units["low"]
         if low:
-            lv.configure(text="{:,} 条".format(low), fg=CLR_WARN)
+            lv.configure(text="{:,}".format(low), fg=CLR_WARN)
+            lu.configure(text="条", fg=CLR_WARN)
         else:
-            lv.configure(text="0 条", fg=CLR_MUTED)
+            lv.configure(text="0", fg=CLR_MUTED)
+            lu.configure(text="条", fg=CLR_MUTED)
 
     def _build_summary_bar(self, parent):
         """表尾汇总条（v1.46.0）：已选行数 + 命中/总数 + 数量/货值合计。

@@ -107,8 +107,8 @@ texts = "|".join(str(w.cget("text")) for w in _walk_lbls(app.detail_rows))
 check("编号蓝色加粗在卡内", "WL-00001" in texts)
 check("成本含毛利", "毛利" in texts and "¥860.00" in texts)
 check("2×2 动作按钮齐（出售/编辑/打印标签/退回制作）",
-      sum(1 for w in app.detail_actions.winfo_children()
-          if isinstance(w, ttk.Button)) == 4)
+      len(app._act_btns) == 4
+      and all(b.winfo_ismapped() for b in app._act_btns))
 sale_txt = app.lbl_trend_sale.cget("text")
 check("动向统计：近30天出售 3 件", "3 件" in sale_txt and "3,841.50" in sale_txt,
       sale_txt)

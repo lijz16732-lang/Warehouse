@@ -17,7 +17,7 @@ from .constants import *          # noqa: F401,F403 —— CLR_* / apply_window_
 from .store import PHOTO_MAX
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageTk, ImageDraw
     HAS_PIL = True
 except Exception:                 # 无 PIL 时降级为「文件名占位」
     HAS_PIL = False
@@ -157,16 +157,29 @@ class PhotoStrip(tk.Frame):
         lbl = tk.Label(self.bar, bg=CLR_CARD, cursor="hand2")
         im = self._pil(name)
         if im is not None:
-            th = im.copy()
-            th.thumbnail((THUMB, THUMB))
-            fg = ImageTk.PhotoImage(th)
+            fg = ImageTk.PhotoImage(self._plate(im))
             self._imgs[name] = fg
             lbl.configure(image=fg, width=THUMB, height=THUMB)
         else:
             lbl.configure(text="🖼\n%s" % name[:8], fg=CLR_MUTED, width=8, height=3,
                           font=(self.app.fam, 7), justify="center")
-        lbl.pack(side="left", padx=(0, 6), pady=2)
+        lbl.pack(side="left", padx=(0, 8), pady=2)
         lbl.bind("<Button-1>", lambda e, n=name: self.view(n))
+
+    def _plate(self, im):
+        """缩略图统一装进圆角底板（v1.46.1）：白底 + 8px 圆角 + 1px 细边框。"""
+        th = im.copy()
+        th.thumbnail((THUMB - 6, THUMB - 6))
+        if th.mode not in ("RGB", "RGBA"):
+            th = th.convert("RGB")
+        plate = Image.new("RGB", (THUMB, THUMB), "#FFFFFF")
+        mask = Image.new("L", th.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            [0, 0, th.width - 1, th.height - 1], radius=6, fill=255)
+        plate.paste(th, ((THUMB - th.width) // 2, (THUMB - th.height) // 2), mask)
+        ImageDraw.Draw(plate).rounded_rectangle(
+            [0, 0, THUMB - 1, THUMB - 1], radius=8, outline="#D5DCE6", width=1)
+        return plate
 
     # ------------------------------------------------------------ 操作
     def add_photos(self):
