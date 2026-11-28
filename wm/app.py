@@ -40,7 +40,7 @@ from .editor import ask_record
 from .extras import (BatchEditDialog, BuyerDialog, PurchaseListDialog,
                      RecycleBinDialog, ask_name, ask_purchase)
 from .gridlines import TreeDecor
-from .imgbtn import Chip, ImgBtn, RoundEntry
+from .imgbtn import Chip, ImgBtn, PageBtn, RoundEntry
 from .importer import MODE_APPEND, MODE_MERGE, MODE_REPLACE, MODE_TEXT, ask_import
 from .xlsxio import normalize_record
 from .store import Store, dedupe_records
@@ -1154,7 +1154,6 @@ class App(object):
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._decor_soon(), add="+")
 
         self._build_pager(table_card)
-        self._build_summary_bar(table_card)
         # v1.46.1：详情抽屉已提前建（见上方 _build_detail 提前调用）
         # v1.45.7 云更新：启动 9 秒后后台静默检查新版本（失败静默不打扰）
         self.root.after(9000, self._auto_update_check)
@@ -1218,27 +1217,80 @@ class App(object):
         self._after_scroll()
 
     def _build_pager(self, parent):
-        p = tk.Frame(parent, bg=CLR_CARD)
-        p.pack(fill="x", padx=10, pady=(0, 8))
-        self._pager_frame = p
-        self.lbl_page = tk.Label(p, text="", bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9))
-        self.lbl_page.pack(side="left")
+        """表尾单行条（v1.46.4，设计稿同款）：左侧汇总统计 + 右侧数字分页。
 
-        r = tk.Frame(p, bg=CLR_CARD)
-        r.pack(side="right")
+        原「汇总条 + 首页/上一页/下一页/末页」两行合并为一行：
+        已选 N 项 ｜ 命中 x/y 条 · 数量合计 · 货值 ‖ ‹ 1 2 3 … N › 每页。
+        数字页钮当前页蓝底白字（PageBtn），render_page 后由 _update_pager 重建。
+        """
+        s = getattr(self, "ui_scale", 1.0)
+        bar = tk.Frame(parent, bg=CLR_CARD,
+                       highlightbackground=CLR_BORDER_LT, highlightthickness=1)
+        bar.pack(fill="x", padx=10, pady=(6, 8))
+        self._pager_frame = bar
+        inner = tk.Frame(bar, bg=CLR_CARD)
+        inner.pack(fill="x", padx=8, pady=5)
+        # ---- 左侧：汇总统计（原 _build_summary_bar，标签名保持不变）----
+        self.lbl_sum_sel = tk.Label(inner, text="未选中", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_sel.pack(side="left")
+        tk.Label(inner, text="｜", bg=CLR_CARD, fg=CLR_BORDER,
+                 font=(self.fam, 9)).pack(side="left", padx=8)
+        self.lbl_sum_hit = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_hit.pack(side="left")
+        self.lbl_sum_qty = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_MUTED, font=(self.fam, 9))
+        self.lbl_sum_qty.pack(side="left", padx=(14, 0))
+        self.lbl_sum_val = tk.Label(inner, text="", bg=CLR_CARD,
+                                    fg=CLR_TEXT, font=(self.fam, 9, "bold"))
+        self.lbl_sum_val.pack(side="left", padx=(14, 0))
+        # ---- 右侧：每页条数 + 数字页钮容器 ----
         self.var_psize = tk.StringVar(value=("全部" if not self.page_size else str(self.page_size)))
-        cb = ttk.Combobox(r, textvariable=self.var_psize, values=PAGE_SIZES, width=6,
-                          state="readonly", font=(self.fam, 9))
-        cb.pack(side="right", padx=(6, 0))
+        cb = ttk.Combobox(inner, textvariable=self.var_psize, values=PAGE_SIZES,
+                          width=5, state="readonly", font=(self.fam, 8))
+        cb.pack(side="right")
         cb.bind("<<ComboboxSelected>>", lambda e: self._set_page_size(self.var_psize.get()))
-        tk.Label(r, text="每页", bg=CLR_CARD, fg=CLR_MUTED, font=(self.fam, 9)).pack(side="right")
+        tk.Label(inner, text="每页", bg=CLR_CARD, fg=CLR_MUTED,
+                 font=(self.fam, 8)).pack(side="right", padx=(0, 4))
+        self._pages_frame = tk.Frame(inner, bg=CLR_CARD)
+        self._pages_frame.pack(side="right", padx=(0, 12))
 
-        for text, cmd in (("末页 »", lambda: self.goto_page(10 ** 9)),
-                          ("下一页 ›", lambda: self.goto_page(self.page + 1)),
-                          ("‹ 上一页", lambda: self.goto_page(self.page - 1)),
-                          ("« 首页", lambda: self.goto_page(1))):
-            ttk.Button(r, text=text, style="Ghost.TButton", width=7,
-                       command=cmd).pack(side="right", padx=2)
+    def _update_pager(self, pages):
+        """重建数字分页钮（设计稿同款）：‹ 1 2 3 … 末页 ›，当前页蓝底白字。"""
+        f = getattr(self, "_pages_frame", None)
+        if f is None:
+            return
+        for w in f.winfo_children():
+            w.destroy()
+        pages = max(1, int(pages))
+        cur = min(max(1, self.page), pages)
+
+        def add(text, target=None, active=False):
+            if target is None:      # 省略号「…」：纯文字不可点
+                tk.Label(f, text=text, bg=CLR_CARD, fg=CLR_MUTED,
+                         font=(self.fam, 9)).pack(side="left", padx=1)
+                return
+            PageBtn(f, self, text, lambda t=target: self.goto_page(t),
+                    active=active).pack(side="left", padx=2)
+
+        add("‹", max(1, cur - 1) if cur > 1 else None)
+        if pages <= 7:
+            picked = list(range(1, pages + 1))
+        else:
+            nums = {1, pages, cur}
+            if cur > 1:
+                nums.add(cur - 1)
+            if cur < pages:
+                nums.add(cur + 1)
+            picked = sorted(n for n in nums if 1 <= n <= pages)
+        prev = 0
+        for n in picked:
+            if prev and n - prev > 1:
+                add("…", None)
+            add(str(n), n, active=(n == cur))
+            prev = n
+        add("›", min(pages, cur + 1) if cur < pages else None)
 
     def _build_detail(self, parent):
         """详情右抽屉（v1.46.1）：表格右侧固定宽面板，随「显示详情面板」开关。
@@ -1774,32 +1826,6 @@ class App(object):
         cv.create_line(*flat, fill=color, width=2, smooth=True,
                        capstyle="round")
 
-    def _build_summary_bar(self, parent):
-        """表尾汇总条（v1.46.0）：已选行数 + 命中/总数 + 数量/货值合计。
-
-        放在分页条上方（pack before=pager）。数值由 _update_summary 刷新，
-        筛选变化（_update_side_stats）与选中变化（on_select）都会触发。
-        """
-        bar = tk.Frame(parent, bg=CLR_CARD,
-                       highlightbackground=CLR_BORDER_LT, highlightthickness=1)
-        bar.pack(fill="x", padx=10, pady=(0, 6), before=self._pager_frame)
-        inner = tk.Frame(bar, bg=CLR_CARD)
-        inner.pack(fill="x", padx=4, pady=5)
-        self.lbl_sum_sel = tk.Label(inner, text="未选中", bg=CLR_CARD,
-                                    fg=CLR_MUTED, font=(self.fam, 9))
-        self.lbl_sum_sel.pack(side="left")
-        tk.Label(inner, text="｜", bg=CLR_CARD, fg=CLR_BORDER,
-                 font=(self.fam, 9)).pack(side="left", padx=8)
-        self.lbl_sum_hit = tk.Label(inner, text="", bg=CLR_CARD,
-                                    fg=CLR_MUTED, font=(self.fam, 9))
-        self.lbl_sum_hit.pack(side="left")
-        self.lbl_sum_qty = tk.Label(inner, text="", bg=CLR_CARD,
-                                    fg=CLR_MUTED, font=(self.fam, 9))
-        self.lbl_sum_qty.pack(side="left", padx=(14, 0))
-        self.lbl_sum_val = tk.Label(inner, text="", bg=CLR_CARD,
-                                    fg=CLR_TEXT, font=(self.fam, 9, "bold"))
-        self.lbl_sum_val.pack(side="left", padx=(14, 0))
-
     def _update_summary(self):
         """刷新表尾汇总条（数据来自 self.filtered 与当前选中行）。"""
         if not getattr(self, "lbl_sum_hit", None):
@@ -2154,9 +2180,8 @@ class App(object):
                              tags=tuple(tags))
         if prev_sel:
             self.tree.selection_set([r for r in prev_sel if r in self.by_id])
-        self.lbl_page.configure(
-            text="共 %d 条记录 · 第 %d/%d 页 · 本页 %d 条（勾选/多选后可批量操作）"
-                 % (total, self.page, pages, max(0, end - start)))
+        # v1.46.4：数字分页钮（替换原「共 x 条 · 第 x/y 页」文字 + 首末页按钮）
+        self._update_pager(pages)
         self._update_detail()
         self._paint_overlays()
         self._decor_soon()          # 行重建后重排网格线（等 bbox 稳定）
@@ -2195,8 +2220,46 @@ class App(object):
             self._update_kpi()
         except Exception:
             pass
+        # v1.46.4：侧栏数字角标（设计稿同款）：库存总数 / 待转入 / 应收客户 / 进行中流程
         try:
-            self.nav.set_badge(0, str(low) if low else None)
+            self._update_nav_badges()
+        except Exception:
+            pass
+
+    def _update_nav_badges(self):
+        """左侧导航数字角标（v1.46.4，设计稿同款）。
+
+        库存列表 = 记录总数；手机数据 = App 未转入库存的条数；
+        客户管理 = 有应收挂账的客户数；制作流程 = 进行中的流程数。
+        角标为 0 时隐藏（设计稿只给非零项画角标）。
+        页码用 nb.index(frame) 现算，避免硬编码页序。
+        """
+        def _set(frame, n):
+            try:
+                idx = self.nb.index(frame)
+                self.nav.set_badge(idx, str(n) if n else None)
+            except Exception:
+                pass
+        _set(self.tab_inv, len(self.records))
+        try:
+            n = self.store.conn.execute(
+                "SELECT COUNT(*) FROM phone_items "
+                "WHERE COALESCE(transferred,0)=0 AND COALESCE(sold_out,0)=0"
+            ).fetchone()[0]
+            _set(self.tab_phone, n)
+        except Exception:
+            pass
+        try:
+            n = len(self.store.sales_unpaid().get("buyers") or [])
+            _set(self.tab_customer, n)
+        except Exception:
+            pass
+        try:
+            n = self.store.conn.execute(
+                "SELECT COUNT(*) FROM workflows "
+                "WHERE COALESCE(status,'active')='active'"
+            ).fetchone()[0]
+            _set(self.tab_workflow, n)
         except Exception:
             pass
 

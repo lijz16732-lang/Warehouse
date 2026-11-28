@@ -151,12 +151,24 @@ class FunctionNav(tk.Frame):
         self._style_items()
 
     # ------------------------------------------------------------ 绘制
+    def _badge_colors(self, idx):
+        """角标胶囊配色（v1.46.4，设计稿同款）：当前页行上用白底蓝字，
+        普通行用浅一号的深底灰字；无角标时随行底色隐形。"""
+        if not self._badges.get(idx):
+            return (CLR_SIDE_BG, CLR_SIDE_TXT)
+        if idx == self.active:
+            return (CLR_SIDE_ON, CLR_ACCENT)       # 白底 + 主题蓝字
+        return (CLR_SIDE_HV, CLR_SIDE_TXT)         # 深色胶囊 + 灰字
+
     def _apply_badge(self, lbl, idx):
         txt = self._badges.get(idx)
+        bg, fg = self._badge_colors(idx)
         if txt:
-            lbl.configure(text=txt, fg="#FCA5A5")
+            lbl.configure(text=txt, fg=fg, bg=bg,
+                          padx=int(7 * getattr(self.app, "ui_scale", 1.0)),
+                          pady=1)
         else:
-            lbl.configure(text="", fg=CLR_SIDE_TXT)
+            lbl.configure(text="", fg=fg, bg=bg, padx=0, pady=1)
 
     def _render(self):
         for w in self.winfo_children():
@@ -279,12 +291,18 @@ class FunctionNav(tk.Frame):
         row = self._item_rows.get(idx)
         lbl = self._item_lbls.get(idx)
         bdg = self._badge_lbls.get(idx)
-        for w in (row, lbl, bdg):
+        for w in (row, lbl):
             if w is not None and w.winfo_exists():
                 try:
                     w.configure(bg=bg)
                 except tk.TclError:
                     pass
+        # 角标是胶囊（有自己的底色），悬停时只换字色系、不抹掉胶囊底
+        if bdg is not None and bdg.winfo_exists():
+            try:
+                self._apply_badge(bdg, idx)
+            except tk.TclError:
+                pass
         if lbl is not None and lbl.winfo_exists():
             lbl.configure(fg=fg)
         # 图标与文字同色（图标 = 行内除文字/角标外的第一个 Label）
@@ -313,12 +331,17 @@ class FunctionNav(tk.Frame):
             bdg = self._badge_lbls.get(idx)
             bg = CLR_ACCENT if on else CLR_SIDE_BG
             fg = CLR_SIDE_ON if on else CLR_SIDE_TXT
-            for w in (row, lbl, bdg):
+            for w in (row, lbl):
                 if w is not None and w.winfo_exists():
                     try:
                         w.configure(bg=bg)
                     except tk.TclError:
                         pass
+            if bdg is not None and bdg.winfo_exists():
+                try:
+                    self._apply_badge(bdg, idx)   # 胶囊配色随选中态切换
+                except tk.TclError:
+                    pass
             lbl.configure(fg=fg,
                           font=(self.fam, 10, "bold" if on else "normal"))
             # 图标跟随同色（在 _item_rows 的子控件里找第一个非文字 Label）

@@ -175,6 +175,35 @@ class ImgBtn(tk.Label):
         self._click()
 
 
+class PageBtn(tk.Label):
+    """分页数字/箭头小方钮（v1.46.4，设计稿同款）：当前页蓝底白字。"""
+
+    def __init__(self, master, app, text, command, active=False, w=30, h=26):
+        from . import constants as C
+        self._cmd = command
+        self._text = text          # 探针用：页码/箭头文字
+        self._active = active
+        self._imgs = None
+        tk.Label.__init__(self, master, bg=C.CLR_CARD,
+                          cursor=("arrow" if active else "hand2"))
+        s = float(getattr(app, "ui_scale", 1.0) or 1.0)
+        kind = "accent" if active else "outline"
+        self._imgs = make_button_pair(
+            text, int(w * s), int(h * s), 9, s, kind,
+            card=C.CLR_CARD, border=C.CLR_BORDER, text_fg=C.CLR_TEXT,
+            hover_bg=C.CLR_TAB_HV, accent=C.CLR_ACCENT,
+            accent_dk=C.CLR_ACCENT_DK)
+        self.configure(image=self._imgs[0])
+        if not active:
+            self.bind("<Enter>", lambda e: self.configure(image=self._imgs[1]))
+            self.bind("<Leave>", lambda e: self.configure(image=self._imgs[0]))
+            self.bind("<Button-1>", lambda e: self._cmd())
+
+    def invoke(self):
+        """探针/快捷路径用：模拟点击。"""
+        self._cmd()
+
+
 class RoundEntry(tk.Canvas):
     """圆角搜索框（v1.46.3，设计稿同款）：胶囊边框 + 内嵌无边框 Entry。
 
